@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::roundhouse::types::*;
 use std::path::PathBuf;
 
@@ -5,6 +6,8 @@ use std::path::PathBuf;
 pub struct RoundhouseSession {
     pub primary_provider: String,
     pub primary_model: String,
+    pub primary_status: PlannerStatus,
+    pub primary_plan: Option<String>,
     pub secondaries: Vec<SecondaryPlanner>,
     pub phase: RoundhousePhase,
     pub prompt: Option<String>,
@@ -19,6 +22,8 @@ impl RoundhouseSession {
         Self {
             primary_provider,
             primary_model,
+            primary_status: PlannerStatus::Pending,
+            primary_plan: None,
             secondaries: Vec::new(),
             phase: RoundhousePhase::SelectingProviders,
             prompt: None,
@@ -47,21 +52,30 @@ impl RoundhouseSession {
     }
 
     pub fn all_planners_done(&self) -> bool {
-        self.secondaries.iter().all(|s| {
+        let primary_done = matches!(
+            self.primary_status,
+            PlannerStatus::Done | PlannerStatus::Failed(_) | PlannerStatus::TimedOut
+        );
+        let secondaries_done = self.secondaries.iter().all(|s| {
             matches!(
                 s.status,
                 PlannerStatus::Done | PlannerStatus::Failed(_) | PlannerStatus::TimedOut
             )
-        })
+        });
+        primary_done && secondaries_done
     }
 
     pub fn successful_plans(&self) -> Vec<(&str, &str)> {
-        self.secondaries
-            .iter()
-            .filter_map(|s| {
-                s.plan.as_deref().map(|p| (s.provider_name.as_str(), p))
-            })
-            .collect()
+        let mut plans = Vec::new();
+        if let Some(ref plan) = self.primary_plan {
+            plans.push((self.primary_provider.as_str(), plan.as_str()));
+        }
+        for s in &self.secondaries {
+            if let Some(ref p) = s.plan {
+                plans.push((s.provider_name.as_str(), p.as_str()));
+            }
+        }
+        plans
     }
 }
 
@@ -95,8 +109,21 @@ mod tests {
         s.add_secondary("gemini".into(), "gemini-2.5-pro".into());
         assert!(!s.all_planners_done());
 
+        s.primary_status = PlannerStatus::Done;
         s.secondaries[0].status = PlannerStatus::Done;
         s.secondaries[1].status = PlannerStatus::Failed("timeout".into());
+        assert!(s.all_planners_done());
+    }
+
+    #[test]
+    fn test_all_planners_done_requires_primary() {
+        let mut s = RoundhouseSession::new("anthropic".into(), "claude-sonnet".into());
+        s.add_secondary("openai".into(), "gpt-4o".into());
+        // Secondaries done but primary still pending
+        s.secondaries[0].status = PlannerStatus::Done;
+        assert!(!s.all_planners_done());
+        // Now mark primary done
+        s.primary_status = PlannerStatus::Done;
         assert!(s.all_planners_done());
     }
 
@@ -105,12 +132,15 @@ mod tests {
         let mut s = RoundhouseSession::new("anthropic".into(), "claude-sonnet".into());
         s.add_secondary("openai".into(), "gpt-4o".into());
         s.add_secondary("gemini".into(), "gemini-2.5-pro".into());
+        s.primary_plan = Some("Primary Plan".into());
+        s.primary_status = PlannerStatus::Done;
         s.secondaries[0].plan = Some("Plan A".into());
         s.secondaries[0].status = PlannerStatus::Done;
         s.secondaries[1].status = PlannerStatus::Failed("err".into());
 
         let plans = s.successful_plans();
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0], ("openai", "Plan A"));
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0], ("anthropic", "Primary Plan"));
+        assert_eq!(plans[1], ("openai", "Plan A"));
     }
 }

@@ -157,6 +157,9 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// Receiver for roundhouse planner status updates (parallel planning engine).
+    pub roundhouse_update_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -691,6 +694,7 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                roundhouse_update_rx: None,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1537,6 +1541,85 @@ impl App {
                 if done {
                     self.state.init_rx = None;
                     self.finalize_init();
+                }
+            }
+
+            // Poll roundhouse planner updates (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_update_rx {
+                let mut all_done = false;
+                while let Ok(update) = rx.try_recv() {
+                    match update {
+                        crate::roundhouse::PlannerUpdate::StatusChanged {
+                            planner_index,
+                            status,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                if planner_index == 0 {
+                                    session.primary_status = status;
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    s.status = status;
+                                }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::TokensUsed {
+                            planner_index: _,
+                            input_tokens: _,
+                            output_tokens: _,
+                        } => {
+                            // Token tracking — rolled up for future cost display
+                        }
+                        crate::roundhouse::PlannerUpdate::PlanComplete {
+                            planner_index,
+                            result,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                match result {
+                                    Ok(plan) => {
+                                        if planner_index == 0 {
+                                            session.primary_plan = Some(plan);
+                                            session.primary_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.plan = Some(plan);
+                                            s.status = crate::roundhouse::PlannerStatus::Done;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if planner_index == 0 {
+                                            session.primary_status =
+                                                crate::roundhouse::PlannerStatus::Failed(
+                                                    e.clone(),
+                                                );
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        }
+                                    }
+                                }
+
+                                if session.all_planners_done() {
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                    let plan_count = session.successful_plans().len();
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All planners complete ({plan_count} plans). Synthesizing..."
+                                        ),
+                                    });
+                                    all_done = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if all_done {
+                    self.state.roundhouse_update_rx = None;
                 }
             }
 
@@ -2502,24 +2585,28 @@ impl App {
                     }
 
                     // Roundhouse: intercept Enter when awaiting planning prompt
-                    if let Some(ref mut rh) = self.state.roundhouse_session {
-                        if rh.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt {
-                            let prompt = self.state.input.content().trim().to_string();
-                            self.state.input.clear();
-                            self.state.user_scrolled_up = false;
-                            if !prompt.is_empty() {
+                    // Roundhouse: intercept Enter when awaiting planning prompt
+                    if self.state.roundhouse_session.as_ref().is_some_and(|rh| {
+                        rh.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt
+                    }) {
+                        let prompt = self.state.input.content().trim().to_string();
+                        self.state.input.clear();
+                        self.state.user_scrolled_up = false;
+                        if !prompt.is_empty() {
+                            if let Some(ref mut rh) = self.state.roundhouse_session {
                                 rh.prompt = Some(prompt.clone());
                                 rh.phase = crate::roundhouse::types::RoundhousePhase::Planning;
-                                self.state.chat_messages.push(ChatMessage::User {
-                                    content: format!("[Roundhouse] {prompt}"),
-                                    images: vec![],
-                                });
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: "Roundhouse planning started...".to_string(),
-                                });
                             }
-                            return;
+                            self.state.chat_messages.push(ChatMessage::User {
+                                content: format!("[Roundhouse] {prompt}"),
+                                images: vec![],
+                            });
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: "Roundhouse planning started...".to_string(),
+                            });
+                            self.start_roundhouse_planning();
                         }
+                        return;
                     }
 
                     let message = self.state.input.content();
@@ -6378,6 +6465,87 @@ impl App {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: "Let's create a skill! What do you want to name it?".into(),
                 });
+            }
+        }
+    }
+
+    /// Spawn parallel planner tasks for Roundhouse mode.
+    fn start_roundhouse_planning(&mut self) {
+        let session = match self.state.roundhouse_session.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let prompt = match session.prompt.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let timeout = session.config.planning_timeout_secs;
+
+        // Get read-only tool subset
+        let tools = crate::roundhouse::planner::planning_tool_subset(
+            self.state.tools.definitions(),
+        );
+
+        let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state.roundhouse_update_rx = Some(update_rx);
+
+        // Spawn primary planner (index 0)
+        if let Ok(primary_provider) = self.state.providers.get_provider(
+            Some(&session.primary_provider),
+            Some(&session.primary_model),
+        ) {
+            let tx = update_tx.clone();
+            let p = prompt.clone();
+            let t = tools.clone();
+            tokio::spawn(async move {
+                let result = crate::roundhouse::planner::run_planner(
+                    primary_provider, p, t, timeout, tx.clone(), 0,
+                )
+                .await;
+                let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                    planner_index: 0,
+                    result,
+                });
+            });
+        }
+
+        // Spawn secondary planners (index 1, 2, ...)
+        let secondaries: Vec<(usize, String, String)> = session
+            .secondaries
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
+            .collect();
+
+        for (i, provider_name, model_name) in secondaries {
+            if let Ok(provider) = self
+                .state
+                .providers
+                .get_provider(Some(&provider_name), Some(&model_name))
+            {
+                let tx = update_tx.clone();
+                let p = prompt.clone();
+                let t = tools.clone();
+                let idx = i + 1;
+                tokio::spawn(async move {
+                    let result = crate::roundhouse::planner::run_planner(
+                        provider, p, t, timeout, tx.clone(), idx,
+                    )
+                    .await;
+                    let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                        planner_index: idx,
+                        result,
+                    });
+                });
+            } else {
+                // Mark as failed if we can't create the provider
+                if let Some(ref mut session) = self.state.roundhouse_session {
+                    if let Some(s) = session.secondaries.get_mut(i) {
+                        s.status = crate::roundhouse::PlannerStatus::Failed(
+                            format!("Could not create provider '{provider_name}'"),
+                        );
+                    }
+                }
             }
         }
     }
