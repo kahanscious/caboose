@@ -446,100 +446,12 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
-            // Track (provider_id, model) pairs already added to avoid duplicates
-            let mut seen = std::collections::HashSet::new();
-            seen.insert((primary_id.clone(), primary_model.clone()));
-
-            // Build list of available secondary provider/model combos
-            let mut options = Vec::new();
-
-            for entry in crate::provider::catalog::CATALOG {
-                // Skip non-functional providers
-                if !entry.functional {
-                    continue;
-                }
-
-                if entry.is_local() {
-                    // Local providers: check if configured in local_providers
-                    for (name, local_cfg) in &state.config.local_providers {
-                        if local_cfg.provider_type == entry.id {
-                            let model = local_cfg
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "default".into());
-                            if !seen.insert((name.clone(), model.clone())) {
-                                continue;
-                            }
-                            let display = local_cfg
-                                .display_name
-                                .clone()
-                                .unwrap_or_else(|| name.clone());
-                            options.push(super::dialog::RoundhouseProviderOption {
-                                id: name.clone(),
-                                display_name: display,
-                                model,
-                                toggled: false,
-                            });
-                        }
-                    }
-                } else {
-                    // Cloud providers: check if API key is available
-                    if state.config.keys.get(entry.id).is_some() {
-                        let model = state
-                            .config
-                            .providers
-                            .get(entry.id)
-                            .and_then(|pc| pc.model.clone())
-                            .unwrap_or_else(|| "default".into());
-                        if seen.insert((entry.id.to_string(), model.clone())) {
-                            options.push(super::dialog::RoundhouseProviderOption {
-                                id: entry.id.to_string(),
-                                display_name: entry.display_name.to_string(),
-                                model,
-                                toggled: false,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Add recently used models from connected providers as extra entries.
-            // This lets users pick multiple models from the same provider (e.g. OpenRouter).
-            let prefs = crate::config::prefs::TuiPrefs::load();
-            for recent in &prefs.recent_models {
-                if !seen.insert((recent.provider.clone(), recent.model_id.clone())) {
-                    continue;
-                }
-                // Only include if the provider has a key configured
-                let has_key = state.config.keys.get(&recent.provider).is_some();
-                let is_local = state.config.local_providers.contains_key(&recent.provider);
-                if !has_key && !is_local {
-                    continue;
-                }
-                let display = crate::provider::catalog::by_id(&recent.provider)
-                    .map(|e| e.display_name.to_string())
-                    .unwrap_or_else(|| recent.provider.clone());
-                options.push(super::dialog::RoundhouseProviderOption {
-                    id: recent.provider.clone(),
-                    display_name: display,
-                    model: recent.model_id.clone(),
-                    toggled: false,
-                });
-            }
-
-            if options.is_empty() {
-                state.chat_messages.push(crate::app::ChatMessage::Error {
-                    content: "No secondary providers available. Connect additional providers with /connect first.".into(),
-                });
-                return Action::None;
-            }
-
             state.roundhouse_session = Some(
                 crate::roundhouse::RoundhouseSession::new(primary_id, primary_model)
             );
 
             let picker = super::dialog::RoundhousePickerState {
-                providers: options,
+                secondaries: vec![],
                 selected: 0,
             };
             Action::PushDialog(super::dialog::DialogKind::RoundhouseProviderPicker(picker))

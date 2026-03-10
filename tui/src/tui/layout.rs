@@ -993,8 +993,9 @@ fn render_roundhouse_picker(
     colors: &theme::Colors,
 ) {
     let area = frame.area();
-    // 2 border + 1 primary line + 1 blank + N providers + 1 blank + 1 footer = N + 6
-    let content_lines = picker.providers.len() as u16 + 6;
+    // 2 border + 1 primary + 1 blank + max(1, N secondaries) + 1 blank + 1 footer = max(1,N) + 6
+    let list_rows = picker.secondaries.len().max(1) as u16;
+    let content_lines = list_rows + 6;
     let width: u16 = 55;
     let height: u16 = content_lines.min(area.height);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1003,13 +1004,13 @@ fn render_roundhouse_picker(
 
     let block = Block::default()
         .borders(ratatui::widgets::Borders::ALL)
-        .title(" Roundhouse \u{2014} Select Providers ")
+        .title(" Roundhouse \u{2014} Add Models ")
         .border_style(Style::default().fg(colors.brand));
 
     let primary_label = if let Some(session) = &app.roundhouse_session {
-        format!("Primary: {} ({})", session.primary_provider, session.primary_model)
+        format!("Primary: {}/{}", session.primary_provider, session.primary_model)
     } else {
-        format!("Primary: {}", app.active_provider_name)
+        format!("Primary: {}/{}", app.active_provider_name, app.active_model_name)
     };
 
     let mut lines: Vec<Line> = vec![
@@ -1020,20 +1021,26 @@ fn render_roundhouse_picker(
         Line::from(""),
     ];
 
-    for (i, opt) in picker.providers.iter().enumerate() {
-        let checkbox = if opt.toggled { "[x] " } else { "[ ] " };
-        let label = format!("{}{} ({})", checkbox, opt.display_name, opt.model);
-        let style = if i == picker.selected {
-            Style::default().fg(colors.text).bg(colors.bg_hover)
-        } else {
-            Style::default().fg(colors.text)
-        };
-        lines.push(Line::from(Span::styled(label, style)));
+    if picker.secondaries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No secondaries added yet. Press 'a' to add.",
+            Style::default().fg(colors.text_dim),
+        )));
+    } else {
+        for (i, sec) in picker.secondaries.iter().enumerate() {
+            let label = format!("{}. {}/{}", i + 1, sec.display_name, sec.model);
+            let style = if i == picker.selected {
+                Style::default().fg(colors.text).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(label, style)));
+        }
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Space: toggle | Enter: confirm | Esc: cancel",
+        "a: add model | d: remove | Enter: start | Esc: cancel",
         Style::default().fg(colors.text_dim),
     )));
 

@@ -157,6 +157,8 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// When true, the model picker adds to roundhouse secondaries instead of switching.
+    pub roundhouse_model_add: bool,
     /// Receiver for roundhouse planner status updates (parallel planning engine).
     pub roundhouse_update_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
@@ -703,6 +705,7 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
@@ -1848,7 +1851,7 @@ impl App {
                 _ => {}
             },
             Some(DialogKind::RoundhouseProviderPicker(_)) => {
-                self.handle_roundhouse_picker_key(key, modifiers);
+                self.handle_roundhouse_picker_key(key, modifiers).await;
             }
             Some(DialogKind::CircuitsList(_)) => {
                 self.handle_circuits_list_key(key, modifiers);
@@ -3411,9 +3414,31 @@ impl App {
                             .map(|(_, m)| (m.supports_tools, m.supports_vision))
                     })
                     .unwrap_or((true, false));
+                // Build display name for roundhouse before clearing slash_auto
+                let display_for_roundhouse = selection.as_ref().map(|(provider, model_id)| {
+                    let display = crate::provider::catalog::by_id(provider)
+                        .map(|e| e.display_name.to_string())
+                        .unwrap_or_else(|| provider.clone());
+                    (provider.clone(), display, model_id.clone())
+                });
                 self.state.slash_auto = None;
                 self.state.input.clear();
-                if let Some((provider, model_id)) = selection {
+                if self.state.roundhouse_model_add {
+                    self.state.roundhouse_model_add = false;
+                    if let Some((provider_id, display_name, model_id)) = display_for_roundhouse {
+                        if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            picker.secondaries.push(
+                                crate::tui::dialog::RoundhouseSecondary {
+                                    provider_id,
+                                    display_name,
+                                    model: model_id,
+                                },
+                            );
+                        }
+                    }
+                } else if let Some((provider, model_id)) = selection {
                     self.state.model_supports_tools = supports_tools;
                     self.state.model_supports_vision = supports_vision;
                     self.select_model(&provider, &model_id);
@@ -3962,7 +3987,7 @@ impl App {
         }
     }
 
-    fn handle_roundhouse_picker_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+    async fn handle_roundhouse_picker_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;
@@ -3978,36 +4003,50 @@ impl App {
             KeyCode::Down if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                    && picker.selected + 1 < picker.providers.len() {
+                {
+                    let count = picker.secondaries.len();
+                    if count > 0 && picker.selected + 1 < count {
                         picker.selected += 1;
                     }
+                }
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char('a') => {
+                // Open model dropdown — when a model is selected, add it as a secondary
+                self.state.roundhouse_model_add = true;
+                self.open_model_dropdown().await;
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                    && let Some(p) = picker.providers.get_mut(picker.selected) {
-                        p.toggled = !p.toggled;
+                {
+                    if !picker.secondaries.is_empty() {
+                        picker.secondaries.remove(picker.selected);
+                        if picker.selected > 0
+                            && picker.selected >= picker.secondaries.len()
+                        {
+                            picker.selected = picker.secondaries.len().saturating_sub(1);
+                        }
                     }
+                }
             }
             KeyCode::Enter => {
-                // Collect selected providers before mutating
-                let selected: Vec<(String, String)> =
+                // Collect secondaries before mutating
+                let secondaries: Vec<(String, String)> =
                     if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                         self.state.dialog_stack.top()
                     {
                         picker
-                            .providers
+                            .secondaries
                             .iter()
-                            .filter(|p| p.toggled)
-                            .map(|p| (p.id.clone(), p.model.clone()))
+                            .map(|s| (s.provider_id.clone(), s.model.clone()))
                             .collect()
                     } else {
                         Vec::new()
                     };
 
-                if !selected.is_empty() {
+                if !secondaries.is_empty() {
                     if let Some(session) = &mut self.state.roundhouse_session {
-                        for (id, model) in &selected {
+                        for (id, model) in &secondaries {
                             session.add_secondary(id.clone(), model.clone());
                         }
                         session.phase =
@@ -4017,8 +4056,8 @@ impl App {
                     self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: format!(
-                            "Roundhouse: {} secondary provider(s) selected. Enter your planning prompt.",
-                            selected.len()
+                            "Roundhouse: {} secondary model(s) selected. Enter your planning prompt.",
+                            secondaries.len()
                         ),
                     });
                 }

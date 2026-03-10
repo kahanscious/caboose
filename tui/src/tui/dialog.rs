@@ -91,16 +91,15 @@ pub struct LocalProviderConnectState {
 
 /// State for the Roundhouse provider picker dialog.
 pub struct RoundhousePickerState {
-    pub providers: Vec<RoundhouseProviderOption>,
+    pub secondaries: Vec<RoundhouseSecondary>,
     pub selected: usize,
 }
 
-/// A provider option shown in the Roundhouse picker.
-pub struct RoundhouseProviderOption {
-    pub id: String,
+/// A secondary model added to a Roundhouse session.
+pub struct RoundhouseSecondary {
+    pub provider_id: String,
     pub display_name: String,
     pub model: String,
-    pub toggled: bool,
 }
 
 /// State for the circuits list dialog.
