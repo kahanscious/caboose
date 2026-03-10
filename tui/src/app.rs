@@ -2058,6 +2058,11 @@ impl App {
                             self.handle_roundhouse_subcommand(sub.trim());
                             return;
                         }
+                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        if let Some(args) = slash.strip_prefix("circuit ") {
+                            self.handle_circuit_command(args.trim()).await;
+                            return;
+                        }
                         // /new — extract memories and clean up cold storage before clearing session
                         if slash == "new" {
                             self.extract_session_memories().await;
@@ -2806,6 +2811,11 @@ impl App {
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
                             self.handle_roundhouse_subcommand(sub.trim());
+                            return;
+                        }
+                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        if let Some(args) = slash.strip_prefix("circuit ") {
+                            self.handle_circuit_command(args.trim()).await;
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -7257,6 +7267,149 @@ impl App {
             memory_config.observation_retention_days,
         );
     }
+
+    async fn handle_circuit_command(&mut self, args: &str) {
+        // /circuit stop <id>
+        if let Some(id) = args.strip_prefix("stop ") {
+            let id = id.trim();
+            if id == "all" || id == "-all" {
+                let count = self.state.circuit_manager.active_count();
+                self.state.circuit_manager.stop_all();
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Stopped {} circuit(s).", count),
+                });
+            } else if self.state.circuit_manager.stop_circuit(id) {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Circuit {} stopped.", id),
+                });
+            } else {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Circuit {} not found.", id),
+                });
+            }
+            return;
+        }
+
+        // /circuit stop-all
+        if args == "stop-all" {
+            let count = self.state.circuit_manager.active_count();
+            self.state.circuit_manager.stop_all();
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Stopped {} circuit(s).", count),
+            });
+            return;
+        }
+
+        // /circuit [--persist] <interval> "prompt"
+        match parse_circuit_args(args) {
+            Some((persist, interval_secs, prompt)) => {
+                let kind = if persist {
+                    crate::circuits::CircuitKind::Persistent
+                } else {
+                    crate::circuits::CircuitKind::InSession
+                };
+                self.create_circuit(&prompt, interval_secs, kind).await;
+            }
+            None => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /circuit [--persist] <interval> \"<prompt>\"\nExamples: /circuit 5m \"check build\" | /circuit --persist 10m \"watch CI\"".to_string(),
+                });
+            }
+        }
+    }
+
+    async fn create_circuit(
+        &mut self,
+        prompt: &str,
+        interval_secs: u64,
+        kind: crate::circuits::CircuitKind,
+    ) {
+        let circuit = crate::circuits::Circuit {
+            id: format!(
+                "c-{}",
+                chrono::Utc::now().timestamp_millis() % 100_000
+            ),
+            prompt: prompt.to_string(),
+            interval_secs,
+            provider: self.state.active_provider_name.clone(),
+            model: self.state.active_model_name.clone(),
+            permission_mode: "plan".to_string(),
+            kind,
+            status: crate::circuits::CircuitStatus::Active,
+            last_run: None,
+            next_run: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            total_cost: 0.0,
+            run_count: 0,
+        };
+
+        if let Err(e) = self.state.circuit_manager.start_circuit(circuit) {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: format!("Failed to start circuit: {}", e),
+            });
+            return;
+        }
+
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!(
+                "Circuit started: \"{}\" every {}",
+                prompt,
+                format_duration(interval_secs)
+            ),
+        });
+    }
+}
+
+/// Parse "5m" → 300, "30s" → 30, "1h" → 3600
+fn parse_interval(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('s') {
+        n.parse().ok()
+    } else if let Some(n) = s.strip_suffix('m') {
+        n.parse::<u64>().ok().map(|n| n * 60)
+    } else if let Some(n) = s.strip_suffix('h') {
+        n.parse::<u64>().ok().map(|n| n * 3600)
+    } else {
+        None
+    }
+}
+
+/// Format seconds back to human-readable: 300 → "5m", 3600 → "1h", 90 → "1m 30s"
+fn format_duration(secs: u64) -> String {
+    if secs >= 3600 && secs % 3600 == 0 {
+        format!("{}h", secs / 3600)
+    } else if secs >= 60 && secs % 60 == 0 {
+        format!("{}m", secs / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Parse circuit command args: "[--persist] <interval> <prompt>"
+fn parse_circuit_args(args: &str) -> Option<(bool, u64, String)> {
+    let args = args.trim();
+    let persist = args.starts_with("--persist");
+    let rest = if persist {
+        args.strip_prefix("--persist").unwrap().trim()
+    } else {
+        args
+    };
+
+    // First token is interval
+    let space = rest.find(' ')?;
+    let interval_str = &rest[..space];
+    let interval = parse_interval(interval_str)?;
+
+    // Rest is prompt (strip quotes if present)
+    let prompt = rest[space..].trim();
+    let prompt = prompt.trim_matches('"').trim_matches('\'').trim();
+    if prompt.is_empty() {
+        return None;
+    }
+
+    Some((persist, interval, prompt.to_string()))
 }
 
 /// Parse task-like patterns from assistant text output.
@@ -7452,5 +7605,85 @@ mod task_outline_tests {
         let outline2 = TaskOutline::from_tool_input(&restored).unwrap();
         assert_eq!(outline2.tasks[0].content, "Do X");
         assert_eq!(outline2.tasks[0].status, TaskStatus::InProgress);
+    }
+}
+
+#[cfg(test)]
+mod circuit_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_interval_seconds() {
+        assert_eq!(parse_interval("30s"), Some(30));
+    }
+
+    #[test]
+    fn parse_interval_minutes() {
+        assert_eq!(parse_interval("5m"), Some(300));
+    }
+
+    #[test]
+    fn parse_interval_hours() {
+        assert_eq!(parse_interval("1h"), Some(3600));
+    }
+
+    #[test]
+    fn parse_interval_invalid() {
+        assert_eq!(parse_interval("abc"), None);
+        assert_eq!(parse_interval(""), None);
+    }
+
+    #[test]
+    fn parse_circuit_args_basic() {
+        let (persist, interval, prompt) = parse_circuit_args("5m \"check build\"").unwrap();
+        assert!(!persist);
+        assert_eq!(interval, 300);
+        assert_eq!(prompt, "check build");
+    }
+
+    #[test]
+    fn parse_circuit_args_persist() {
+        let (persist, interval, prompt) =
+            parse_circuit_args("--persist 10m \"watch CI\"").unwrap();
+        assert!(persist);
+        assert_eq!(interval, 600);
+        assert_eq!(prompt, "watch CI");
+    }
+
+    #[test]
+    fn parse_circuit_args_no_quotes() {
+        let (_, _, prompt) = parse_circuit_args("5m check build status").unwrap();
+        assert_eq!(prompt, "check build status");
+    }
+
+    #[test]
+    fn parse_circuit_args_missing_prompt() {
+        assert!(parse_circuit_args("5m").is_none());
+        assert!(parse_circuit_args("5m \"\"").is_none());
+    }
+
+    #[test]
+    fn parse_circuit_args_bad_interval() {
+        assert!(parse_circuit_args("abc \"prompt\"").is_none());
+    }
+
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(300), "5m");
+    }
+
+    #[test]
+    fn format_duration_hours() {
+        assert_eq!(format_duration(3600), "1h");
+    }
+
+    #[test]
+    fn format_duration_mixed() {
+        assert_eq!(format_duration(90), "1m 30s");
     }
 }
