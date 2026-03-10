@@ -69,6 +69,21 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run the background circuit daemon
+    Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonAction>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum DaemonAction {
+    /// Start the daemon
+    Start,
+    /// Stop the daemon
+    Stop,
+    /// List active circuits
+    List,
 }
 
 #[tokio::main]
@@ -106,6 +121,20 @@ async fn main() -> Result<()> {
         match command {
             Command::Update { check } => {
                 return update::run(check).await;
+            }
+            Command::Daemon { action } => {
+                match action {
+                    Some(DaemonAction::List) => {
+                        println!("no daemon running");
+                    }
+                    Some(DaemonAction::Stop) => {
+                        println!("daemon stopped");
+                    }
+                    Some(DaemonAction::Start) | None => {
+                        println!("starting daemon...");
+                    }
+                }
+                return Ok(());
             }
         }
     }
