@@ -2501,6 +2501,27 @@ impl App {
                         }
                     }
 
+                    // Roundhouse: intercept Enter when awaiting planning prompt
+                    if let Some(ref mut rh) = self.state.roundhouse_session {
+                        if rh.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt {
+                            let prompt = self.state.input.content().trim().to_string();
+                            self.state.input.clear();
+                            self.state.user_scrolled_up = false;
+                            if !prompt.is_empty() {
+                                rh.prompt = Some(prompt.clone());
+                                rh.phase = crate::roundhouse::types::RoundhousePhase::Planning;
+                                self.state.chat_messages.push(ChatMessage::User {
+                                    content: format!("[Roundhouse] {prompt}"),
+                                    images: vec![],
+                                });
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: "Roundhouse planning started...".to_string(),
+                                });
+                            }
+                            return;
+                        }
+                    }
+
                     let message = self.state.input.content();
                     self.state.history.push(message.clone());
                     self.state.history.save();

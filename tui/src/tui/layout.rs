@@ -853,7 +853,17 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
 
     let quit_confirm = app.quit_first_press.is_some();
 
-    let agent_label: Option<&str> = None;
+    let is_roundhouse_awaiting = app
+        .roundhouse_session
+        .as_ref()
+        .map(|s| s.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt)
+        .unwrap_or(false);
+
+    let agent_label: Option<&str> = if is_roundhouse_awaiting {
+        Some("Roundhouse \u{203a} Enter your planning prompt")
+    } else {
+        None
+    };
 
     let (mut accent_color, info_left) = build_info_left(
         agent_label,
