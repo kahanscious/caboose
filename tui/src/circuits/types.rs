@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,7 +17,7 @@ pub enum CircuitKind {
 }
 
 /// A recurring scheduled task
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Circuit {
     pub id: String,
     pub prompt: String,
@@ -34,7 +35,7 @@ pub struct Circuit {
 }
 
 /// Result from a single circuit execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitRun {
     pub circuit_id: String,
     pub output: String,
