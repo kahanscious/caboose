@@ -4093,9 +4093,8 @@ impl App {
             },
             MigrationPhase::Preview => match key {
                 KeyCode::Enter => {
-                    // Apply migration — will be implemented in Task 22
-                    checklist.phase =
-                        MigrationPhase::Done("Migration applied.".to_string());
+                    let result = crate::migrate::converter::apply_migration(&checklist.items);
+                    checklist.phase = MigrationPhase::Done(result.format_summary());
                 }
                 KeyCode::Esc => {
                     checklist.phase = MigrationPhase::Checklist;
