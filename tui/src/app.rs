@@ -157,6 +157,8 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// In-session circuit manager.
+    pub circuit_manager: crate::circuits::runner::CircuitManager,
 }
 
 /// Status of a tool execution.
@@ -683,6 +685,7 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                circuit_manager: crate::circuits::runner::CircuitManager::new(5),
             },
             terminal,
             provider,

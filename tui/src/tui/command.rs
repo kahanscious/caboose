@@ -450,6 +450,18 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "circuits.list",
+        name: "Circuits",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("circuits"),
+        available: |_state| true,
+        execute: |_state| {
+            Action::PushDialog(super::dialog::DialogKind::CircuitsList)
+        },
+    });
+
+    registry.register(Command {
         id: "app.quit",
         name: "Quit",
         category: Category::Navigation,
