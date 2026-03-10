@@ -170,6 +170,8 @@ pub struct State {
     /// Receiver for background local server discovery result.
     pub local_discovery_rx:
         Option<tokio::sync::oneshot::Receiver<Vec<crate::provider::local::LocalServer>>>,
+    /// Detected SCM provider for the current working directory.
+    pub scm_provider: crate::scm::detection::ScmProvider,
 }
 
 /// Status of a tool execution.
@@ -429,9 +431,12 @@ impl App {
             tools_cfg.executable = Some(discovered);
         }
 
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let scm_provider = crate::scm::detection::detect_provider(&cwd);
+
         let cli_tools_ref = config.tools.as_ref().and_then(|t| t.registry.as_ref());
         let exec_tools_ref = config.tools.as_ref().and_then(|t| t.executable.as_ref());
-        let tools = ToolRegistry::new(cli_tools_ref, exec_tools_ref);
+        let tools = ToolRegistry::new(cli_tools_ref, exec_tools_ref, &scm_provider);
         let mcp_config = config.mcp.clone().unwrap_or_default();
         let mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
         let (mcp_connect_tx, mcp_connect_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -701,6 +706,7 @@ impl App {
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
+                scm_provider,
             },
             terminal,
             provider,

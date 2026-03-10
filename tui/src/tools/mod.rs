@@ -25,6 +25,7 @@ impl ToolRegistry {
         exec_tools: Option<
             &std::collections::HashMap<String, crate::config::schema::ExecutableToolConfig>,
         >,
+        scm_provider: &crate::scm::detection::ScmProvider,
     ) -> Self {
         let mut result = Self {
             tools: vec![
@@ -376,6 +377,18 @@ impl ToolRegistry {
             }
         }
 
+        // Append SCM tool definitions if provider detected and CLI available
+        match scm_provider {
+            crate::scm::detection::ScmProvider::GitHub
+                if crate::scm::detection::has_gh_cli() =>
+            {
+                for tool in crate::scm::tools::github_tool_definitions() {
+                    result.tools.push(tool);
+                }
+            }
+            _ => {}
+        }
+
         result
     }
 
@@ -434,7 +447,7 @@ mod tests {
 
     #[test]
     fn registry_includes_todo_write() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(
             defs.iter().any(|d| d.name == "todo_write"),
@@ -444,7 +457,7 @@ mod tests {
 
     #[test]
     fn registry_includes_todo_read() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(
             defs.iter().any(|d| d.name == "todo_read"),
@@ -467,7 +480,7 @@ mod tests {
 
     #[test]
     fn registry_includes_ask_user() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(
             defs.iter().any(|d| d.name == "ask_user"),
@@ -477,7 +490,7 @@ mod tests {
 
     #[test]
     fn ask_user_schema_has_questions_array() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         let ask_user = defs.iter().find(|d| d.name == "ask_user").unwrap();
         let props = ask_user.input_schema.get("properties").unwrap();
@@ -487,7 +500,7 @@ mod tests {
 
     #[test]
     fn registry_includes_diagnostics() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(
             defs.iter().any(|d| d.name == "diagnostics"),
@@ -497,21 +510,21 @@ mod tests {
 
     #[test]
     fn ask_user_excluded_when_tools_not_supported() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions_for_model(false);
         assert!(!defs.iter().any(|d| d.name == "ask_user"));
     }
 
     #[test]
     fn ask_user_included_when_tools_supported() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions_for_model(true);
         assert!(defs.iter().any(|d| d.name == "ask_user"));
     }
 
     #[test]
     fn registry_includes_web_search() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(
             defs.iter().any(|d| d.name == "web_search"),
@@ -533,7 +546,7 @@ mod tests {
                 max_output_lines: None,
             },
         );
-        let registry = ToolRegistry::new(Some(&cli_tools), None);
+        let registry = ToolRegistry::new(Some(&cli_tools), None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         let cli_test = defs
             .iter()
@@ -579,7 +592,7 @@ mod tests {
                 max_output_lines: None,
             },
         );
-        let registry = ToolRegistry::new(Some(&cli_tools), None);
+        let registry = ToolRegistry::new(Some(&cli_tools), None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         let deploy = defs
             .iter()
@@ -606,7 +619,7 @@ mod tests {
 
     #[test]
     fn registry_works_without_cli_tools() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(!defs.iter().any(|d| d.name.starts_with("cli_")));
         assert!(defs.iter().any(|d| d.name == "read_file")); // builtins still there
@@ -625,7 +638,7 @@ mod tests {
                 args: None,
             },
         );
-        let registry = ToolRegistry::new(None, Some(&exec_tools));
+        let registry = ToolRegistry::new(None, Some(&exec_tools), &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         let exec_query = defs
             .iter()
@@ -658,7 +671,7 @@ mod tests {
                 args: Some(args),
             },
         );
-        let registry = ToolRegistry::new(None, Some(&exec_tools));
+        let registry = ToolRegistry::new(None, Some(&exec_tools), &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         let db = defs
             .iter()
@@ -670,7 +683,7 @@ mod tests {
 
     #[test]
     fn registry_works_without_exec_tools() {
-        let registry = ToolRegistry::new(None, None);
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
         assert!(!defs.iter().any(|d| d.name.starts_with("exec_")));
     }
@@ -690,7 +703,7 @@ command = "cargo clippy"
 description = "Run linter"
 "#;
         let tools_config: crate::config::schema::ToolsConfig = toml::from_str(toml_str).unwrap();
-        let registry = ToolRegistry::new(tools_config.registry.as_ref(), None);
+        let registry = ToolRegistry::new(tools_config.registry.as_ref(), None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
 
         // Built-in tools still present

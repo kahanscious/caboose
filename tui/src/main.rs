@@ -303,7 +303,9 @@ async fn run_non_interactive(
 
     let cli_tools_ref = config.tools.as_ref().and_then(|t| t.registry.as_ref());
     let exec_tools_ref = config.tools.as_ref().and_then(|t| t.executable.as_ref());
-    let tool_registry = tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref);
+    let headless_cwd = std::env::current_dir().unwrap_or_default();
+    let headless_scm = crate::scm::detection::detect_provider(&headless_cwd);
+    let tool_registry = tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref, &headless_scm);
     let mcp_config = config.mcp.clone().unwrap_or_default();
     let mut mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
     mcp_manager.connect_all().await;

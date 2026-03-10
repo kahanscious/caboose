@@ -947,7 +947,7 @@ command = "echo started"
         assert_eq!(hooks.session_start.len(), 1);
 
         // ToolRegistry wiring
-        let tool_reg = crate::tools::ToolRegistry::new(tools.registry.as_ref(), None);
+        let tool_reg = crate::tools::ToolRegistry::new(tools.registry.as_ref(), None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = tool_reg.definitions();
         assert!(defs.iter().any(|d| d.name == "cli_test"));
         assert!(defs.iter().any(|d| d.name == "cli_deploy"));
