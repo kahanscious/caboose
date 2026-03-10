@@ -79,6 +79,24 @@ cargo test               # run all tests
 cargo clippy             # lint
 ```
 
+## Built-in Skills
+
+Caboose ships with 11 slash-command skills. Every skill can be toggled on or off via `/settings`, and you can add your own in `~/.config/caboose/skills/` or `.caboose/skills/`.
+
+| Skill | Description |
+|-------|-------------|
+| `/brainstorm` | Explore 3–5 design approaches, then converge on the best option with a decision record |
+| `/plan` | Write a granular, step-by-step implementation plan with file paths, code, and test commands |
+| `/debug` | Systematic fault isolation — reproduce, bisect, read, prove with a failing test |
+| `/tdd` | Enforce strict RED-GREEN-REFACTOR test-driven development |
+| `/finish` | Audit the current branch before integration — build, tests, lint, diff review |
+| `/handoff` | Generate a structured session summary so the next session picks up where you left off |
+| `/review` | Five-pass code review — exploration, correctness, clarity, edge cases, excellence |
+| `/refactor` | Identify DRY violations, naming issues, complexity, and extraction opportunities |
+| `/test` | Generate comprehensive test cases covering happy paths, edge cases, and error conditions |
+| `/explain` | Explain how code works — summary, key functions, data flow, design decisions, dependencies |
+| `/optimize` | Identify performance bottlenecks with impact ratings and before/after suggestions |
+
 ## Acknowledgments
 
 Built-in skills inspired in part by [superpowers](https://github.com/obra/superpowers) by Jesse Vincent. If you prefer the superpowers workflow, you can use it with Caboose:
