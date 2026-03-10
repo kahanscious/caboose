@@ -160,6 +160,8 @@ pub struct State {
     /// Receiver for roundhouse planner status updates (parallel planning engine).
     pub roundhouse_update_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
+    /// Receiver for roundhouse synthesis result (primary LLM synthesizes all plans).
+    pub roundhouse_synthesis_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -695,6 +697,7 @@ impl App {
                 update_check_rx: None,
                 roundhouse_session: None,
                 roundhouse_update_rx: None,
+                roundhouse_synthesis_rx: None,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1620,6 +1623,61 @@ impl App {
                 }
                 if all_done {
                     self.state.roundhouse_update_rx = None;
+                    self.start_roundhouse_synthesis();
+                }
+            }
+
+            // Poll roundhouse synthesis result (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx {
+                if let Ok(plan_text) = rx.try_recv() {
+                    if let Some(session) = &mut self.state.roundhouse_session {
+                        let prompt = session.prompt.clone().unwrap_or_default();
+                        let individual_plans: Vec<(String, String)> = session
+                            .successful_plans()
+                            .iter()
+                            .map(|(p, t)| (p.to_string(), t.to_string()))
+                            .collect();
+                        let individual_refs: Vec<(&str, &str)> = individual_plans
+                            .iter()
+                            .map(|(p, t)| (p.as_str(), t.as_str()))
+                            .collect();
+
+                        session.synthesized_plan = Some(plan_text.clone());
+                        session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
+
+                        // Write plan file
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let full_doc = crate::roundhouse::output::format_plans_document(
+                            &prompt,
+                            &individual_refs,
+                            &plan_text,
+                        );
+                        match crate::roundhouse::output::write_plan_file(
+                            &cwd,
+                            &full_doc,
+                            &prompt,
+                        ) {
+                            Ok(path) => {
+                                session.plan_file = Some(path.clone());
+                                self.state.chat_messages.push(ChatMessage::Assistant {
+                                    content: format!(
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Plan saved to `{}`*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        plan_text,
+                                        path.display()
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                self.state.chat_messages.push(ChatMessage::Assistant {
+                                    content: format!(
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        plan_text, e
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    self.state.roundhouse_synthesis_rx = None;
                 }
             }
 
@@ -1993,6 +2051,11 @@ impl App {
                         // /rewind — open checkpoint picker
                         if slash == "rewind" {
                             self.open_rewind_picker();
+                            return;
+                        }
+                        // /roundhouse execute|cancel — subcommands
+                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
+                            self.handle_roundhouse_subcommand(sub.trim());
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -2738,6 +2801,11 @@ impl App {
                         if slash == "handoff" || slash.starts_with("handoff ") {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
                             self.handle_handoff_command(args).await;
+                            return;
+                        }
+                        // /roundhouse execute|cancel — subcommands
+                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
+                            self.handle_roundhouse_subcommand(sub.trim());
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -6548,6 +6616,143 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Handle `/roundhouse execute` and `/roundhouse cancel` subcommands.
+    fn handle_roundhouse_subcommand(&mut self, sub: &str) {
+        match sub {
+            "execute" => {
+                if let Some(ref session) = self.state.roundhouse_session {
+                    if session.phase == crate::roundhouse::RoundhousePhase::Reviewing {
+                        let plan = session.synthesized_plan.clone().unwrap_or_default();
+                        let msg = format!(
+                            "Execute the following implementation plan:\n\n{plan}"
+                        );
+                        self.state.roundhouse_session.as_mut().unwrap().phase =
+                            crate::roundhouse::RoundhousePhase::Executing;
+                        // Queue the plan for the agent to execute
+                        self.state.message_queue.push_back(msg);
+                    } else {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!(
+                                "Cannot execute: roundhouse is in {:?} phase (expected Reviewing).",
+                                session.phase
+                            ),
+                        });
+                    }
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
+            "cancel" => {
+                if self.state.roundhouse_session.is_some() {
+                    self.state.roundhouse_session = None;
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Roundhouse cancelled.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
+            other => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!(
+                        "Unknown roundhouse subcommand: `{other}`. Use `execute` or `cancel`."
+                    ),
+                });
+            }
+        }
+    }
+
+    /// Send all collected plans to the primary provider for synthesis.
+    fn start_roundhouse_synthesis(&mut self) {
+        let session = match self.state.roundhouse_session.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let plans = session.successful_plans();
+        if plans.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "No successful plans to synthesize.".to_string(),
+            });
+            if let Some(ref mut s) = self.state.roundhouse_session {
+                s.phase = crate::roundhouse::RoundhousePhase::Cancelled;
+            }
+            return;
+        }
+
+        let prompt = session.prompt.clone().unwrap_or_default();
+        let system = crate::roundhouse::planner::synthesis_system_prompt(
+            &prompt,
+            &plans,
+        );
+
+        let provider = match self.state.providers.get_provider(
+            Some(&session.primary_provider),
+            Some(&session.primary_model),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to create provider for synthesis: {e}"),
+                });
+                return;
+            }
+        };
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        // Build messages: system prompt as system message, then user asks to synthesize
+        let messages = vec![
+            crate::provider::Message {
+                role: "system".to_string(),
+                content: serde_json::json!(system),
+            },
+            crate::provider::Message {
+                role: "user".to_string(),
+                content: serde_json::json!("Synthesize the plans above into a single unified implementation plan."),
+            },
+        ];
+
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut stream = provider.stream(&messages, &[]);
+            let mut text = String::new();
+
+            while let Some(event_result) = stream.next().await {
+                match event_result {
+                    Ok(crate::provider::StreamEvent::TextDelta(delta)) => {
+                        text.push_str(&delta);
+                    }
+                    Ok(crate::provider::StreamEvent::Error(e)) => {
+                        if text.is_empty() {
+                            text = format!("Synthesis error: {e}");
+                        }
+                        break;
+                    }
+                    Ok(crate::provider::StreamEvent::ProviderError { message, .. }) => {
+                        if text.is_empty() {
+                            text = format!("Synthesis error: {message}");
+                        }
+                        break;
+                    }
+                    Ok(crate::provider::StreamEvent::Done { .. }) => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            let _ = tx.send(text);
+        });
+
+        self.state.roundhouse_synthesis_rx = Some(rx);
     }
 
     /// Start the LLM-guided skill creation after name and goal are known.
