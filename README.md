@@ -79,6 +79,15 @@ cargo test               # run all tests
 cargo clippy             # lint
 ```
 
+## Acknowledgments
+
+Built-in skills inspired in part by [superpowers](https://github.com/obra/superpowers) by Jesse Vincent. If you prefer the superpowers workflow, you can use it with Caboose:
+
+1. Disable any overlapping built-in skills via `/settings` (or add them to `disabled_skills` in your config)
+2. Copy the superpowers `SKILL.md` files into `~/.config/caboose/skills/` (global) or `.caboose/skills/` (per-project)
+
+User skills with the same name as a built-in automatically override it.
+
 ## License
 
 MIT
