@@ -1681,6 +1681,9 @@ impl App {
                 }
             }
 
+            // Poll circuit events (non-blocking)
+            self.poll_circuit_events().await;
+
             if self.state.should_quit {
                 break;
             }
@@ -5677,6 +5680,146 @@ impl App {
                     if let Some(server) = self.state.mcp_manager.servers.get_mut(&name) {
                         server.status = ServerStatus::Error(msg);
                     }
+                }
+            }
+        }
+    }
+
+    /// Poll circuit events and handle TickStarted by spawning LLM execution,
+    /// and TickCompleted/Error by pushing messages to the chat.
+    async fn poll_circuit_events(&mut self) {
+        use crate::circuits::runner::CircuitEvent;
+        use crate::provider::{Message, StreamEvent};
+        use futures::StreamExt;
+
+        // Collect pending events without holding a borrow on circuit_manager
+        let mut events = Vec::new();
+        while let Ok(event) = self.state.circuit_manager.event_rx.try_recv() {
+            events.push(event);
+        }
+
+        for event in events {
+            match event {
+                CircuitEvent::TickStarted { circuit_id } => {
+                    // Look up circuit info to get prompt/provider/model
+                    let circuit_info = self
+                        .state
+                        .circuit_manager
+                        .get_circuit(&circuit_id)
+                        .map(|c| (c.prompt.clone(), c.provider.clone(), c.model.clone()));
+
+                    let Some((prompt, provider_name, model)) = circuit_info else {
+                        continue;
+                    };
+
+                    // Resolve provider — skip tick if provider unavailable
+                    let provider = match self.state.providers.get_provider(
+                        Some(&provider_name),
+                        Some(&model),
+                    ) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = self.state.circuit_manager.event_tx.send(
+                                CircuitEvent::Error {
+                                    circuit_id: circuit_id.clone(),
+                                    error: format!("Provider error: {e}"),
+                                },
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Spawn LLM execution on a background task
+                    let event_tx = self.state.circuit_manager.event_tx.clone();
+                    tokio::spawn(async move {
+                        let messages = vec![
+                            Message {
+                                role: "system".to_string(),
+                                content: serde_json::json!(
+                                    "You are running a scheduled task. Be concise."
+                                ),
+                            },
+                            Message {
+                                role: "user".to_string(),
+                                content: serde_json::json!(prompt),
+                            },
+                        ];
+
+                        let mut stream = provider.stream(&messages, &[]);
+                        let mut response = String::new();
+                        let mut input_tokens: u32 = 0;
+                        let mut output_tokens: u32 = 0;
+
+                        while let Some(event_result) = stream.next().await {
+                            match event_result {
+                                Ok(StreamEvent::TextDelta(text)) => {
+                                    response.push_str(&text);
+                                }
+                                Ok(StreamEvent::Done {
+                                    input_tokens: it,
+                                    output_tokens: ot,
+                                    ..
+                                }) => {
+                                    input_tokens = it.unwrap_or(0);
+                                    output_tokens = ot.unwrap_or(0);
+                                    break;
+                                }
+                                Ok(StreamEvent::Error(e)) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: e,
+                                    });
+                                    return;
+                                }
+                                Ok(StreamEvent::ProviderError { message, .. }) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: message,
+                                    });
+                                    return;
+                                }
+                                Ok(StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCall { .. }) => {}
+                                Err(e) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: e.to_string(),
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+
+                        let tokens_used = (input_tokens + output_tokens) as u64;
+                        let _ = event_tx.send(CircuitEvent::TickCompleted {
+                            circuit_id,
+                            output: response,
+                            cost: 0.0,
+                            tokens_used,
+                            success: true,
+                        });
+                    });
+                }
+                CircuitEvent::TickCompleted {
+                    circuit_id,
+                    output,
+                    ..
+                } => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "\u{27f3} Circuit {}: {}",
+                            &circuit_id[..8.min(circuit_id.len())],
+                            output
+                        ),
+                    });
+                }
+                CircuitEvent::Error { circuit_id, error } => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!(
+                            "Circuit {} error: {}",
+                            &circuit_id[..8.min(circuit_id.len())],
+                            error
+                        ),
+                    });
                 }
             }
         }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::circuits::types::*;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
@@ -106,6 +107,14 @@ impl CircuitManager {
     /// Number of active circuits
     pub fn active_count(&self) -> usize {
         self.circuits.len()
+    }
+
+    /// Look up a circuit by ID (for reading prompt/provider/model on tick).
+    pub fn get_circuit(&self, id: &str) -> Option<&Circuit> {
+        self.circuits
+            .iter()
+            .find(|h| h.circuit.id == id)
+            .map(|h| &h.circuit)
     }
 }
 
