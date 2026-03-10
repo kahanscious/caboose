@@ -621,13 +621,21 @@ fn build_model_items<'a>(
         }
     }
 
-    // All models section
+    // All models section, grouped by provider
     if !models_filtered.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             " Models",
             Style::default().fg(colors.text_dim).bold(),
         ))));
+        let mut last_provider = "";
         for (provider, info) in &models_filtered {
+            if provider.as_str() != last_provider {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!(" ── {provider} ──"),
+                    Style::default().fg(colors.text_dim),
+                ))));
+                last_provider = provider;
+            }
             if logical_idx == selected {
                 list_selected = Some(items.len());
             }

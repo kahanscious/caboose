@@ -183,19 +183,35 @@ pub fn render(
         )));
         lines.push(Line::from(""));
 
-        // Phase label
-        let phase_label = match rh.phase {
-            crate::roundhouse::RoundhousePhase::SelectingProviders => "selecting providers",
-            crate::roundhouse::RoundhousePhase::AwaitingPrompt => "awaiting prompt",
-            crate::roundhouse::RoundhousePhase::Planning => "planning...",
-            crate::roundhouse::RoundhousePhase::Synthesizing => "synthesizing...",
-            crate::roundhouse::RoundhousePhase::Reviewing => "reviewing",
-            crate::roundhouse::RoundhousePhase::Executing => "executing",
-            crate::roundhouse::RoundhousePhase::Complete => "complete",
-            crate::roundhouse::RoundhousePhase::Cancelled => "cancelled",
+        // Phase label with animated dots for active phases
+        let phase_text = match rh.phase {
+            crate::roundhouse::RoundhousePhase::SelectingProviders => {
+                "Phase: selecting providers".to_string()
+            }
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt => {
+                "Phase: awaiting prompt".to_string()
+            }
+            crate::roundhouse::RoundhousePhase::Planning => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: planning{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Synthesizing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: synthesizing{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Reviewing => "Phase: reviewing".to_string(),
+            crate::roundhouse::RoundhousePhase::Executing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: executing{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Complete => "Phase: complete".to_string(),
+            crate::roundhouse::RoundhousePhase::Cancelled => "Phase: cancelled".to_string(),
         };
         lines.push(Line::from(Span::styled(
-            format!("  Phase: {phase_label}"),
+            format!("  {phase_text}"),
             Style::default().fg(colors.text_secondary),
         )));
 
@@ -205,6 +221,22 @@ pub fn render(
                 lines.push(Line::from(Span::styled(
                     "  Plan ready for review",
                     Style::default().fg(colors.success),
+                )));
+                if let Some(ref path) = rh.plan_file {
+                    // Show relative path if possible
+                    let display = std::env::current_dir()
+                        .ok()
+                        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+                        .unwrap_or_else(|| path.clone());
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", display.display()),
+                        Style::default().fg(colors.text_muted),
+                    )));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  /roundhouse clear",
+                    Style::default().fg(colors.text_dim),
                 )));
             }
             crate::roundhouse::RoundhousePhase::Executing => {
@@ -220,7 +252,7 @@ pub fn render(
 
                 // Primary planner
                 let (primary_icon, primary_status_text, primary_color) =
-                    planner_status_parts(&rh.primary_status, &colors);
+                    planner_status_parts(&rh.primary_status, &colors, tick);
                 let primary_name = truncate_provider_name(&rh.primary_provider, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -239,7 +271,7 @@ pub fn render(
                 // Secondary planners
                 for secondary in &rh.secondaries {
                     let (icon, status_text, color) =
-                        planner_status_parts(&secondary.status, &colors);
+                        planner_status_parts(&secondary.status, &colors, tick);
                     let name = truncate_provider_name(&secondary.provider_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
@@ -420,19 +452,24 @@ fn render_tasks(frame: &mut Frame, area: Rect, outline: &TaskOutline, tick: u64,
 }
 
 /// Return (icon, status_text, color) for a PlannerStatus.
+///
+/// `tick` drives the blinking dot for active planners.
 fn planner_status_parts(
     status: &crate::roundhouse::PlannerStatus,
     colors: &Colors,
+    tick: u64,
 ) -> (&'static str, String, Color) {
+    // Blink the dot for active statuses
+    let active_dot = if tick % 4 < 2 { "  " } else { "\u{25CF} " };
     match status {
         crate::roundhouse::PlannerStatus::Pending => {
             ("\u{25CC}", "pending".to_string(), colors.text_dim)
         }
         crate::roundhouse::PlannerStatus::Thinking => {
-            ("\u{25CC}", "thinking".to_string(), colors.roundhouse)
+            (active_dot, "thinking".to_string(), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::Streaming => {
-            ("\u{25CC}", "streaming".to_string(), colors.roundhouse)
+            (active_dot, "streaming".to_string(), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::UsingTool(name) => {
             ("\u{25CC}", name.clone(), colors.warning)

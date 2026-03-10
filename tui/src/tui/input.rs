@@ -310,10 +310,10 @@ pub fn build_info_left<'a>(
 
     if let Some(label) = agent_state_label {
         return (
-            colors.warning,
+            colors.roundhouse,
             vec![Span::styled(
                 label.to_string(),
-                Style::default().fg(colors.warning),
+                Style::default().fg(colors.roundhouse),
             )],
         );
     }

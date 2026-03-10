@@ -68,6 +68,7 @@ impl CircuitManager {
         // Spawn the interval task
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(interval_secs));
+            ticker.tick().await; // consume the immediate first tick
             loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => break,

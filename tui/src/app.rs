@@ -2332,7 +2332,6 @@ impl App {
                 self.cancel_all_operations();
             } else if !matches!(self.state.agent.state, AgentState::Idle) {
                 self.cancel_all_operations();
-                self.request_quit();
             } else {
                 self.request_quit();
             }
@@ -4023,6 +4022,7 @@ impl App {
                             crate::roundhouse::types::RoundhousePhase::AwaitingPrompt;
                     }
                     self.state.dialog_stack.pop();
+                    self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: format!(
                             "Roundhouse: {} secondary provider(s) selected. Enter your planning prompt.",
@@ -5968,6 +5968,16 @@ impl App {
                             output
                         ),
                     });
+                    // Increment run count
+                    if let Some(handle) = self
+                        .state
+                        .circuit_manager
+                        .circuits
+                        .iter_mut()
+                        .find(|h| h.circuit.id == circuit_id)
+                    {
+                        handle.circuit.run_count += 1;
+                    }
                 }
                 CircuitEvent::Error { circuit_id, error } => {
                     self.state.chat_messages.push(ChatMessage::Error {
@@ -6969,10 +6979,24 @@ impl App {
                     });
                 }
             }
+            "clear" => {
+                if self.state.roundhouse_session.is_some() {
+                    self.state.roundhouse_session = None;
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Roundhouse session cleared.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
             other => {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!(
-                        "Unknown roundhouse subcommand: `{other}`. Use `execute` or `cancel`."
+                        "Unknown roundhouse subcommand: `{other}`. Use `execute`, `cancel`, or `clear`."
                     ),
                 });
             }
