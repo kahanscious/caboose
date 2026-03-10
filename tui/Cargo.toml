@@ -22,6 +22,7 @@ vt100 = "0.15"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP + streaming
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

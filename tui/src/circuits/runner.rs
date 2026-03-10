@@ -131,16 +131,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_max_concurrent_limit() {
+    #[tokio::test]
+    async fn test_max_concurrent_limit() {
         let mut mgr = CircuitManager::new(2);
         assert!(mgr.start_circuit(test_circuit("a")).is_ok());
         assert!(mgr.start_circuit(test_circuit("b")).is_ok());
         assert!(mgr.start_circuit(test_circuit("c")).is_err());
     }
 
-    #[test]
-    fn test_stop_circuit() {
+    #[tokio::test]
+    async fn test_stop_circuit() {
         let mut mgr = CircuitManager::new(5);
         mgr.start_circuit(test_circuit("a")).unwrap();
         mgr.start_circuit(test_circuit("b")).unwrap();
@@ -150,8 +150,8 @@ mod tests {
         assert!(!mgr.stop_circuit("nonexistent"));
     }
 
-    #[test]
-    fn test_stop_all() {
+    #[tokio::test]
+    async fn test_stop_all() {
         let mut mgr = CircuitManager::new(5);
         mgr.start_circuit(test_circuit("a")).unwrap();
         mgr.start_circuit(test_circuit("b")).unwrap();
