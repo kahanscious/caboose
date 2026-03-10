@@ -156,10 +156,21 @@ async fn run_planner_inner(
                     });
                 }
                 Ok(StreamEvent::Error(e)) => {
-                    return Err(format!("Stream error: {e}"));
+                    // Strip retry noise from error messages
+                    let clean = if let Some(idx) = e.find(". Retrying") {
+                        &e[..idx]
+                    } else {
+                        &e
+                    };
+                    return Err(format!("Stream error: {clean}"));
                 }
                 Ok(StreamEvent::ProviderError { message, .. }) => {
-                    return Err(format!("Provider error: {message}"));
+                    let clean = if let Some(idx) = message.find(". Retrying") {
+                        &message[..idx]
+                    } else {
+                        &message
+                    };
+                    return Err(format!("Provider error: {clean}"));
                 }
                 Ok(StreamEvent::ThinkingDelta(_)) => {
                     // Ignore thinking tokens

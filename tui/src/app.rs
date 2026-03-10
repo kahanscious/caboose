@@ -1623,23 +1623,15 @@ impl App {
                                                 );
                                         }
 
+                                        // Any planner failure cancels the entire roundhouse
                                         self.state.chat_messages.push(ChatMessage::System {
                                             content: format!(
-                                                "Roundhouse: {} planner failed — {}",
-                                                provider_name, e
+                                                "Roundhouse cancelled: {} failed — {e}",
+                                                provider_name
                                             ),
                                         });
-
-                                        if planner_index == 0 {
-                                            // Primary failed — can't synthesize without it
-                                            self.state.chat_messages.push(ChatMessage::System {
-                                                content: format!(
-                                                    "Roundhouse cancelled: primary provider failed — {e}"
-                                                ),
-                                            });
-                                            self.state.roundhouse_session = None;
-                                            continue;
-                                        }
+                                        self.state.roundhouse_session = None;
+                                        continue;
                                     }
                                 }
 

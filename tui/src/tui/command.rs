@@ -446,14 +446,14 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
-            // Build list of available secondary providers
+            // Track (provider_id, model) pairs already added to avoid duplicates
+            let mut seen = std::collections::HashSet::new();
+            seen.insert((primary_id.clone(), primary_model.clone()));
+
+            // Build list of available secondary provider/model combos
             let mut options = Vec::new();
 
             for entry in crate::provider::catalog::CATALOG {
-                // Skip the current primary provider
-                if entry.id == primary_id {
-                    continue;
-                }
                 // Skip non-functional providers
                 if !entry.functional {
                     continue;
@@ -467,6 +467,9 @@ pub fn build_default_registry() -> CommandRegistry {
                                 .model
                                 .clone()
                                 .unwrap_or_else(|| "default".into());
+                            if !seen.insert((name.clone(), model.clone())) {
+                                continue;
+                            }
                             let display = local_cfg
                                 .display_name
                                 .clone()
@@ -488,14 +491,40 @@ pub fn build_default_registry() -> CommandRegistry {
                             .get(entry.id)
                             .and_then(|pc| pc.model.clone())
                             .unwrap_or_else(|| "default".into());
-                        options.push(super::dialog::RoundhouseProviderOption {
-                            id: entry.id.to_string(),
-                            display_name: entry.display_name.to_string(),
-                            model,
-                            toggled: false,
-                        });
+                        if seen.insert((entry.id.to_string(), model.clone())) {
+                            options.push(super::dialog::RoundhouseProviderOption {
+                                id: entry.id.to_string(),
+                                display_name: entry.display_name.to_string(),
+                                model,
+                                toggled: false,
+                            });
+                        }
                     }
                 }
+            }
+
+            // Add recently used models from connected providers as extra entries.
+            // This lets users pick multiple models from the same provider (e.g. OpenRouter).
+            let prefs = crate::config::prefs::TuiPrefs::load();
+            for recent in &prefs.recent_models {
+                if !seen.insert((recent.provider.clone(), recent.model_id.clone())) {
+                    continue;
+                }
+                // Only include if the provider has a key configured
+                let has_key = state.config.keys.get(&recent.provider).is_some();
+                let is_local = state.config.local_providers.contains_key(&recent.provider);
+                if !has_key && !is_local {
+                    continue;
+                }
+                let display = crate::provider::catalog::by_id(&recent.provider)
+                    .map(|e| e.display_name.to_string())
+                    .unwrap_or_else(|| recent.provider.clone());
+                options.push(super::dialog::RoundhouseProviderOption {
+                    id: recent.provider.clone(),
+                    display_name: display,
+                    model: recent.model_id.clone(),
+                    toggled: false,
+                });
             }
 
             if options.is_empty() {
