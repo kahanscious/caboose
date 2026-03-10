@@ -15,6 +15,7 @@ mod lsp;
 mod mcp;
 mod memory;
 mod provider;
+mod roundhouse;
 mod safety;
 mod session;
 mod skills;
