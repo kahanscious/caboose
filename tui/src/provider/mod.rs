@@ -4,6 +4,7 @@ pub mod anthropic;
 pub mod catalog;
 pub mod error;
 pub mod gemini;
+pub mod local;
 pub mod models_dev;
 pub mod openai;
 pub mod openrouter;
