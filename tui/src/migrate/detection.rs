@@ -51,6 +51,7 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
 }
 
 /// Check which platforms have detectable configs
+#[allow(dead_code)]
 pub fn detect_installed_platforms() -> Vec<SourcePlatform> {
     SourcePlatform::all()
         .into_iter()
