@@ -22,6 +22,8 @@ pub enum DialogKind {
         line_count: usize,
         char_count: usize,
     },
+    RoundhouseProviderPicker,
+    CircuitsList,
 }
 
 // Debug impl needed for Action derive
@@ -39,6 +41,8 @@ impl std::fmt::Debug for DialogKind {
             } => {
                 write!(f, "PasteConfirm({line_count} lines, {char_count} chars)")
             }
+            Self::RoundhouseProviderPicker => write!(f, "RoundhouseProviderPicker"),
+            Self::CircuitsList => write!(f, "CircuitsList"),
         }
     }
 }

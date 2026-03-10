@@ -104,6 +104,7 @@ pub fn render(frame: &mut Frame, app: &State) {
             } => {
                 render_paste_confirm(frame, *line_count, *char_count, &colors);
             }
+            DialogKind::RoundhouseProviderPicker | DialogKind::CircuitsList => {}
         }
     }
 }

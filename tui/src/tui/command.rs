@@ -433,6 +433,23 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "roundhouse.start",
+        name: "Roundhouse",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("roundhouse"),
+        available: |state| state.roundhouse_session.is_none(),
+        execute: |state| {
+            let provider = state.active_provider_name.clone();
+            let model = state.active_model_name.clone();
+            state.roundhouse_session = Some(
+                crate::roundhouse::RoundhouseSession::new(provider, model)
+            );
+            Action::PushDialog(super::dialog::DialogKind::RoundhouseProviderPicker)
+        },
+    });
+
+    registry.register(Command {
         id: "app.quit",
         name: "Quit",
         category: Category::Navigation,

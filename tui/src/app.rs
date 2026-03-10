@@ -155,6 +155,8 @@ pub struct State {
     pub update_available: Option<String>,
     /// Receiver for background update check result.
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
+    /// Active Roundhouse (multi-LLM planning) session.
+    pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
 }
 
 /// Status of a tool execution.
@@ -680,6 +682,7 @@ impl App {
                 attachments: Vec::new(),
                 update_available: None,
                 update_check_rx: None,
+                roundhouse_session: None,
             },
             terminal,
             provider,
@@ -1602,6 +1605,7 @@ impl App {
                 }
                 _ => {}
             },
+            Some(DialogKind::RoundhouseProviderPicker) | Some(DialogKind::CircuitsList) => {}
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
