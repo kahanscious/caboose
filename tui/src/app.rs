@@ -1675,7 +1675,10 @@ impl App {
                 }
                 _ => {}
             },
-            Some(DialogKind::RoundhouseProviderPicker) | Some(DialogKind::CircuitsList) => {
+            Some(DialogKind::RoundhouseProviderPicker(_)) => {
+                self.handle_roundhouse_picker_key(key, modifiers);
+            }
+            Some(DialogKind::CircuitsList) => {
                 if key == KeyCode::Esc {
                     self.state.dialog_stack.pop();
                 }
@@ -3725,6 +3728,76 @@ impl App {
         }
     }
 
+    fn handle_roundhouse_picker_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        match key {
+            KeyCode::Esc => {
+                self.state.roundhouse_session = None;
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    if picker.selected > 0 {
+                        picker.selected -= 1;
+                    }
+                }
+            }
+            KeyCode::Down if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    if picker.selected + 1 < picker.providers.len() {
+                        picker.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    if let Some(p) = picker.providers.get_mut(picker.selected) {
+                        p.toggled = !p.toggled;
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                // Collect selected providers before mutating
+                let selected: Vec<(String, String)> =
+                    if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                        self.state.dialog_stack.top()
+                    {
+                        picker
+                            .providers
+                            .iter()
+                            .filter(|p| p.toggled)
+                            .map(|p| (p.id.clone(), p.model.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                if !selected.is_empty() {
+                    if let Some(session) = &mut self.state.roundhouse_session {
+                        for (id, model) in &selected {
+                            session.add_secondary(id.clone(), model.clone());
+                        }
+                        session.phase =
+                            crate::roundhouse::types::RoundhousePhase::AwaitingPrompt;
+                    }
+                    self.state.dialog_stack.pop();
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "Roundhouse: {} secondary provider(s) selected. Enter your planning prompt.",
+                            selected.len()
+                        ),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
     async fn handle_key_input_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => {
@@ -3794,7 +3867,7 @@ impl App {
     }
 
     async fn handle_local_connect_key(&mut self, key: KeyCode) {
-        use crate::tui::dialog::{LocalConnectPhase, LocalProviderConnectState};
+        use crate::tui::dialog::LocalConnectPhase;
 
         let phase = match self.state.dialog_stack.top() {
             Some(DialogKind::LocalProviderConnect(state)) => match state.phase {

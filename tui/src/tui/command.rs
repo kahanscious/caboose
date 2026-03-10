@@ -440,12 +440,77 @@ pub fn build_default_registry() -> CommandRegistry {
         slash: Some("roundhouse"),
         available: |state| state.roundhouse_session.is_none(),
         execute: |state| {
-            let provider = state.active_provider_name.clone();
-            let model = state.active_model_name.clone();
+            let primary_id = state.active_provider_name.clone();
+            let primary_model = state.active_model_name.clone();
+
+            // Build list of available secondary providers
+            let mut options = Vec::new();
+
+            for entry in crate::provider::catalog::CATALOG {
+                // Skip the current primary provider
+                if entry.id == primary_id {
+                    continue;
+                }
+                // Skip non-functional providers
+                if !entry.functional {
+                    continue;
+                }
+
+                if entry.is_local() {
+                    // Local providers: check if configured in local_providers
+                    for (name, local_cfg) in &state.config.local_providers {
+                        if local_cfg.provider_type == entry.id {
+                            let model = local_cfg
+                                .model
+                                .clone()
+                                .unwrap_or_else(|| "default".into());
+                            let display = local_cfg
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| name.clone());
+                            options.push(super::dialog::RoundhouseProviderOption {
+                                id: name.clone(),
+                                display_name: display,
+                                model,
+                                toggled: false,
+                            });
+                        }
+                    }
+                } else {
+                    // Cloud providers: check if API key is available
+                    if state.config.keys.get(entry.id).is_some() {
+                        let model = state
+                            .config
+                            .providers
+                            .get(entry.id)
+                            .and_then(|pc| pc.model.clone())
+                            .unwrap_or_else(|| "default".into());
+                        options.push(super::dialog::RoundhouseProviderOption {
+                            id: entry.id.to_string(),
+                            display_name: entry.display_name.to_string(),
+                            model,
+                            toggled: false,
+                        });
+                    }
+                }
+            }
+
+            if options.is_empty() {
+                state.chat_messages.push(crate::app::ChatMessage::Error {
+                    content: "No secondary providers available. Connect additional providers with /connect first.".into(),
+                });
+                return Action::None;
+            }
+
             state.roundhouse_session = Some(
-                crate::roundhouse::RoundhouseSession::new(provider, model)
+                crate::roundhouse::RoundhouseSession::new(primary_id, primary_model)
             );
-            Action::PushDialog(super::dialog::DialogKind::RoundhouseProviderPicker)
+
+            let picker = super::dialog::RoundhousePickerState {
+                providers: options,
+                selected: 0,
+            };
+            Action::PushDialog(super::dialog::DialogKind::RoundhouseProviderPicker(picker))
         },
     });
 

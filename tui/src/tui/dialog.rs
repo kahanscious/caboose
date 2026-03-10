@@ -23,7 +23,7 @@ pub enum DialogKind {
         line_count: usize,
         char_count: usize,
     },
-    RoundhouseProviderPicker,
+    RoundhouseProviderPicker(RoundhousePickerState),
     CircuitsList,
 }
 
@@ -43,7 +43,7 @@ impl std::fmt::Debug for DialogKind {
             } => {
                 write!(f, "PasteConfirm({line_count} lines, {char_count} chars)")
             }
-            Self::RoundhouseProviderPicker => write!(f, "RoundhouseProviderPicker"),
+            Self::RoundhouseProviderPicker(_) => write!(f, "RoundhouseProviderPicker(...)"),
             Self::CircuitsList => write!(f, "CircuitsList"),
         }
     }
@@ -85,6 +85,20 @@ pub struct LocalProviderConnectState {
     pub error: Option<String>,
     /// Receiver for async probe result.
     pub probe_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
+}
+
+/// State for the Roundhouse provider picker dialog.
+pub struct RoundhousePickerState {
+    pub providers: Vec<RoundhouseProviderOption>,
+    pub selected: usize,
+}
+
+/// A provider option shown in the Roundhouse picker.
+pub struct RoundhouseProviderOption {
+    pub id: String,
+    pub display_name: String,
+    pub model: String,
+    pub toggled: bool,
 }
 
 /// The dialog stack — a base screen plus zero or more overlays.

@@ -107,8 +107,8 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::LocalProviderConnect(state) => {
                 render_local_connect(frame, state, &colors);
             }
-            DialogKind::RoundhouseProviderPicker => {
-                render_placeholder_dialog(frame, "Roundhouse", "provider selection coming soon", &colors);
+            DialogKind::RoundhouseProviderPicker(picker) => {
+                render_roundhouse_picker(frame, picker, app, &colors);
             }
             DialogKind::CircuitsList => {
                 render_placeholder_dialog(frame, "Circuits", "circuits list coming soon", &colors);
@@ -965,6 +965,65 @@ fn render_paste_confirm(
     );
 
     let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render the Roundhouse provider picker dialog.
+fn render_roundhouse_picker(
+    frame: &mut Frame,
+    picker: &crate::tui::dialog::RoundhousePickerState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    // 2 border + 1 primary line + 1 blank + N providers + 1 blank + 1 footer = N + 6
+    let content_lines = picker.providers.len() as u16 + 6;
+    let width: u16 = 55;
+    let height: u16 = content_lines.min(area.height);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Roundhouse \u{2014} Select Providers ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let primary_label = if let Some(session) = &app.roundhouse_session {
+        format!("Primary: {} ({})", session.primary_provider, session.primary_model)
+    } else {
+        format!("Primary: {}", app.active_provider_name)
+    };
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            primary_label,
+            Style::default().fg(colors.text_secondary),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, opt) in picker.providers.iter().enumerate() {
+        let checkbox = if opt.toggled { "[x] " } else { "[ ] " };
+        let label = format!("{}{} ({})", checkbox, opt.display_name, opt.model);
+        let style = if i == picker.selected {
+            Style::default().fg(colors.text).bg(colors.bg_hover)
+        } else {
+            Style::default().fg(colors.text)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Space: toggle | Enter: confirm | Esc: cancel",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let paragraph = Paragraph::new(lines)
         .block(block)
         .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
