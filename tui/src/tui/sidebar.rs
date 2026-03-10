@@ -166,10 +166,20 @@ pub fn render(
 
     // --- Roundhouse section ---
     if let Some(rh) = roundhouse_session {
+        // Separator
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                "\u{2500}".repeat(inner.width.saturating_sub(4) as usize)
+            ),
+            Style::default().fg(colors.border),
+        )));
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled(
             "  Roundhouse",
-            Style::default().fg(colors.text_secondary).bold(),
+            Style::default().fg(colors.roundhouse).bold(),
         )));
         lines.push(Line::from(""));
 
@@ -419,10 +429,10 @@ fn planner_status_parts(
             ("\u{25CC}", "pending".to_string(), colors.text_dim)
         }
         crate::roundhouse::PlannerStatus::Thinking => {
-            ("\u{25CC}", "thinking".to_string(), colors.warning)
+            ("\u{25CC}", "thinking".to_string(), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::Streaming => {
-            ("\u{25CC}", "streaming".to_string(), colors.warning)
+            ("\u{25CC}", "streaming".to_string(), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::UsingTool(name) => {
             ("\u{25CC}", name.clone(), colors.warning)

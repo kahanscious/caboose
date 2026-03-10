@@ -1599,6 +1599,16 @@ impl App {
                                         }
                                     }
                                     Err(e) => {
+                                        let provider_name = if planner_index == 0 {
+                                            session.primary_provider.clone()
+                                        } else {
+                                            session
+                                                .secondaries
+                                                .get(planner_index - 1)
+                                                .map(|s| s.provider_name.clone())
+                                                .unwrap_or_else(|| format!("planner-{planner_index}"))
+                                        };
+
                                         if planner_index == 0 {
                                             session.primary_status =
                                                 crate::roundhouse::PlannerStatus::Failed(
@@ -1608,7 +1618,27 @@ impl App {
                                             session.secondaries.get_mut(planner_index - 1)
                                         {
                                             s.status =
-                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                                crate::roundhouse::PlannerStatus::Failed(
+                                                    e.clone(),
+                                                );
+                                        }
+
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "Roundhouse: {} planner failed — {}",
+                                                provider_name, e
+                                            ),
+                                        });
+
+                                        if planner_index == 0 {
+                                            // Primary failed — can't synthesize without it
+                                            self.state.chat_messages.push(ChatMessage::System {
+                                                content: format!(
+                                                    "Roundhouse cancelled: primary provider failed — {e}"
+                                                ),
+                                            });
+                                            self.state.roundhouse_session = None;
+                                            continue;
                                         }
                                     }
                                 }
@@ -1957,8 +1987,15 @@ impl App {
                     return;
                 }
                 KeyCode::Enter => {
-                    if let Some(completed) = completion {
-                        self.state.input.set(&completed);
+                    // Only apply autocomplete if the input has no arguments
+                    // (no space after the slash command prefix). This lets
+                    // `/circuit 1m "hello"` fall through without being
+                    // replaced by `/circuits`.
+                    let has_args = input_text.trim_start().find(' ').is_some();
+                    if !has_args {
+                        if let Some(completed) = completion {
+                            self.state.input.set(&completed);
+                        }
                     }
                     self.state.slash_auto = None;
                     // Fall through to normal Enter handler to execute the command
@@ -2397,8 +2434,15 @@ impl App {
                     return;
                 }
                 KeyCode::Enter => {
-                    if let Some(completed) = completion {
-                        self.state.input.set(&completed);
+                    // Only apply autocomplete if the input has no arguments
+                    // (no space after the slash command prefix). This lets
+                    // `/circuit 1m "hello"` fall through without being
+                    // replaced by `/circuits`.
+                    let has_args = input_text.trim_start().find(' ').is_some();
+                    if !has_args {
+                        if let Some(completed) = completion {
+                            self.state.input.set(&completed);
+                        }
                     }
                     self.state.slash_auto = None;
                     // Fall through to normal Enter handler to execute the command
@@ -4685,6 +4729,18 @@ impl App {
             }
         } else {
             error = Some("No provider connected. Use /connect first.".to_string());
+        }
+        // Add models from local providers
+        for (name, local_cfg) in &self.state.config.local_providers {
+            if let Some(ref model) = local_cfg.model {
+                models.push((name.clone(), crate::provider::ModelInfo {
+                    id: model.clone(),
+                    name: model.clone(),
+                    context_window: None,
+                    supports_tools: true,
+                    supports_vision: false,
+                }));
+            }
         }
         // Cache context windows from provider API for models not in the static table
         let cw_entries: Vec<(String, Option<u32>)> = models
@@ -7280,8 +7336,7 @@ impl App {
             },
             {
                 let mut migrate_choices = vec!["(none)".to_string()];
-                let detected = crate::migrate::detection::detect_installed_platforms();
-                for platform in &detected {
+                for platform in crate::migrate::SourcePlatform::all() {
                     migrate_choices.push(platform.label().to_string());
                 }
                 crate::tui::slash_auto::SettingsItem {

@@ -222,6 +222,9 @@ pub fn build_default_registry() -> CommandRegistry {
             state.tool_counts.clear();
             state.focused_tool = None;
             state.pending_handoff = None;
+            state.roundhouse_session = None;
+            state.roundhouse_update_rx = None;
+            state.roundhouse_synthesis_rx = None;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
             state.agent.turn_count = 0;

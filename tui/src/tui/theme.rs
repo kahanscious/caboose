@@ -123,6 +123,9 @@ pub struct Colors {
     pub brand: Color,
     pub brand_muted: Color,
 
+    // Roundhouse
+    pub roundhouse: Color,
+
     // Code blocks
     pub code_bg: Color,
     pub code_border: Color,
@@ -190,6 +193,8 @@ impl Colors {
             brand: Color::Rgb(212, 87, 42), // #d4572a — railroad amber-red
             brand_muted: Color::Rgb(128, 128, 128), // #808080
 
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
+
             // Code blocks
             code_bg: Color::Rgb(20, 20, 20),      // #141414
             code_border: Color::Rgb(42, 42, 42),  // #2a2a2a
@@ -235,6 +240,8 @@ impl Colors {
             brand: Color::Rgb(232, 84, 27), // #e8541b — blazing orange
             brand_muted: Color::Rgb(122, 64, 48), // #7a4030
 
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
+
             code_bg: Color::Rgb(22, 18, 16),      // #161210
             code_border: Color::Rgb(54, 42, 34),  // #362a22
             code_text: Color::Rgb(220, 208, 196), // #dcd0c4
@@ -277,6 +284,8 @@ impl Colors {
 
             brand: Color::Rgb(124, 184, 216), // #7cb8d8 — steel blue
             brand_muted: Color::Rgb(74, 104, 120), // #4a6878
+
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
             code_bg: Color::Rgb(16, 20, 24),      // #101418
             code_border: Color::Rgb(42, 48, 56),  // #2a3038
@@ -321,6 +330,8 @@ impl Colors {
             brand: Color::Rgb(160, 136, 120), // #a08878 — warm ash
             brand_muted: Color::Rgb(96, 84, 72), // #605448
 
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
+
             code_bg: Color::Rgb(20, 19, 16),      // #141310
             code_border: Color::Rgb(52, 46, 40),  // #342e28
             code_text: Color::Rgb(192, 184, 176), // #c0b8b0
@@ -363,6 +374,8 @@ impl Colors {
 
             brand: Color::Rgb(212, 168, 80), // #d4a850 — golden sand
             brand_muted: Color::Rgb(138, 122, 72), // #8a7a48
+
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
             code_bg: Color::Rgb(22, 20, 8),       // #161408
             code_border: Color::Rgb(54, 44, 28),  // #362c1c
