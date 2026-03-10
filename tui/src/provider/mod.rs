@@ -258,8 +258,45 @@ impl ProviderRegistry {
                 }
                 Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
             }
+            "ollama" | "lmstudio" | "llamacpp" | "custom" => {
+                let local_cfg = self.config.local_providers.get(provider_name);
+
+                let address = local_cfg
+                    .map(|c| c.address.clone())
+                    .unwrap_or_else(|| match provider_name {
+                        "ollama" => "http://localhost:11434".to_string(),
+                        "lmstudio" => "http://localhost:1234".to_string(),
+                        "llamacpp" => "http://localhost:8080".to_string(),
+                        _ => String::new(),
+                    });
+
+                if address.is_empty() {
+                    bail!(
+                        "Custom provider requires an address. Configure it in settings or use /connect."
+                    );
+                }
+
+                // Ollama needs /v1 suffix for OpenAI compatibility mode
+                let base_url = if provider_name == "ollama" {
+                    format!("{}/v1", address.trim_end_matches('/'))
+                } else {
+                    address
+                };
+
+                // Model resolution: CLI override > local config > provider config > "default"
+                let model_name = model
+                    .or(local_cfg.and_then(|c| c.model.as_deref()))
+                    .unwrap_or("default")
+                    .to_string();
+
+                let provider = openai::OpenAiProvider::new("local".to_string(), model_name)
+                    .with_base_url(base_url)
+                    .with_provider_name(provider_name.to_string());
+
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
             other => bail!(
-                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, deepseek, groq, mistral"
+                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, deepseek, groq, mistral, ollama, lmstudio, llamacpp, custom"
             ),
         }
     }
