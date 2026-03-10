@@ -3269,6 +3269,32 @@ impl App {
                                         .max_session_cost = new_max;
                                     crate::config::save_behavior_max_session_cost(new_max);
                                 }
+                                "migrate" => {
+                                    if item.value != "(none)" {
+                                        let platform_label = item.value.clone();
+                                        let platform = crate::migrate::SourcePlatform::all()
+                                            .into_iter()
+                                            .find(|p| p.label() == platform_label);
+                                        if let Some(platform) = platform {
+                                            let paths = crate::migrate::detection::config_paths(&platform);
+                                            let summary = match platform {
+                                                crate::migrate::SourcePlatform::ClaudeCode => {
+                                                    let config = crate::migrate::claude_code::scan_claude_code(&paths, Some(std::path::Path::new(".")));
+                                                    let items = crate::migrate::claude_code::importable_items(&config);
+                                                    if items.is_empty() {
+                                                        format!("No importable items found for {}.", platform_label)
+                                                    } else {
+                                                        format!("Found from {}: {}", platform_label, items.join(", "))
+                                                    }
+                                                }
+                                                _ => format!("{} migration not yet implemented.", platform_label),
+                                            };
+                                            self.state.chat_messages.push(ChatMessage::System { content: summary });
+                                        }
+                                        // Reset value back to (none)
+                                        item.value = "(none)".to_string();
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -6262,6 +6288,19 @@ impl App {
                         .map(|v| v.label().to_string())
                         .collect(),
                 ),
+            },
+            {
+                let mut migrate_choices = vec!["(none)".to_string()];
+                let detected = crate::migrate::detection::detect_installed_platforms();
+                for platform in &detected {
+                    migrate_choices.push(platform.label().to_string());
+                }
+                crate::tui::slash_auto::SettingsItem {
+                    key: "migrate".to_string(),
+                    label: "Migrate from...".to_string(),
+                    value: "(none)".to_string(),
+                    kind: crate::tui::slash_auto::SettingsKind::Choice(migrate_choices),
+                }
             },
         ];
         self.state.slash_auto = Some(crate::tui::slash_auto::SlashAutoState::with_settings(items));
