@@ -257,9 +257,11 @@ pub async fn execute_tool(
 
             crate::tools::executable::execute(exec_config, tool_key, input).await
         }
-        "create_pr" | "list_prs" | "list_issues" | "check_ci" | "review_pr" | "merge_pr" => {
+        "create_pr" | "list_prs" | "list_issues" | "check_ci" | "review_pr" | "merge_pr"
+        | "create_mr" | "list_mrs" | "review_mr" | "merge_mr" => {
             let cwd = std::env::current_dir().unwrap_or_default();
-            match crate::scm::tools::execute_scm_tool(name, input, &cwd) {
+            let provider = crate::scm::detection::detect_provider(&cwd);
+            match crate::scm::tools::execute_scm_tool(name, input, &cwd, &provider) {
                 Ok(output) => ToolResult {
                     tool_use_id: String::new(),
                     output,

@@ -386,6 +386,13 @@ impl ToolRegistry {
                     result.tools.push(tool);
                 }
             }
+            crate::scm::detection::ScmProvider::GitLab
+                if crate::scm::detection::has_glab_cli() =>
+            {
+                for tool in crate::scm::tools::gitlab_tool_definitions() {
+                    result.tools.push(tool);
+                }
+            }
             _ => {}
         }
 

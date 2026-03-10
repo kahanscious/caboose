@@ -1,4 +1,6 @@
+#![allow(dead_code)]
 use crate::provider::ToolDefinition;
+use crate::scm::detection::ScmProvider;
 use serde_json::json;
 
 /// Generate tool definitions for GitHub CLI tools
@@ -77,13 +79,93 @@ pub fn github_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
-/// Execute an SCM tool by shelling out to gh/glab
+/// Generate tool definitions for GitLab CLI tools
+pub fn gitlab_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "create_mr".into(),
+            description: "Create a GitLab merge request using the glab CLI".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "MR title" },
+                    "body": { "type": "string", "description": "MR description" },
+                    "target": { "type": "string", "description": "Target branch (default: main)" },
+                    "draft": { "type": "boolean", "description": "Create as draft MR" }
+                },
+                "required": ["title"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_mrs".into(),
+            description: "List GitLab merge requests using the glab CLI".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "state": { "type": "string", "enum": ["opened", "closed", "merged", "all"], "description": "Filter by state" },
+                    "limit": { "type": "integer", "description": "Max results (default 10)" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "list_issues".into(),
+            description: "List GitLab issues using the glab CLI".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "state": { "type": "string", "enum": ["opened", "closed", "all"] },
+                    "label": { "type": "string", "description": "Filter by label" },
+                    "limit": { "type": "integer", "description": "Max results (default 10)" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "check_ci".into(),
+            description: "Check CI pipeline status for current branch or a merge request".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "mr": { "type": "integer", "description": "MR number (default: current branch)" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "review_mr".into(),
+            description: "View MR details, diff, and review comments".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "mr": { "type": "integer", "description": "MR number" }
+                },
+                "required": ["mr"]
+            }),
+        },
+        ToolDefinition {
+            name: "merge_mr".into(),
+            description: "Merge a GitLab merge request".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "mr": { "type": "integer", "description": "MR number" },
+                    "squash": { "type": "boolean", "description": "Squash commits on merge" }
+                },
+                "required": ["mr"]
+            }),
+        },
+    ]
+}
+
+/// Execute an SCM tool by shelling out to gh/glab.
+/// The `provider` parameter is used to route shared tool names (`list_issues`, `check_ci`)
+/// to the correct CLI when both GitHub and GitLab tools share the same name.
 pub fn execute_scm_tool(
     name: &str,
     args: &serde_json::Value,
     cwd: &std::path::Path,
+    provider: &ScmProvider,
 ) -> Result<String, String> {
     match name {
+        // ── GitHub-only tools ──────────────────────────────────────────────
         "create_pr" => {
             let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
@@ -113,33 +195,6 @@ pub fn execute_scm_tool(
             cmd.current_dir(cwd);
             run_command(cmd)
         }
-        "list_issues" => {
-            let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("open");
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
-
-            let mut cmd = std::process::Command::new("gh");
-            cmd.args([
-                "issue", "list",
-                "--state", state,
-                "--limit", &limit.to_string(),
-                "--json", "number,title,state,labels,assignees",
-            ]);
-            if let Some(label) = args.get("label").and_then(|v| v.as_str()) {
-                cmd.args(["--label", label]);
-            }
-            cmd.current_dir(cwd);
-            run_command(cmd)
-        }
-        "check_ci" => {
-            let mut cmd = std::process::Command::new("gh");
-            if let Some(pr) = args.get("pr").and_then(|v| v.as_u64()) {
-                cmd.args(["pr", "checks", &pr.to_string(), "--json", "name,state,conclusion"]);
-            } else {
-                cmd.args(["run", "list", "--limit", "5", "--json", "name,status,conclusion,headBranch"]);
-            }
-            cmd.current_dir(cwd);
-            run_command(cmd)
-        }
         "review_pr" => {
             let pr = args.get("pr").and_then(|v| v.as_u64()).unwrap_or(0);
             let mut cmd = std::process::Command::new("gh");
@@ -163,6 +218,114 @@ pub fn execute_scm_tool(
             cmd.current_dir(cwd);
             run_command(cmd)
         }
+
+        // ── GitLab-only tools ──────────────────────────────────────────────
+        "create_mr" => {
+            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            let target = args.get("target").and_then(|v| v.as_str()).unwrap_or("main");
+            let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let mut cmd = std::process::Command::new("glab");
+            cmd.args(["mr", "create", "--title", title, "--description", body, "--target-branch", target, "--yes"]);
+            if draft {
+                cmd.arg("--draft");
+            }
+            cmd.current_dir(cwd);
+            run_command(cmd)
+        }
+        "list_mrs" => {
+            let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("opened");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
+
+            let mut cmd = std::process::Command::new("glab");
+            cmd.args([
+                "mr", "list",
+                "--state", state,
+                "--per-page", &limit.to_string(),
+            ]);
+            cmd.current_dir(cwd);
+            run_command(cmd)
+        }
+        "review_mr" => {
+            let mr = args.get("mr").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mut cmd = std::process::Command::new("glab");
+            cmd.args(["mr", "view", &mr.to_string()]);
+            cmd.current_dir(cwd);
+            run_command(cmd)
+        }
+        "merge_mr" => {
+            let mr = args.get("mr").and_then(|v| v.as_u64()).unwrap_or(0);
+            let squash = args.get("squash").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut cmd = std::process::Command::new("glab");
+            cmd.args(["mr", "merge", &mr.to_string()]);
+            if squash {
+                cmd.arg("--squash");
+            }
+            cmd.arg("--yes");
+            cmd.current_dir(cwd);
+            run_command(cmd)
+        }
+
+        // ── Shared tool names — route by provider ─────────────────────────
+        "list_issues" => match provider {
+            ScmProvider::GitLab => {
+                let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("opened");
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
+
+                let mut cmd = std::process::Command::new("glab");
+                cmd.args([
+                    "issue", "list",
+                    "--state", state,
+                    "--per-page", &limit.to_string(),
+                ]);
+                if let Some(label) = args.get("label").and_then(|v| v.as_str()) {
+                    cmd.args(["--label", label]);
+                }
+                cmd.current_dir(cwd);
+                run_command(cmd)
+            }
+            _ => {
+                let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
+
+                let mut cmd = std::process::Command::new("gh");
+                cmd.args([
+                    "issue", "list",
+                    "--state", state,
+                    "--limit", &limit.to_string(),
+                    "--json", "number,title,state,labels,assignees",
+                ]);
+                if let Some(label) = args.get("label").and_then(|v| v.as_str()) {
+                    cmd.args(["--label", label]);
+                }
+                cmd.current_dir(cwd);
+                run_command(cmd)
+            }
+        },
+        "check_ci" => match provider {
+            ScmProvider::GitLab => {
+                let mut cmd = std::process::Command::new("glab");
+                if let Some(mr) = args.get("mr").and_then(|v| v.as_u64()) {
+                    cmd.args(["mr", "checks", &mr.to_string()]);
+                } else {
+                    cmd.args(["ci", "list", "--per-page", "5"]);
+                }
+                cmd.current_dir(cwd);
+                run_command(cmd)
+            }
+            _ => {
+                let mut cmd = std::process::Command::new("gh");
+                if let Some(pr) = args.get("pr").and_then(|v| v.as_u64()) {
+                    cmd.args(["pr", "checks", &pr.to_string(), "--json", "name,state,conclusion"]);
+                } else {
+                    cmd.args(["run", "list", "--limit", "5", "--json", "name,status,conclusion,headBranch"]);
+                }
+                cmd.current_dir(cwd);
+                run_command(cmd)
+            }
+        },
+
         _ => Err(format!("unknown SCM tool: {name}")),
     }
 }
@@ -177,7 +340,7 @@ fn run_command(mut cmd: std::process::Command) -> Result<String, String> {
                 Err(format!("command failed: {stderr}"))
             }
         }
-        Err(e) => Err(format!("failed to execute: {e}. Is `gh` installed? Run `gh auth login` to authenticate.")),
+        Err(e) => Err(format!("failed to execute: {e}. Is the SCM CLI installed and authenticated?")),
     }
 }
 
@@ -209,7 +372,25 @@ mod tests {
             "nonexistent",
             &serde_json::json!({}),
             std::path::Path::new("."),
+            &ScmProvider::Unknown,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn gitlab_tool_definitions_has_six_tools() {
+        assert_eq!(gitlab_tool_definitions().len(), 6);
+    }
+
+    #[test]
+    fn gitlab_tool_names() {
+        let tools = gitlab_tool_definitions();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"create_mr"));
+        assert!(names.contains(&"list_mrs"));
+        assert!(names.contains(&"list_issues"));
+        assert!(names.contains(&"check_ci"));
+        assert!(names.contains(&"review_mr"));
+        assert!(names.contains(&"merge_mr"));
     }
 }
