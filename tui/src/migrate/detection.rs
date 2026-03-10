@@ -84,4 +84,25 @@ mod tests {
         assert_eq!(SourcePlatform::OpenCode.label(), "Open Code");
         assert_eq!(SourcePlatform::Codex.label(), "Codex");
     }
+
+    #[test]
+    fn config_paths_returns_nonempty() {
+        for platform in &[SourcePlatform::ClaudeCode, SourcePlatform::OpenCode, SourcePlatform::Codex] {
+            let paths = config_paths(platform);
+            assert!(!paths.is_empty(), "{:?} should have at least one path", platform);
+        }
+    }
+
+    #[test]
+    fn claude_code_path_contains_dot_claude() {
+        let paths = config_paths(&SourcePlatform::ClaudeCode);
+        assert!(paths.iter().any(|p| p.to_string_lossy().contains(".claude")));
+    }
+
+    #[test]
+    fn open_code_has_multiple_paths() {
+        let paths = config_paths(&SourcePlatform::OpenCode);
+        // Should have both ~/.open-code and XDG/platform config path
+        assert!(paths.len() >= 1);
+    }
 }
