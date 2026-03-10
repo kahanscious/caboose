@@ -45,15 +45,15 @@ cd tui && cargo build --release
 ## Quick Start
 
 ```bash
-# Interactive mode
 caboose
-
-# Connect a provider
-/connect anthropic
-
-# Non-interactive
-caboose --prompt "explain this function"
 ```
+
+Once inside, use slash commands:
+
+- `/connect` — connect your API keys
+- `/init` — generate a `CABOOSE.md` project context file
+- `/settings` — configure providers, models, and preferences
+- Type `/` to see all available commands
 
 ## Highlights
 
