@@ -3,9 +3,15 @@ name: Publish Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v0.1.1)'
+        required: true
 
 jobs:
   upload-r2:
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -50,20 +56,22 @@ jobs:
         run: |
           aws s3 cp install/install.sh "s3://caboose/install.sh" --content-type "text/plain"
           aws s3 cp install/install.ps1 "s3://caboose/install.ps1" --content-type "text/plain"
+          aws s3 cp media/caboose-icon-256.png "s3://caboose/caboose-icon.png" --content-type "image/png"
 
   publish-chocolatey:
     runs-on: windows-latest
     needs: upload-r2
+    if: ${{ always() && (needs.upload-r2.result == 'success' || needs.upload-r2.result == 'skipped') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.version }}
 
       - name: Set version
         shell: pwsh
         run: |
-          $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+          $version = "${{ github.event.release.tag_name || inputs.version }}".TrimStart('v')
           echo "PKG_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Update nuspec version
@@ -72,6 +80,15 @@ jobs:
           $nuspec = Get-Content chocolatey/caboose.nuspec -Raw
           $nuspec = $nuspec -replace '<version>.*</version>', "<version>$env:PKG_VERSION</version>"
           Set-Content chocolatey/caboose.nuspec $nuspec
+
+      - name: Inject checksum into install script
+        shell: pwsh
+        run: |
+          $checksums = Invoke-WebRequest -Uri "https://downloads.trycaboose.dev/v$env:PKG_VERSION/checksums.txt" -UseBasicParsing
+          $hash = ($checksums.Content -split "`n" | Where-Object { $_ -match 'caboose-x86_64-pc-windows-msvc\.zip' }) -replace '\s+.*$', ''
+          $script = Get-Content chocolatey/tools/chocolateyInstall.ps1 -Raw
+          $script = $script -replace '__CHECKSUM__', $hash
+          Set-Content chocolatey/tools/chocolateyInstall.ps1 $script
 
       - name: Pack
         shell: pwsh

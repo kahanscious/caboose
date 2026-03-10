@@ -7,12 +7,17 @@
     <authors>TryCaboose</authors>
     <owners>kahanscious</owners>
     <projectUrl>https://trycaboose.dev</projectUrl>
-    <licenseUrl>https://trycaboose.dev</licenseUrl>
+    <iconUrl>https://downloads.trycaboose.dev/caboose-icon.png</iconUrl>
+    <licenseUrl>https://github.com/kahanscious/caboose/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <description>A terminal-native AI coding agent built in Rust. Single binary, streams responses from multiple LLM providers, executes tools, manages sessions, and supports MCP servers — all in a rich TUI.</description>
     <summary>Terminal-native AI coding agent</summary>
     <tags>ai coding agent terminal rust llm cli</tags>
+    <releaseNotes>https://github.com/kahanscious/caboose/releases</releaseNotes>
     <packageSourceUrl>https://github.com/kahanscious/caboose</packageSourceUrl>
+    <docsUrl>https://docs.trycaboose.dev</docsUrl>
+    <bugTrackerUrl>https://github.com/kahanscious/caboose/issues</bugTrackerUrl>
+    <projectSourceUrl>https://github.com/kahanscious/caboose</projectSourceUrl>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />
