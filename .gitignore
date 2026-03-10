@@ -1,0 +1,42 @@
+# Rust build artifacts
+tui/target/
+dist/
+*.tar.gz
+*.nupkg
+caboose-*.zip
+
+# Environment
+.env
+.env.*
+
+# Project config (local)
+.caboose/
+.claude/
+.worktrees/
+
+# Internal docs & plans
+CLAUDE.md
+AGENTS.md
+CABOOSE.md
+SPEC.md
+RELEASING.md
+docs/
+scripts/
+
+# Legacy (Electron/VSCode era)
+_archive/
+out/
+node_modules/
+packages/
+*.vsix
+.vscode-test/
+*.tsbuildinfo
+package.json
+package-lock.json
+tsconfig.base.json
+.eslintrc.json
+.editorconfig
+favicon.svg
+
+# OS
+.DS_STORE
