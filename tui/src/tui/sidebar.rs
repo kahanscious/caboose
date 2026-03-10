@@ -23,6 +23,7 @@ pub fn render(
     modified_files: &std::collections::HashMap<String, FileStats>,
     task_outline: Option<&TaskOutline>,
     tick: u64,
+    roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
 ) {
     let colors = Colors::default();
 
@@ -158,6 +159,40 @@ pub fn render(
             lines.push(Line::from(Span::styled(
                 format!("  {label}"),
                 Style::default().fg(dot_color),
+            )));
+        }
+    }
+
+    // --- Roundhouse section ---
+    if let Some(rh) = roundhouse_session {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Roundhouse",
+            Style::default().fg(colors.text_secondary).bold(),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("    Phase: {:?}", rh.phase),
+            Style::default().fg(colors.text_secondary),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    Cost: ${:.4}", rh.total_cost),
+            Style::default().fg(colors.text_secondary),
+        )));
+
+        for secondary in &rh.secondaries {
+            let status_icon = match &secondary.status {
+                crate::roundhouse::PlannerStatus::Pending => ".",
+                crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::Streaming => "*",
+                crate::roundhouse::PlannerStatus::UsingTool(_) => ">",
+                crate::roundhouse::PlannerStatus::Done => "+",
+                crate::roundhouse::PlannerStatus::Failed(_) => "x",
+                crate::roundhouse::PlannerStatus::TimedOut => "!",
+            };
+            lines.push(Line::from(Span::styled(
+                format!("    {} {} ${:.4}", status_icon, secondary.provider_name, secondary.cost),
+                Style::default().fg(colors.text_secondary),
             )));
         }
     }
