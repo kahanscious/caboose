@@ -1834,6 +1834,9 @@ impl App {
             Some(DialogKind::CircuitsList(_)) => {
                 self.handle_circuits_list_key(key, modifiers);
             }
+            Some(DialogKind::MigrationChecklist(_)) => {
+                self.handle_migration_checklist_key(key);
+            }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -3583,22 +3586,15 @@ impl App {
                                             .into_iter()
                                             .find(|p| p.label() == platform_label);
                                         if let Some(platform) = platform {
-                                            let paths = crate::migrate::detection::config_paths(&platform);
-                                            let summary = match platform {
-                                                crate::migrate::SourcePlatform::ClaudeCode => {
-                                                    let config = crate::migrate::claude_code::scan_claude_code(&paths, Some(std::path::Path::new(".")));
-                                                    let items = crate::migrate::claude_code::importable_items(&config);
-                                                    if items.is_empty() {
-                                                        format!("No importable items found for {}.", platform_label)
-                                                    } else {
-                                                        format!("Found from {}: {}", platform_label, items.join(", "))
-                                                    }
-                                                }
-                                                _ => format!("{} migration not yet implemented.", platform_label),
-                                            };
-                                            self.state.chat_messages.push(ChatMessage::System { content: summary });
+                                            let checklist = crate::tui::dialog::build_migration_checklist(platform);
+                                            if checklist.items.is_empty() {
+                                                self.state.chat_messages.push(ChatMessage::System {
+                                                    content: format!("No importable items found for {}.", platform_label),
+                                                });
+                                            } else {
+                                                self.state.dialog_stack.push(DialogKind::MigrationChecklist(checklist));
+                                            }
                                         }
-                                        // Reset value back to (none)
                                         item.value = "(none)".to_string();
                                     }
                                 }
@@ -4054,6 +4050,62 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn handle_migration_checklist_key(&mut self, key: KeyCode) {
+        use crate::tui::dialog::MigrationPhase;
+
+        let checklist = match self.state.dialog_stack.top_mut() {
+            Some(DialogKind::MigrationChecklist(c)) => c,
+            _ => return,
+        };
+
+        match &checklist.phase {
+            MigrationPhase::Checklist => match key {
+                KeyCode::Up => {
+                    if checklist.selected > 0 {
+                        checklist.selected -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if !checklist.items.is_empty()
+                        && checklist.selected < checklist.items.len() - 1
+                    {
+                        checklist.selected += 1;
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(item) = checklist.items.get_mut(checklist.selected) {
+                        item.toggled = !item.toggled;
+                    }
+                }
+                KeyCode::Enter => {
+                    let any_toggled = checklist.items.iter().any(|i| i.toggled);
+                    if any_toggled {
+                        checklist.phase = MigrationPhase::Preview;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                _ => {}
+            },
+            MigrationPhase::Preview => match key {
+                KeyCode::Enter => {
+                    // Apply migration — will be implemented in Task 22
+                    checklist.phase =
+                        MigrationPhase::Done("Migration applied.".to_string());
+                }
+                KeyCode::Esc => {
+                    checklist.phase = MigrationPhase::Checklist;
+                }
+                _ => {}
+            },
+            MigrationPhase::Done(_) => {
+                self.state.dialog_stack.pop();
+            }
+            MigrationPhase::Applying => {}
         }
     }
 

@@ -113,6 +113,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::CircuitsList(list_state) => {
                 render_circuits_list(frame, list_state, app, &colors);
             }
+            DialogKind::MigrationChecklist(checklist) => {
+                render_migration_checklist(frame, checklist, &colors);
+            }
         }
     }
 }
@@ -1290,6 +1293,133 @@ fn render_local_connect(
                 .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
             frame.render_widget(ratatui::widgets::Clear, dialog_area);
             frame.render_widget(paragraph, dialog_area);
+        }
+    }
+}
+
+fn render_migration_checklist(
+    frame: &mut Frame,
+    checklist: &crate::tui::dialog::MigrationChecklistState,
+    colors: &theme::Colors,
+) {
+    use crate::tui::dialog::{MigrationItemKind, MigrationPhase};
+
+    let area = frame.area();
+    let title = format!(" Migrate from {} ", checklist.platform.label());
+
+    match &checklist.phase {
+        MigrationPhase::Checklist => {
+            let content_lines = checklist.items.len() as u16 + 5;
+            let width: u16 = 65_u16.min(area.width);
+            let height: u16 = content_lines.min(area.height);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, item) in checklist.items.iter().enumerate() {
+                let checkbox = if item.toggled { "[x] " } else { "[ ] " };
+                let label = format!("{}{}: {}", checkbox, item.label, item.description);
+                let style = if i == checklist.selected {
+                    Style::default().fg(colors.text).bg(colors.bg_hover)
+                } else {
+                    Style::default().fg(colors.text)
+                };
+                lines.push(Line::from(Span::styled(label, style)));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Space: toggle | Enter: preview | Esc: cancel",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Preview => {
+            let mcp_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::McpServer { .. }))
+                .count();
+            let prompt_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::SystemPrompt(_)))
+                .count();
+            let claude_md_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::ClaudeMd(_)))
+                .count();
+
+            let mut preview_lines: Vec<String> = vec!["Will apply:".to_string(), String::new()];
+            if mcp_count > 0 {
+                preview_lines.push(format!("  + {} MCP server(s) to config", mcp_count));
+            }
+            if prompt_count > 0 {
+                preview_lines.push("  + System prompt to CABOOSE.md".to_string());
+            }
+            if claude_md_count > 0 {
+                preview_lines.push("  + CLAUDE.md content to CABOOSE.md".to_string());
+            }
+
+            let height: u16 = (preview_lines.len() as u16 + 5).min(area.height);
+            let width: u16 = 55_u16.min(area.width);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = preview_lines
+                .iter()
+                .map(|s| Line::from(s.as_str()))
+                .collect();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: apply | Esc: back",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Done(summary) => {
+            let height: u16 = 5_u16.min(area.height);
+            let width: u16 = 55_u16.min(area.width);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(" Migration Complete ")
+                .border_style(Style::default().fg(colors.brand));
+
+            let text = format!("{}\n\nPress any key to close", summary);
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Applying => {
+            // Brief spinner-like state (instant for now)
         }
     }
 }
