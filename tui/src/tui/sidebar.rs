@@ -24,6 +24,7 @@ pub fn render(
     task_outline: Option<&TaskOutline>,
     tick: u64,
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
+    active_watchers: &[crate::scm::watcher::Watcher],
 ) {
     let colors = Colors::default();
 
@@ -254,6 +255,23 @@ pub fn render(
                     )));
                 }
             }
+        }
+    }
+
+    // --- Watchers section ---
+    if !active_watchers.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Watchers",
+            Style::default().fg(colors.text_secondary).bold(),
+        )));
+        lines.push(Line::from(""));
+        for w in active_watchers {
+            let icon = w.last_status.icon();
+            lines.push(Line::from(Span::styled(
+                format!("  {} PR #{}", icon, w.pr_number),
+                Style::default().fg(colors.text_secondary),
+            )));
         }
     }
 

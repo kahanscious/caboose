@@ -172,6 +172,8 @@ pub struct State {
         Option<tokio::sync::oneshot::Receiver<Vec<crate::provider::local::LocalServer>>>,
     /// Detected SCM provider for the current working directory.
     pub scm_provider: crate::scm::detection::ScmProvider,
+    /// Active SCM watchers (each backed by a circuit).
+    pub active_watchers: Vec<crate::scm::watcher::Watcher>,
 }
 
 /// Status of a tool execution.
@@ -707,6 +709,7 @@ impl App {
                 discovered_locals: vec![],
                 local_discovery_rx: None,
                 scm_provider,
+                active_watchers: Vec::new(),
             },
             terminal,
             provider,
@@ -2070,6 +2073,11 @@ impl App {
                             self.handle_circuit_command(args.trim()).await;
                             return;
                         }
+                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        if let Some(args) = slash.strip_prefix("watch ") {
+                            self.handle_watch_command(args.trim()).await;
+                            return;
+                        }
                         // /new — extract memories and clean up cold storage before clearing session
                         if slash == "new" {
                             self.extract_session_memories().await;
@@ -2823,6 +2831,11 @@ impl App {
                         // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
                         if let Some(args) = slash.strip_prefix("circuit ") {
                             self.handle_circuit_command(args.trim()).await;
+                            return;
+                        }
+                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        if let Some(args) = slash.strip_prefix("watch ") {
+                            self.handle_watch_command(args.trim()).await;
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -7508,7 +7521,7 @@ impl App {
                 } else {
                     crate::circuits::CircuitKind::InSession
                 };
-                self.create_circuit(&prompt, interval_secs, kind).await;
+                let _ = self.create_circuit(&prompt, interval_secs, kind).await;
             }
             None => {
                 self.state.chat_messages.push(ChatMessage::Error {
@@ -7518,17 +7531,19 @@ impl App {
         }
     }
 
+    /// Create a circuit and return its ID on success, or None on failure.
     async fn create_circuit(
         &mut self,
         prompt: &str,
         interval_secs: u64,
         kind: crate::circuits::CircuitKind,
-    ) {
+    ) -> Option<String> {
+        let id = format!(
+            "c-{}",
+            chrono::Utc::now().timestamp_millis() % 100_000
+        );
         let circuit = crate::circuits::Circuit {
-            id: format!(
-                "c-{}",
-                chrono::Utc::now().timestamp_millis() % 100_000
-            ),
+            id: id.clone(),
             prompt: prompt.to_string(),
             interval_secs,
             provider: self.state.active_provider_name.clone(),
@@ -7547,7 +7562,7 @@ impl App {
             self.state.chat_messages.push(ChatMessage::Error {
                 content: format!("Failed to start circuit: {}", e),
             });
-            return;
+            return None;
         }
 
         self.state.chat_messages.push(ChatMessage::System {
@@ -7557,6 +7572,60 @@ impl App {
                 format_duration(interval_secs)
             ),
         });
+        Some(id)
+    }
+
+    async fn handle_watch_command(&mut self, args: &str) {
+        // /watch pr <number> [--persist]
+        // /watch mr <number> [--persist]
+        let rest = if let Some(r) = args.strip_prefix("pr ").or_else(|| args.strip_prefix("mr ")) {
+            r
+        } else {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Usage: /watch pr <number> [--persist]".to_string(),
+            });
+            return;
+        };
+
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let pr_number = match parts.first().and_then(|s| s.parse::<u32>().ok()) {
+            Some(n) => n,
+            None => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /watch pr <number> [--persist]".to_string(),
+                });
+                return;
+            }
+        };
+        let persist = parts.contains(&"--persist");
+
+        self.create_watcher(pr_number, persist).await;
+    }
+
+    async fn create_watcher(&mut self, pr_number: u32, persist: bool) {
+        let interval_secs = 180; // 3 minutes
+        let prompt = format!(
+            "Check the status of PR/MR #{pr_number}. Use the check_ci tool and report: is CI passing, failing, or pending? Is the PR merged or closed?"
+        );
+
+        let kind = if persist {
+            crate::circuits::CircuitKind::Persistent
+        } else {
+            crate::circuits::CircuitKind::InSession
+        };
+
+        if let Some(circuit_id) = self.create_circuit(&prompt, interval_secs, kind).await {
+            let watcher = crate::scm::watcher::Watcher {
+                circuit_id,
+                pr_number,
+                title: None,
+                last_status: crate::scm::watcher::WatcherStatus::Unknown,
+            };
+            self.state.active_watchers.push(watcher);
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
+            });
+        }
     }
 }
 

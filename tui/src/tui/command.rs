@@ -529,6 +529,18 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "scm.watch",
+        name: "Watch PR/MR",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("watch"),
+        available: |state| {
+            state.scm_provider != crate::scm::detection::ScmProvider::Unknown
+        },
+        execute: |_state| Action::None, // Handled in app.rs
+    });
+
+    registry.register(Command {
         id: "app.quit",
         name: "Quit",
         category: Category::Navigation,

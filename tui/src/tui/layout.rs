@@ -251,6 +251,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             task_outline,
             app.tick,
             app.roundhouse_session.as_ref(),
+            &app.active_watchers,
         );
     }
 
