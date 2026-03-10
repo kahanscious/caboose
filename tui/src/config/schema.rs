@@ -306,6 +306,15 @@ pub struct McpServerConfig {
     pub removed: bool,
 }
 
+/// Roundhouse (multi-LLM planning) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RoundhouseSchemaConfig {
+    /// Timeout for each secondary LLM during planning (seconds)
+    pub planning_timeout: Option<u64>,
+    /// Max tokens per secondary LLM during planning
+    pub per_llm_token_budget: Option<u64>,
+}
+
 /// External service configuration (web search, etc.).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServicesConfig {

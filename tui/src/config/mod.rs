@@ -63,6 +63,9 @@ pub struct Config {
     /// Lifecycle hooks configuration
     #[serde(default)]
     pub hooks: Option<schema::HooksConfig>,
+    /// Roundhouse (multi-LLM planning) configuration
+    #[serde(default)]
+    pub roundhouse: Option<schema::RoundhouseSchemaConfig>,
 }
 
 impl Config {
@@ -185,6 +188,9 @@ impl Config {
             self_hooks.subagent_start.extend(other_hooks.subagent_start);
             self_hooks.subagent_stop.extend(other_hooks.subagent_stop);
             self_hooks.setup.extend(other_hooks.setup);
+        }
+        if other.roundhouse.is_some() {
+            self.roundhouse = other.roundhouse;
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {
