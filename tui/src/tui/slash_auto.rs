@@ -687,6 +687,7 @@ fn build_provider_items<'a>(
     selected: usize,
     colors: &crate::tui::theme::Colors,
     width: u16,
+    discovered_locals: &[crate::provider::local::LocalServer],
 ) -> (Vec<ListItem<'a>>, Option<usize>) {
     use crate::provider::catalog;
 
@@ -707,6 +708,22 @@ fn build_provider_items<'a>(
     let popular: Vec<_> = filtered.iter().filter(|e| e.popular).copied().collect();
     let other: Vec<_> = filtered.iter().filter(|e| !e.popular).copied().collect();
 
+    // Helper: check if a catalog entry corresponds to a running local server.
+    let is_running = |entry: &catalog::ProviderEntry| -> bool {
+        use crate::provider::local::LocalServerType;
+        let server_type = match entry.id {
+            "ollama" => Some(LocalServerType::Ollama),
+            "lmstudio" => Some(LocalServerType::LmStudio),
+            "llamacpp" => Some(LocalServerType::LlamaCpp),
+            _ => None,
+        };
+        server_type.map_or(false, |st| {
+            discovered_locals
+                .iter()
+                .any(|s| s.server_type == st && s.available)
+        })
+    };
+
     if !popular.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             " Popular",
@@ -717,7 +734,11 @@ fn build_provider_items<'a>(
                 list_selected = Some(items.len());
             }
             let label_left = format!("  {}", entry.display_name);
-            let label_right = entry.description.to_string();
+            let label_right = if is_running(entry) {
+                format!("{} (running)", entry.description)
+            } else {
+                entry.description.to_string()
+            };
             let avail = (width as usize).saturating_sub(6);
             let pad = avail
                 .saturating_sub(label_left.len())
@@ -754,7 +775,11 @@ fn build_provider_items<'a>(
                 list_selected = Some(items.len());
             }
             let label_left = format!("  {}", entry.display_name);
-            let label_right = entry.description.to_string();
+            let label_right = if is_running(entry) {
+                format!("{} (running)", entry.description)
+            } else {
+                entry.description.to_string()
+            };
             let avail = (width as usize).saturating_sub(6);
             let pad = avail
                 .saturating_sub(label_left.len())
@@ -1019,6 +1044,7 @@ pub fn render_slash_autocomplete(
     colors: &crate::tui::theme::Colors,
     above: bool,
     current_session_id: Option<&str>,
+    discovered_locals: &[crate::provider::local::LocalServer],
 ) {
     let (items, selected_item_idx, title) = match &state.mode {
         DropdownMode::Commands => {
@@ -1099,8 +1125,13 @@ pub fn render_slash_autocomplete(
             (items, selected, Some(" /model "))
         }
         DropdownMode::Providers => {
-            let (items, selected) =
-                build_provider_items(&state.filter, state.selected, colors, anchor.width);
+            let (items, selected) = build_provider_items(
+                &state.filter,
+                state.selected,
+                colors,
+                anchor.width,
+                discovered_locals,
+            );
             (items, selected, Some(" /connect "))
         }
         DropdownMode::McpServers { servers } => {

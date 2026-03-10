@@ -893,6 +893,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             colors,
             true,
             app.current_session_id.as_deref(),
+            &app.discovered_locals,
         );
     }
 

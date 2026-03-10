@@ -160,6 +160,11 @@ pub struct State {
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
+    /// Local LLM servers discovered at startup (background probe).
+    pub discovered_locals: Vec<crate::provider::local::LocalServer>,
+    /// Receiver for background local server discovery result.
+    pub local_discovery_rx:
+        Option<tokio::sync::oneshot::Receiver<Vec<crate::provider::local::LocalServer>>>,
 }
 
 /// Status of a tool execution.
@@ -687,6 +692,8 @@ impl App {
                 update_check_rx: None,
                 roundhouse_session: None,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
+                discovered_locals: vec![],
+                local_discovery_rx: None,
             },
             terminal,
             provider,
@@ -1060,6 +1067,17 @@ impl App {
             self.state.update_check_rx = Some(rx);
         }
 
+        // Background local LLM discovery
+        {
+            let (tx, rx) =
+                tokio::sync::oneshot::channel::<Vec<crate::provider::local::LocalServer>>();
+            tokio::spawn(async move {
+                let servers = crate::provider::local::discover_local_servers().await;
+                let _ = tx.send(servers);
+            });
+            self.state.local_discovery_rx = Some(rx);
+        }
+
         loop {
             // Expire quit confirmation after 2 seconds
             if let Some(first) = self.state.quit_first_press
@@ -1093,6 +1111,20 @@ impl App {
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         self.state.update_check_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Poll background local LLM discovery
+            if let Some(ref mut rx) = self.state.local_discovery_rx {
+                match rx.try_recv() {
+                    Ok(servers) => {
+                        self.state.discovered_locals = servers;
+                        self.state.local_discovery_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.state.local_discovery_rx = None;
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }

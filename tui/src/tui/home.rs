@@ -230,6 +230,7 @@ pub fn render(frame: &mut Frame, state: &State) {
             &colors,
             false,
             state.current_session_id.as_deref(),
+            &state.discovered_locals,
         );
     }
 
