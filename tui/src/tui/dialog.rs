@@ -24,7 +24,7 @@ pub enum DialogKind {
         char_count: usize,
     },
     RoundhouseProviderPicker(RoundhousePickerState),
-    CircuitsList,
+    CircuitsList(CircuitsListState),
 }
 
 // Debug impl needed for Action derive
@@ -44,7 +44,7 @@ impl std::fmt::Debug for DialogKind {
                 write!(f, "PasteConfirm({line_count} lines, {char_count} chars)")
             }
             Self::RoundhouseProviderPicker(_) => write!(f, "RoundhouseProviderPicker(...)"),
-            Self::CircuitsList => write!(f, "CircuitsList"),
+            Self::CircuitsList(_) => write!(f, "CircuitsList(...)"),
         }
     }
 }
@@ -99,6 +99,11 @@ pub struct RoundhouseProviderOption {
     pub display_name: String,
     pub model: String,
     pub toggled: bool,
+}
+
+/// State for the circuits list dialog.
+pub struct CircuitsListState {
+    pub selected: usize,
 }
 
 /// The dialog stack — a base screen plus zero or more overlays.

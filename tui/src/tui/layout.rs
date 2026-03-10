@@ -110,8 +110,8 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::RoundhouseProviderPicker(picker) => {
                 render_roundhouse_picker(frame, picker, app, &colors);
             }
-            DialogKind::CircuitsList => {
-                render_placeholder_dialog(frame, "Circuits", "circuits list coming soon", &colors);
+            DialogKind::CircuitsList(list_state) => {
+                render_circuits_list(frame, list_state, app, &colors);
             }
         }
     }
@@ -1030,6 +1030,95 @@ fn render_roundhouse_picker(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Space: toggle | Enter: confirm | Esc: cancel",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_circuits_list(
+    frame: &mut Frame,
+    list_state: &crate::tui::dialog::CircuitsListState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    let circuits = &app.circuit_manager.circuits;
+
+    // Height: 2 border + 1 blank + max(1, N circuits) + 1 blank + 1 footer = N + 5 (min 6)
+    let content_rows = circuits.len().max(1) as u16;
+    let height: u16 = (content_rows + 5).min(area.height);
+    let width: u16 = 72_u16.min(area.width);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Circuits ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if circuits.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No active circuits. Use /circuit <interval> \"<prompt>\" to create one.",
+            Style::default().fg(colors.text_secondary),
+        )));
+    } else {
+        for (i, handle) in circuits.iter().enumerate() {
+            let c = &handle.circuit;
+
+            // Truncate prompt to fit
+            let max_prompt = 28_usize;
+            let prompt = if c.prompt.len() > max_prompt {
+                format!("\"{}…\"", &c.prompt[..max_prompt.saturating_sub(1)])
+            } else {
+                format!("\"{}\"", c.prompt)
+            };
+
+            // Format interval
+            let interval = if c.interval_secs >= 3600 {
+                format!("{}h", c.interval_secs / 3600)
+            } else if c.interval_secs >= 60 {
+                format!("{}m", c.interval_secs / 60)
+            } else {
+                format!("{}s", c.interval_secs)
+            };
+
+            let status = match &c.status {
+                crate::circuits::types::CircuitStatus::Active => "active",
+                crate::circuits::types::CircuitStatus::Paused => "paused",
+                crate::circuits::types::CircuitStatus::Error(_) => "error",
+            };
+
+            let runs = if c.run_count == 1 {
+                "1 run".to_string()
+            } else {
+                format!("{} runs", c.run_count)
+            };
+
+            let row = format!(
+                "  \u{25cf} {:<32} {:>4}   {:<8} {}",
+                prompt, interval, status, runs
+            );
+
+            let style = if i == list_state.selected {
+                Style::default().fg(colors.text).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(row, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "d/Del: delete | \u{2191}\u{2193}: navigate | Esc: close",
         Style::default().fg(colors.text_dim),
     )));
 

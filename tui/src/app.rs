@@ -1822,10 +1822,8 @@ impl App {
             Some(DialogKind::RoundhouseProviderPicker(_)) => {
                 self.handle_roundhouse_picker_key(key, modifiers);
             }
-            Some(DialogKind::CircuitsList) => {
-                if key == KeyCode::Esc {
-                    self.state.dialog_stack.pop();
-                }
+            Some(DialogKind::CircuitsList(_)) => {
+                self.handle_circuits_list_key(key, modifiers);
             }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
@@ -3981,6 +3979,59 @@ impl App {
                             selected.len()
                         ),
                     });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_circuits_list_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        match key {
+            KeyCode::Esc => {
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    if list_state.selected > 0 {
+                        list_state.selected -= 1;
+                    }
+                }
+            }
+            KeyCode::Down if modifiers == KeyModifiers::NONE => {
+                let count = self.state.circuit_manager.active_count();
+                if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    if list_state.selected + 1 < count {
+                        list_state.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                let selected = if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top()
+                {
+                    list_state.selected
+                } else {
+                    return;
+                };
+                let circuit_id = self
+                    .state
+                    .circuit_manager
+                    .circuits
+                    .get(selected)
+                    .map(|h| h.circuit.id.clone());
+                if let Some(id) = circuit_id {
+                    self.state.circuit_manager.stop_circuit(&id);
+                    if let Some(DialogKind::CircuitsList(list_state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        if list_state.selected > 0 {
+                            list_state.selected -= 1;
+                        }
+                    }
                 }
             }
             _ => {}

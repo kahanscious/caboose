@@ -522,7 +522,9 @@ pub fn build_default_registry() -> CommandRegistry {
         slash: Some("circuits"),
         available: |_state| true,
         execute: |_state| {
-            Action::PushDialog(super::dialog::DialogKind::CircuitsList)
+            Action::PushDialog(super::dialog::DialogKind::CircuitsList(
+                super::dialog::CircuitsListState { selected: 0 },
+            ))
         },
     });
 
