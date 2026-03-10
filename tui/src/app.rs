@@ -158,6 +158,7 @@ pub struct State {
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
     /// In-session circuit manager.
+    #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
 }
 
@@ -1097,6 +1098,39 @@ impl App {
                 }
             }
 
+            // Poll local provider probe result
+            if let Some(DialogKind::LocalProviderConnect(lpc)) =
+                self.state.dialog_stack.top_mut()
+            {
+                if let Some(rx) = &mut lpc.probe_rx {
+                    match rx.try_recv() {
+                        Ok(Ok(models)) => {
+                            if models.is_empty() {
+                                lpc.error =
+                                    Some("Server responded but no models found".to_string());
+                                lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                            } else {
+                                lpc.models = models;
+                                lpc.selected_model = 0;
+                                lpc.phase = crate::tui::dialog::LocalConnectPhase::ModelSelect;
+                            }
+                            lpc.probe_rx = None;
+                        }
+                        Ok(Err(msg)) => {
+                            lpc.error = Some(msg);
+                            lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                            lpc.probe_rx = None;
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                            lpc.error = Some("Probe failed unexpectedly".to_string());
+                            lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                            lpc.probe_rx = None;
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                    }
+                }
+            }
+
             // Draw UI
             let state = &self.state;
             self.terminal.draw(|frame| {
@@ -1592,6 +1626,7 @@ impl App {
 
         match self.state.dialog_stack.top() {
             Some(DialogKind::ApiKeyInput(_)) => self.handle_key_input_key(key).await,
+            Some(DialogKind::LocalProviderConnect(_)) => self.handle_local_connect_key(key).await,
             Some(DialogKind::FileBrowser(_)) => self.handle_file_browser_key(key),
             Some(DialogKind::McpServerInput(_)) => self.handle_mcp_input_key(key),
             Some(DialogKind::CommandPalette(_)) => self.handle_command_palette_key(key).await,
@@ -1608,7 +1643,11 @@ impl App {
                 }
                 _ => {}
             },
-            Some(DialogKind::RoundhouseProviderPicker) | Some(DialogKind::CircuitsList) => {}
+            Some(DialogKind::RoundhouseProviderPicker) | Some(DialogKind::CircuitsList) => {
+                if key == KeyCode::Esc {
+                    self.state.dialog_stack.pop();
+                }
+            }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -3119,14 +3158,41 @@ impl App {
                 if let Some(provider_id) = selected_id {
                     self.state.slash_auto = None;
                     self.state.input.clear();
-                    // Always show key input so user can add, update, or clear their key
-                    let has_existing = self.state.config.keys.get(&provider_id).is_some();
-                    self.state
-                        .dialog_stack
-                        .push(DialogKind::ApiKeyInput(KeyInputState::new(
-                            provider_id,
-                            has_existing,
-                        )));
+
+                    // Local providers use address+probe flow instead of API key
+                    if crate::provider::catalog::by_id(&provider_id)
+                        .map(|p| p.is_local())
+                        .unwrap_or(false)
+                    {
+                        let entry = crate::provider::catalog::by_id(&provider_id).unwrap();
+                        let server_type = match provider_id.as_str() {
+                            "ollama" => crate::provider::local::LocalServerType::Ollama,
+                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
+                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
+                            _ => crate::provider::local::LocalServerType::Custom,
+                        };
+                        self.state.dialog_stack.push(DialogKind::LocalProviderConnect(
+                            crate::tui::dialog::LocalProviderConnectState {
+                                provider_id: provider_id.clone(),
+                                provider_name: entry.display_name.to_string(),
+                                address: server_type.default_address().to_string(),
+                                models: vec![],
+                                selected_model: 0,
+                                phase: crate::tui::dialog::LocalConnectPhase::Address,
+                                error: None,
+                                probe_rx: None,
+                            },
+                        ));
+                    } else {
+                        // Always show key input so user can add, update, or clear their key
+                        let has_existing = self.state.config.keys.get(&provider_id).is_some();
+                        self.state
+                            .dialog_stack
+                            .push(DialogKind::ApiKeyInput(KeyInputState::new(
+                                provider_id,
+                                has_existing,
+                            )));
+                    }
                 }
             }
             DropdownMode::McpServers { servers } => {
@@ -3692,6 +3758,177 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    async fn handle_local_connect_key(&mut self, key: KeyCode) {
+        use crate::tui::dialog::{LocalConnectPhase, LocalProviderConnectState};
+
+        let phase = match self.state.dialog_stack.top() {
+            Some(DialogKind::LocalProviderConnect(state)) => match state.phase {
+                LocalConnectPhase::Address => 0u8,
+                LocalConnectPhase::Probing => 1,
+                LocalConnectPhase::ModelSelect => 2,
+            },
+            _ => return,
+        };
+
+        match phase {
+            // Address phase
+            0 => match key {
+                KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                KeyCode::Enter => {
+                    // Spawn async probe, transition to Probing
+                    let address = match self.state.dialog_stack.top() {
+                        Some(DialogKind::LocalProviderConnect(s)) => s.address.clone(),
+                        _ => return,
+                    };
+                    if address.is_empty() {
+                        if let Some(DialogKind::LocalProviderConnect(s)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            s.error = Some("Address cannot be empty".to_string());
+                        }
+                        return;
+                    }
+                    let provider_id = match self.state.dialog_stack.top() {
+                        Some(DialogKind::LocalProviderConnect(s)) => s.provider_id.clone(),
+                        _ => return,
+                    };
+                    let server_type = match provider_id.as_str() {
+                        "ollama" => crate::provider::local::LocalServerType::Ollama,
+                        "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
+                        "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
+                        _ => crate::provider::local::LocalServerType::Custom,
+                    };
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let addr = address.clone();
+                    tokio::spawn(async move {
+                        match crate::provider::local::probe_server(&addr, &server_type).await {
+                            Some(models) => {
+                                let _ = tx.send(Ok(models));
+                            }
+                            None => {
+                                let _ = tx.send(Err(format!(
+                                    "Could not connect to {addr}"
+                                )));
+                            }
+                        }
+                    });
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        s.phase = LocalConnectPhase::Probing;
+                        s.error = None;
+                        s.probe_rx = Some(rx);
+                    }
+                }
+                _ => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        match key {
+                            KeyCode::Backspace => {
+                                s.address.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                s.address.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            },
+            // Probing phase
+            1 => {
+                if key == KeyCode::Esc {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        s.phase = LocalConnectPhase::Address;
+                        s.probe_rx = None;
+                    }
+                }
+            }
+            // ModelSelect phase
+            2 => match key {
+                KeyCode::Esc => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        s.phase = LocalConnectPhase::Address;
+                        s.models.clear();
+                        s.selected_model = 0;
+                    }
+                }
+                KeyCode::Up => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        if s.selected_model > 0 {
+                            s.selected_model -= 1;
+                        }
+                    }
+                }
+                KeyCode::Down => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        if s.selected_model + 1 < s.models.len() {
+                            s.selected_model += 1;
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    // Extract data before mutating
+                    let (provider_id, address, model_name, provider_name) =
+                        match self.state.dialog_stack.top() {
+                            Some(DialogKind::LocalProviderConnect(s)) => {
+                                let model = s
+                                    .models
+                                    .get(s.selected_model)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                (
+                                    s.provider_id.clone(),
+                                    s.address.clone(),
+                                    model,
+                                    s.provider_name.clone(),
+                                )
+                            }
+                            _ => return,
+                        };
+
+                    if model_name.is_empty() {
+                        return;
+                    }
+
+                    // Save local provider config
+                    let local_config = crate::config::schema::LocalProviderConfig {
+                        provider_type: provider_id.clone(),
+                        address: address.clone(),
+                        model: Some(model_name.clone()),
+                        display_name: Some(provider_name.clone()),
+                    };
+                    crate::config::save_local_provider(&provider_id, &local_config);
+
+                    // Update in-memory config so connect_provider can find it
+                    self.state
+                        .config
+                        .local_providers
+                        .insert(provider_id.clone(), local_config);
+
+                    // Connect provider
+                    self.connect_provider(&provider_id).await;
+
+                    // Close all overlays
+                    self.state.dialog_stack.clear();
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 

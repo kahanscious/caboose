@@ -16,6 +16,7 @@ pub enum DialogKind {
     ApiKeyInput(KeyInputState),
     CommandPalette(CommandPaletteState),
     FileBrowser(FileBrowserState),
+    LocalProviderConnect(LocalProviderConnectState),
     McpServerInput(McpServerInputState),
     PasteConfirm {
         text: String,
@@ -33,6 +34,7 @@ impl std::fmt::Debug for DialogKind {
             Self::ApiKeyInput(_) => write!(f, "ApiKeyInput(...)"),
             Self::CommandPalette(_) => write!(f, "CommandPalette(...)"),
             Self::FileBrowser(_) => write!(f, "FileBrowser(...)"),
+            Self::LocalProviderConnect(_) => write!(f, "LocalProviderConnect(...)"),
             Self::McpServerInput(_) => write!(f, "McpServerInput(...)"),
             Self::PasteConfirm {
                 line_count,
@@ -60,6 +62,29 @@ impl CommandPaletteState {
             selected: 0,
         }
     }
+}
+
+/// Phase of the local provider connect flow.
+pub enum LocalConnectPhase {
+    /// Editing the server address.
+    Address,
+    /// Async probe in progress.
+    Probing,
+    /// Choose from discovered models.
+    ModelSelect,
+}
+
+/// State for the local provider connect dialog.
+pub struct LocalProviderConnectState {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub address: String,
+    pub models: Vec<String>,
+    pub selected_model: usize,
+    pub phase: LocalConnectPhase,
+    pub error: Option<String>,
+    /// Receiver for async probe result.
+    pub probe_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
 }
 
 /// The dialog stack — a base screen plus zero or more overlays.

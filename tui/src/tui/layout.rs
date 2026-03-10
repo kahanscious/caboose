@@ -104,7 +104,15 @@ pub fn render(frame: &mut Frame, app: &State) {
             } => {
                 render_paste_confirm(frame, *line_count, *char_count, &colors);
             }
-            DialogKind::RoundhouseProviderPicker | DialogKind::CircuitsList => {}
+            DialogKind::LocalProviderConnect(state) => {
+                render_local_connect(frame, state, &colors);
+            }
+            DialogKind::RoundhouseProviderPicker => {
+                render_placeholder_dialog(frame, "Roundhouse", "provider selection coming soon", &colors);
+            }
+            DialogKind::CircuitsList => {
+                render_placeholder_dialog(frame, "Circuits", "circuits list coming soon", &colors);
+            }
         }
     }
 }
@@ -960,4 +968,168 @@ fn render_paste_confirm(
         .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
     frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_placeholder_dialog(
+    frame: &mut Frame,
+    title: &str,
+    message: &str,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    let width: u16 = 50;
+    let height: u16 = 5;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(format!(" {} ", title))
+        .border_style(Style::default().fg(colors.brand));
+
+    let text = format!("{}\n\nPress Esc to close", message);
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render the local provider connect dialog.
+fn render_local_connect(
+    frame: &mut Frame,
+    state: &crate::tui::dialog::LocalProviderConnectState,
+    colors: &theme::Colors,
+) {
+    use crate::tui::dialog::LocalConnectPhase;
+
+    let area = frame.area();
+
+    match &state.phase {
+        LocalConnectPhase::Address => {
+            let width: u16 = 55;
+            let height: u16 = if state.error.is_some() { 8 } else { 7 };
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(format!(" Connect {} ", state.provider_name))
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = vec![
+                Line::from(Span::styled(
+                    "Server address:",
+                    Style::default().fg(colors.text_secondary),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", if state.address.is_empty() { " " } else { &state.address }),
+                        Style::default().fg(colors.text).bg(colors.bg_hover),
+                    ),
+                    Span::styled(
+                        "\u{2588}",
+                        Style::default().fg(colors.brand),
+                    ),
+                ]),
+            ];
+
+            if let Some(err) = &state.error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    err.as_str(),
+                    Style::default().fg(colors.error),
+                )));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: connect  |  Esc: cancel",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        LocalConnectPhase::Probing => {
+            let width: u16 = 45;
+            let height: u16 = 5;
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(format!(" Connect {} ", state.provider_name))
+                .border_style(Style::default().fg(colors.brand));
+
+            let text = format!("Connecting to {}...\n\nEsc: cancel", state.address);
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        LocalConnectPhase::ModelSelect => {
+            let visible_count = state.models.len().min(12);
+            let width: u16 = 55;
+            let height: u16 = visible_count as u16 + 4; // border + title line + footer
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(" Select Model ")
+                .border_style(Style::default().fg(colors.brand));
+
+            // Scroll window for long lists
+            let scroll_start = if state.selected_model >= visible_count {
+                state.selected_model - visible_count + 1
+            } else {
+                0
+            };
+
+            let mut lines: Vec<Line> = state
+                .models
+                .iter()
+                .enumerate()
+                .skip(scroll_start)
+                .take(visible_count)
+                .map(|(i, model)| {
+                    let style = if i == state.selected_model {
+                        Style::default().fg(colors.text).bg(colors.bg_hover)
+                    } else {
+                        Style::default().fg(colors.text_secondary)
+                    };
+                    let prefix = if i == state.selected_model {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    Line::from(Span::styled(format!("{prefix}{model}"), style))
+                })
+                .collect();
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: select  |  Esc: back",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+    }
 }
