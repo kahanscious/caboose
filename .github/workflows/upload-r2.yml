@@ -1,0 +1,86 @@
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  upload-r2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          # Exclude cargo-dist metadata and its own checksum files
+          sha256sum $(ls -1 | grep -v -E '\.sha256$|^sha256\.sum$|^dist-manifest\.json$|^checksums\.txt$') > checksums.txt
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          # Upload versioned artifacts
+          for file in artifacts/*; do
+            aws s3 cp "$file" "s3://caboose/${VERSION}/$(basename $file)"
+          done
+          # Update latest pointer
+          echo "${VERSION}" | aws s3 cp - "s3://caboose/latest.txt"
+
+      - name: Upload install scripts
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 cp install/install.sh "s3://caboose/install.sh" --content-type "text/plain"
+          aws s3 cp install/install.ps1 "s3://caboose/install.ps1" --content-type "text/plain"
+
+  publish-chocolatey:
+    runs-on: windows-latest
+    needs: upload-r2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set version
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+          echo "PKG_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Update nuspec version
+        shell: pwsh
+        run: |
+          $nuspec = Get-Content chocolatey/caboose.nuspec -Raw
+          $nuspec = $nuspec -replace '<version>.*</version>', "<version>$env:PKG_VERSION</version>"
+          Set-Content chocolatey/caboose.nuspec $nuspec
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          choco pack chocolatey/caboose.nuspec --output-directory chocolatey
+
+      - name: Push to Chocolatey
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          choco push "chocolatey/caboose.$env:PKG_VERSION.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>caboose</id>
+    <version>0.1.1</version>
+    <title>Caboose</title>
+    <authors>TryCaboose</authors>
+    <owners>kahanscious</owners>
+    <projectUrl>https://trycaboose.dev</projectUrl>
+    <licenseUrl>https://trycaboose.dev</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>A terminal-native AI coding agent built in Rust. Single binary, streams responses from multiple LLM providers, executes tools, manages sessions, and supports MCP servers — all in a rich TUI.</description>
+    <summary>Terminal-native AI coding agent</summary>
+    <tags>ai coding agent terminal rust llm cli</tags>
+    <packageSourceUrl>https://github.com/kahanscious/caboose</packageSourceUrl>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

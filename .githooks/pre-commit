@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit hook for Rust project
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+cd tui
+
+echo "Running cargo fmt --check..."
+cargo fmt --check
+
+echo "Running cargo clippy..."
+cargo clippy -- -D warnings
