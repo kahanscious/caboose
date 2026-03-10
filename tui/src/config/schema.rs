@@ -324,6 +324,15 @@ pub struct CircuitsConfig {
     pub persistent_enabled: Option<bool>,
 }
 
+/// SCM (GitHub/GitLab) integration configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScmConfig {
+    /// Preferred SCM provider (auto-detected if not set)
+    pub provider: Option<String>,
+    /// Enable SCM tools (default true)
+    pub enabled: Option<bool>,
+}
+
 /// External service configuration (web search, etc.).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServicesConfig {

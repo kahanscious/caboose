@@ -69,6 +69,9 @@ pub struct Config {
     /// Circuits (scheduled tasks) configuration
     #[serde(default)]
     pub circuits: Option<schema::CircuitsConfig>,
+    /// SCM (GitHub/GitLab) integration configuration
+    #[serde(default)]
+    pub scm: Option<schema::ScmConfig>,
 }
 
 impl Config {
@@ -197,6 +200,9 @@ impl Config {
         }
         if other.circuits.is_some() {
             self.circuits = other.circuits;
+        }
+        if other.scm.is_some() {
+            self.scm = other.scm;
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {
