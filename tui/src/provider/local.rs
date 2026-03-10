@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Local LLM server discovery and probing.
 
 use serde::Deserialize;
@@ -15,6 +13,7 @@ pub enum LocalServerType {
 }
 
 impl LocalServerType {
+    #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Ollama => "Ollama",
@@ -36,6 +35,7 @@ impl LocalServerType {
 
 /// A discovered or configured local LLM server.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LocalServer {
     pub server_type: LocalServerType,
     pub address: String,

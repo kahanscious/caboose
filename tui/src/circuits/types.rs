@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +34,7 @@ pub struct Circuit {
 }
 
 /// Result from a single circuit execution
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitRun {
     pub circuit_id: String,

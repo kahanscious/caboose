@@ -4,6 +4,7 @@ use crate::app::State;
 use crate::roundhouse::types::RoundhousePhase;
 
 /// Render the Roundhouse provider selection dialog
+#[allow(dead_code)]
 pub fn render_roundhouse_picker(f: &mut Frame, area: Rect, state: &State) {
     let session = match &state.roundhouse_session {
         Some(s) if s.phase == RoundhousePhase::SelectingProviders => s,

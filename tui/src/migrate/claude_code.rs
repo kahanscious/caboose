@@ -8,6 +8,7 @@ pub struct ClaudeCodeConfig {
     pub claude_md_paths: Vec<PathBuf>,
     pub mcp_servers: Vec<(String, Value)>,
     pub system_prompt: Option<String>,
+    #[allow(dead_code)]
     pub permission_mode: Option<String>,
 }
 
@@ -25,8 +26,8 @@ pub fn scan_claude_code(config_dirs: &[PathBuf], project_dir: Option<&Path>) -> 
         let settings_file = dir.join("settings.json");
         if settings_file.exists() {
             result.settings_path = Some(settings_file.clone());
-            if let Ok(contents) = std::fs::read_to_string(&settings_file) {
-                if let Ok(json) = serde_json::from_str::<Value>(&contents) {
+            if let Ok(contents) = std::fs::read_to_string(&settings_file)
+                && let Ok(json) = serde_json::from_str::<Value>(&contents) {
                     if let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
                         for (name, config) in servers {
                             result.mcp_servers.push((name.clone(), config.clone()));
@@ -36,7 +37,6 @@ pub fn scan_claude_code(config_dirs: &[PathBuf], project_dir: Option<&Path>) -> 
                         result.system_prompt = Some(prompt.to_string());
                     }
                 }
-            }
         }
     }
 
@@ -58,6 +58,7 @@ pub fn scan_claude_code(config_dirs: &[PathBuf], project_dir: Option<&Path>) -> 
 }
 
 /// Summary of what's available for import
+#[allow(dead_code)]
 pub fn importable_items(config: &ClaudeCodeConfig) -> Vec<String> {
     let mut items = Vec::new();
     if !config.mcp_servers.is_empty() {

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -32,12 +31,11 @@ pub fn is_daemon_running() -> bool {
     match std::fs::read_to_string(&path) {
         Ok(contents) => {
             // Format: "PID:PORT"
-            if let Some(pid_str) = contents.split(':').next() {
-                if let Ok(_pid) = pid_str.parse::<u32>() {
+            if let Some(pid_str) = contents.split(':').next()
+                && let Ok(_pid) = pid_str.parse::<u32>() {
                     // TODO: check if PID is alive (platform-specific)
                     return true;
                 }
-            }
             false
         }
         Err(_) => false,

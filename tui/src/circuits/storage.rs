@@ -35,6 +35,7 @@ pub fn init_circuits_table(conn: &Connection) -> Result<()> {
 }
 
 /// Insert a new circuit
+#[allow(dead_code)]
 pub fn insert_circuit(conn: &Connection, circuit: &Circuit) -> Result<()> {
     conn.execute(
         "INSERT INTO circuits (id, prompt, interval_secs, provider, model, permission_mode, kind, status, created_at)
@@ -97,12 +98,14 @@ pub fn update_circuit_status(conn: &Connection, id: &str, status: &CircuitStatus
 }
 
 /// Delete a circuit
+#[allow(dead_code)]
 pub fn delete_circuit(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM circuits WHERE id = ?1", [id])?;
     Ok(())
 }
 
 /// Record a circuit run result
+#[allow(dead_code)]
 pub fn insert_circuit_run(conn: &Connection, run: &CircuitRun) -> Result<()> {
     conn.execute(
         "INSERT INTO circuit_runs (circuit_id, output, cost, tokens_used, success, completed_at)

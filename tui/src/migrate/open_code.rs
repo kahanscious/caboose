@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -22,8 +21,8 @@ pub fn scan_open_code(config_dirs: &[PathBuf]) -> OpenCodeConfig {
         let config_file = dir.join("config.json");
         if config_file.exists() {
             result.config_path = Some(config_file.clone());
-            if let Ok(text) = std::fs::read_to_string(&config_file) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
+            if let Ok(text) = std::fs::read_to_string(&config_file)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                     // Extract MCP servers
                     if let Some(servers) = parsed.get("mcpServers").and_then(|v| v.as_object()) {
                         for (name, cfg) in servers {
@@ -36,25 +35,22 @@ pub fn scan_open_code(config_dirs: &[PathBuf]) -> OpenCodeConfig {
                     {
                         result.system_prompt = Some(instructions.to_string());
                     }
-                    if result.system_prompt.is_none() {
-                        if let Some(prompt) =
+                    if result.system_prompt.is_none()
+                        && let Some(prompt) =
                             parsed.get("systemPrompt").and_then(|v| v.as_str())
                         {
                             result.system_prompt = Some(prompt.to_string());
                         }
-                    }
                 }
-            }
         }
 
         // Fall back to instructions.md if no inline prompt found
         if result.system_prompt.is_none() {
             let instructions_file = dir.join("instructions.md");
-            if instructions_file.exists() {
-                if let Ok(text) = std::fs::read_to_string(&instructions_file) {
+            if instructions_file.exists()
+                && let Ok(text) = std::fs::read_to_string(&instructions_file) {
                     result.system_prompt = Some(text);
                 }
-            }
         }
     }
 
@@ -62,6 +58,7 @@ pub fn scan_open_code(config_dirs: &[PathBuf]) -> OpenCodeConfig {
 }
 
 /// Summary of what's available for import
+#[allow(dead_code)]
 pub fn importable_items(config: &OpenCodeConfig) -> Vec<String> {
     let mut items = Vec::new();
     if !config.mcp_servers.is_empty() {

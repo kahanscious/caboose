@@ -195,6 +195,7 @@ pub enum MigrationItemKind {
 pub enum MigrationPhase {
     Checklist,
     Preview,
+    #[allow(dead_code)]
     Applying,
     Done(String),
 }

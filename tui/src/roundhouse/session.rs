@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::roundhouse::types::*;
 use std::path::PathBuf;
 
@@ -45,6 +44,7 @@ impl RoundhouseSession {
         });
     }
 
+    #[allow(dead_code)]
     pub fn remove_secondary(&mut self, index: usize) {
         if index < self.secondaries.len() {
             self.secondaries.remove(index);

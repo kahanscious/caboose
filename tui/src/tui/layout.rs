@@ -1133,33 +1133,6 @@ fn render_circuits_list(
     frame.render_widget(paragraph, dialog_area);
 }
 
-fn render_placeholder_dialog(
-    frame: &mut Frame,
-    title: &str,
-    message: &str,
-    colors: &theme::Colors,
-) {
-    let area = frame.area();
-    let width: u16 = 50;
-    let height: u16 = 5;
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
-
-    let block = Block::default()
-        .borders(ratatui::widgets::Borders::ALL)
-        .title(format!(" {} ", title))
-        .border_style(Style::default().fg(colors.brand));
-
-    let text = format!("{}\n\nPress Esc to close", message);
-
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
-    frame.render_widget(ratatui::widgets::Clear, dialog_area);
-    frame.render_widget(paragraph, dialog_area);
-}
-
 /// Render the local provider connect dialog.
 fn render_local_connect(
     frame: &mut Frame,

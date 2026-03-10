@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::provider::{Message, Provider, StreamEvent, ToolDefinition};
 use futures::StreamExt;
 use serde_json::Value;
@@ -32,6 +31,7 @@ pub enum PlannerUpdate {
         planner_index: usize,
         status: super::types::PlannerStatus,
     },
+    #[allow(dead_code)]
     TokensUsed {
         planner_index: usize,
         input_tokens: u32,

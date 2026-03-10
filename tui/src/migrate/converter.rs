@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::config::schema::McpServerConfig;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -53,6 +52,7 @@ pub struct MigrationResult {
     pub mcp_servers_added: Vec<String>,
     pub system_prompt_migrated: bool,
     pub claude_md_converted: Vec<String>,
+    #[allow(dead_code)]
     pub warnings: Vec<String>,
 }
 

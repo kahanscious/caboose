@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::provider::ToolDefinition;
 use crate::scm::detection::ScmProvider;
 use serde_json::json;

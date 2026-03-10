@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 /// Status of a watched PR/MR
@@ -54,6 +52,7 @@ impl WatcherStatus {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Merged | Self::Closed)
     }

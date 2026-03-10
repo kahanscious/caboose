@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::circuits::types::*;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
@@ -10,6 +9,7 @@ pub enum CircuitEvent {
     /// A circuit tick started
     TickStarted { circuit_id: String },
     /// A circuit tick completed with output
+    #[allow(dead_code)]
     TickCompleted {
         circuit_id: String,
         output: String,

@@ -717,7 +717,7 @@ fn build_provider_items<'a>(
             "llamacpp" => Some(LocalServerType::LlamaCpp),
             _ => None,
         };
-        server_type.map_or(false, |st| {
+        server_type.is_some_and(|st| {
             discovered_locals
                 .iter()
                 .any(|s| s.server_type == st && s.available)

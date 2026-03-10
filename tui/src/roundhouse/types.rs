@@ -2,6 +2,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlannerStatus {
     Pending,
+    #[allow(dead_code)]
     Thinking,
     Streaming,
     UsingTool(String),
@@ -17,7 +18,9 @@ pub struct SecondaryPlanner {
     pub model_name: String,
     pub status: PlannerStatus,
     pub plan: Option<String>,
+    #[allow(dead_code)]
     pub token_count: u64,
+    #[allow(dead_code)]
     pub cost: f64,
 }
 
@@ -30,6 +33,7 @@ pub enum RoundhousePhase {
     Synthesizing,
     Reviewing,
     Executing,
+    #[allow(dead_code)]
     Complete,
     Cancelled,
 }
@@ -38,6 +42,7 @@ pub enum RoundhousePhase {
 #[derive(Debug, Clone)]
 pub struct RoundhouseConfig {
     pub planning_timeout_secs: u64,      // default 120
+    #[allow(dead_code)]
     pub per_llm_token_budget: Option<u64>,
 }
 

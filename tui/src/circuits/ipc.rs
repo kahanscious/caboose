@@ -1,7 +1,5 @@
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
-use crate::circuits::types::{Circuit, CircuitStatus};
+use crate::circuits::types::Circuit;
 
 /// Messages from TUI to Daemon
 #[derive(Debug, Serialize, Deserialize)]

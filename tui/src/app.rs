@@ -1149,8 +1149,7 @@ impl App {
             // Poll local provider probe result
             if let Some(DialogKind::LocalProviderConnect(lpc)) =
                 self.state.dialog_stack.top_mut()
-            {
-                if let Some(rx) = &mut lpc.probe_rx {
+                && let Some(rx) = &mut lpc.probe_rx {
                     match rx.try_recv() {
                         Ok(Ok(models)) => {
                             if models.is_empty() {
@@ -1177,7 +1176,6 @@ impl App {
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                     }
                 }
-            }
 
             // Draw UI
             let state = &self.state;
@@ -1637,8 +1635,8 @@ impl App {
             }
 
             // Poll roundhouse synthesis result (non-blocking)
-            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx {
-                if let Ok(plan_text) = rx.try_recv() {
+            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx
+                && let Ok(plan_text) = rx.try_recv() {
                     if let Some(session) = &mut self.state.roundhouse_session {
                         let prompt = session.prompt.clone().unwrap_or_default();
                         let individual_plans: Vec<(String, String)> = session
@@ -1688,7 +1686,6 @@ impl App {
                     }
                     self.state.roundhouse_synthesis_rx = None;
                 }
-            }
 
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
@@ -3939,29 +3936,23 @@ impl App {
             KeyCode::Up if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                {
-                    if picker.selected > 0 {
+                    && picker.selected > 0 {
                         picker.selected -= 1;
                     }
-                }
             }
             KeyCode::Down if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                {
-                    if picker.selected + 1 < picker.providers.len() {
+                    && picker.selected + 1 < picker.providers.len() {
                         picker.selected += 1;
                     }
-                }
             }
             KeyCode::Char(' ') => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                {
-                    if let Some(p) = picker.providers.get_mut(picker.selected) {
+                    && let Some(p) = picker.providers.get_mut(picker.selected) {
                         p.toggled = !p.toggled;
                     }
-                }
             }
             KeyCode::Enter => {
                 // Collect selected providers before mutating
@@ -4008,21 +3999,17 @@ impl App {
             KeyCode::Up if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::CircuitsList(list_state)) =
                     self.state.dialog_stack.top_mut()
-                {
-                    if list_state.selected > 0 {
+                    && list_state.selected > 0 {
                         list_state.selected -= 1;
                     }
-                }
             }
             KeyCode::Down if modifiers == KeyModifiers::NONE => {
                 let count = self.state.circuit_manager.active_count();
                 if let Some(DialogKind::CircuitsList(list_state)) =
                     self.state.dialog_stack.top_mut()
-                {
-                    if list_state.selected + 1 < count {
+                    && list_state.selected + 1 < count {
                         list_state.selected += 1;
                     }
-                }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
                 let selected = if let Some(DialogKind::CircuitsList(list_state)) =
@@ -4042,11 +4029,9 @@ impl App {
                     self.state.circuit_manager.stop_circuit(&id);
                     if let Some(DialogKind::CircuitsList(list_state)) =
                         self.state.dialog_stack.top_mut()
-                    {
-                        if list_state.selected > 0 {
+                        && list_state.selected > 0 {
                             list_state.selected -= 1;
                         }
-                    }
                 }
             }
             _ => {}
@@ -4258,14 +4243,13 @@ impl App {
             },
             // Probing phase
             1 => {
-                if key == KeyCode::Esc {
-                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                if key == KeyCode::Esc
+                    && let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
                     {
                         s.phase = LocalConnectPhase::Address;
                         s.probe_rx = None;
                     }
-                }
             }
             // ModelSelect phase
             2 => match key {
@@ -4281,20 +4265,16 @@ impl App {
                 KeyCode::Up => {
                     if let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
-                    {
-                        if s.selected_model > 0 {
+                        && s.selected_model > 0 {
                             s.selected_model -= 1;
                         }
-                    }
                 }
                 KeyCode::Down => {
                     if let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
-                    {
-                        if s.selected_model + 1 < s.models.len() {
+                        && s.selected_model + 1 < s.models.len() {
                             s.selected_model += 1;
                         }
-                    }
                 }
                 KeyCode::Enter => {
                     // Extract data before mutating
@@ -6881,13 +6861,12 @@ impl App {
                 });
             } else {
                 // Mark as failed if we can't create the provider
-                if let Some(ref mut session) = self.state.roundhouse_session {
-                    if let Some(s) = session.secondaries.get_mut(i) {
+                if let Some(ref mut session) = self.state.roundhouse_session
+                    && let Some(s) = session.secondaries.get_mut(i) {
                         s.status = crate::roundhouse::PlannerStatus::Failed(
                             format!("Could not create provider '{provider_name}'"),
                         );
                     }
-                }
             }
         }
     }
@@ -7696,9 +7675,9 @@ fn parse_interval(s: &str) -> Option<u64> {
 
 /// Format seconds back to human-readable: 300 → "5m", 3600 → "1h", 90 → "1m 30s"
 fn format_duration(secs: u64) -> String {
-    if secs >= 3600 && secs % 3600 == 0 {
+    if secs >= 3600 && secs.is_multiple_of(3600) {
         format!("{}h", secs / 3600)
-    } else if secs >= 60 && secs % 60 == 0 {
+    } else if secs >= 60 && secs.is_multiple_of(60) {
         format!("{}m", secs / 60)
     } else if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
