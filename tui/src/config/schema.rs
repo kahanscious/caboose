@@ -324,6 +324,19 @@ pub struct CircuitsConfig {
     pub persistent_enabled: Option<bool>,
 }
 
+/// Configuration for a local LLM provider instance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LocalProviderConfig {
+    /// Provider type: "ollama", "lmstudio", "llamacpp", "custom"
+    pub provider_type: String,
+    /// Server address (e.g. "http://localhost:11434")
+    pub address: String,
+    /// Selected model name
+    pub model: Option<String>,
+    /// Display name for UI
+    pub display_name: Option<String>,
+}
+
 /// SCM (GitHub/GitLab) integration configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScmConfig {
@@ -357,6 +370,21 @@ pub struct ServiceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_provider_config_roundtrip() {
+        let cfg = LocalProviderConfig {
+            provider_type: "ollama".to_string(),
+            address: "http://localhost:11434".to_string(),
+            model: Some("llama3".to_string()),
+            display_name: Some("My Ollama".to_string()),
+        };
+        let toml_str = toml::to_string(&cfg).unwrap();
+        let parsed: LocalProviderConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.provider_type, "ollama");
+        assert_eq!(parsed.address, "http://localhost:11434");
+        assert_eq!(parsed.model.as_deref(), Some("llama3"));
+    }
 
     #[test]
     fn parse_memory_config_defaults() {

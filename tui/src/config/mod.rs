@@ -72,6 +72,9 @@ pub struct Config {
     /// SCM (GitHub/GitLab) integration configuration
     #[serde(default)]
     pub scm: Option<schema::ScmConfig>,
+    /// Local LLM provider instances (Ollama, LM Studio, llama.cpp, custom)
+    #[serde(default)]
+    pub local_providers: HashMap<String, schema::LocalProviderConfig>,
 }
 
 impl Config {
@@ -203,6 +206,9 @@ impl Config {
         }
         if other.scm.is_some() {
             self.scm = other.scm;
+        }
+        for (name, local) in other.local_providers {
+            self.local_providers.entry(name).or_insert(local);
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {
@@ -340,6 +346,42 @@ pub fn save_behavior_max_session_cost(max_cost: Option<f64>) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&path, toml::to_string_pretty(&config).unwrap_or_default());
+}
+
+/// Persist a local provider entry to the global config file.
+///
+/// Creates or replaces the `[local_providers.<name>]` section in the global
+/// config, leaving all other sections untouched.
+pub fn save_local_provider(name: &str, config: &schema::LocalProviderConfig) {
+    let path = match dirs::config_dir() {
+        Some(d) => d.join("caboose").join("config.toml"),
+        None => return,
+    };
+
+    let mut doc: toml::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or(toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let table = doc.as_table_mut().unwrap();
+    let local_providers = table
+        .entry("local_providers")
+        .or_insert(toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .unwrap();
+
+    if let Ok(val) = toml::Value::try_from(config) {
+        local_providers.insert(name.to_string(), val);
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
 }
 
 /// Remove a custom MCP server entry from project config.
