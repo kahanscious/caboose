@@ -20,6 +20,7 @@ pub mod layout;
 pub mod mcp_input;
 pub mod model_picker;
 pub mod provider_picker;
+pub mod roundhouse_picker;
 pub mod session_picker;
 pub mod sidebar;
 pub mod slash_auto;
