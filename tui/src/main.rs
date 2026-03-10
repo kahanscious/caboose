@@ -7,6 +7,7 @@ mod agent;
 mod app;
 mod attachment;
 mod checkpoint;
+mod circuits;
 mod clipboard;
 mod config;
 mod hooks;
