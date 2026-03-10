@@ -171,29 +171,89 @@ pub fn render(
             Style::default().fg(colors.text_secondary).bold(),
         )));
         lines.push(Line::from(""));
+
+        // Phase label
+        let phase_label = match rh.phase {
+            crate::roundhouse::RoundhousePhase::SelectingProviders => "selecting providers",
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt => "awaiting prompt",
+            crate::roundhouse::RoundhousePhase::Planning => "planning...",
+            crate::roundhouse::RoundhousePhase::Synthesizing => "synthesizing...",
+            crate::roundhouse::RoundhousePhase::Reviewing => "reviewing",
+            crate::roundhouse::RoundhousePhase::Executing => "executing",
+            crate::roundhouse::RoundhousePhase::Complete => "complete",
+            crate::roundhouse::RoundhousePhase::Cancelled => "cancelled",
+        };
         lines.push(Line::from(Span::styled(
-            format!("    Phase: {:?}", rh.phase),
-            Style::default().fg(colors.text_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("    Cost: ${:.4}", rh.total_cost),
+            format!("  Phase: {phase_label}"),
             Style::default().fg(colors.text_secondary),
         )));
 
-        for secondary in &rh.secondaries {
-            let status_icon = match &secondary.status {
-                crate::roundhouse::PlannerStatus::Pending => ".",
-                crate::roundhouse::PlannerStatus::Thinking
-                | crate::roundhouse::PlannerStatus::Streaming => "*",
-                crate::roundhouse::PlannerStatus::UsingTool(_) => ">",
-                crate::roundhouse::PlannerStatus::Done => "+",
-                crate::roundhouse::PlannerStatus::Failed(_) => "x",
-                crate::roundhouse::PlannerStatus::TimedOut => "!",
-            };
-            lines.push(Line::from(Span::styled(
-                format!("    {} {} ${:.4}", status_icon, secondary.provider_name, secondary.cost),
-                Style::default().fg(colors.text_secondary),
-            )));
+        match rh.phase {
+            crate::roundhouse::RoundhousePhase::Reviewing => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Plan ready for review",
+                    Style::default().fg(colors.success),
+                )));
+            }
+            crate::roundhouse::RoundhousePhase::Executing => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Executing plan...",
+                    Style::default().fg(colors.warning),
+                )));
+            }
+            _ => {
+                // Show per-LLM status rows
+                lines.push(Line::from(""));
+
+                // Primary planner
+                let (primary_icon, primary_status_text, primary_color) =
+                    planner_status_parts(&rh.primary_status, &colors);
+                let primary_name = truncate_provider_name(&rh.primary_provider, 10);
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("\u{25CF} ", Style::default().fg(colors.brand)),
+                    Span::styled(
+                        format!("{primary_name:<10} "),
+                        Style::default().fg(colors.text_secondary),
+                    ),
+                    Span::styled(primary_icon, Style::default().fg(primary_color)),
+                    Span::styled(
+                        format!(" {primary_status_text}"),
+                        Style::default().fg(primary_color),
+                    ),
+                ]));
+
+                // Secondary planners
+                for secondary in &rh.secondaries {
+                    let (icon, status_text, color) =
+                        planner_status_parts(&secondary.status, &colors);
+                    let name = truncate_provider_name(&secondary.provider_name, 10);
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled("\u{25CF} ", Style::default().fg(colors.text_dim)),
+                        Span::styled(
+                            format!("{name:<10} "),
+                            Style::default().fg(colors.text_secondary),
+                        ),
+                        Span::styled(icon, Style::default().fg(color)),
+                        Span::styled(
+                            format!(" {status_text}"),
+                            Style::default().fg(color),
+                        ),
+                    ]));
+                }
+
+                // Total cost
+                if rh.total_cost > 0.0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("  Total: ${:.4}", rh.total_cost),
+                        Style::default().fg(colors.text_muted),
+                    )));
+                }
+            }
         }
     }
 
@@ -329,6 +389,45 @@ fn render_tasks(frame: &mut Frame, area: Rect, outline: &TaskOutline, tick: u64,
 
     let tasks_paragraph = Paragraph::new(lines).scroll((scroll_offset, 0));
     frame.render_widget(tasks_paragraph, area);
+}
+
+/// Return (icon, status_text, color) for a PlannerStatus.
+fn planner_status_parts(
+    status: &crate::roundhouse::PlannerStatus,
+    colors: &Colors,
+) -> (&'static str, String, Color) {
+    match status {
+        crate::roundhouse::PlannerStatus::Pending => {
+            ("\u{25CC}", "pending".to_string(), colors.text_dim)
+        }
+        crate::roundhouse::PlannerStatus::Thinking => {
+            ("\u{25CC}", "thinking".to_string(), colors.warning)
+        }
+        crate::roundhouse::PlannerStatus::Streaming => {
+            ("\u{25CC}", "streaming".to_string(), colors.warning)
+        }
+        crate::roundhouse::PlannerStatus::UsingTool(name) => {
+            ("\u{25CC}", name.clone(), colors.warning)
+        }
+        crate::roundhouse::PlannerStatus::Done => {
+            ("\u{2713}", "done".to_string(), colors.success)
+        }
+        crate::roundhouse::PlannerStatus::Failed(_) => {
+            ("\u{2717}", "failed".to_string(), colors.error)
+        }
+        crate::roundhouse::PlannerStatus::TimedOut => {
+            ("\u{2717}", "timed out".to_string(), colors.error)
+        }
+    }
+}
+
+/// Truncate or pad a provider name to at most `max` characters.
+fn truncate_provider_name(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        name.to_string()
+    } else {
+        format!("{}…", &name[..max.saturating_sub(1)])
+    }
 }
 
 /// Render the "Files Modified" sidebar section.
