@@ -66,6 +66,9 @@ pub struct Config {
     /// Roundhouse (multi-LLM planning) configuration
     #[serde(default)]
     pub roundhouse: Option<schema::RoundhouseSchemaConfig>,
+    /// Circuits (scheduled tasks) configuration
+    #[serde(default)]
+    pub circuits: Option<schema::CircuitsConfig>,
 }
 
 impl Config {
@@ -191,6 +194,9 @@ impl Config {
         }
         if other.roundhouse.is_some() {
             self.roundhouse = other.roundhouse;
+        }
+        if other.circuits.is_some() {
+            self.circuits = other.circuits;
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {

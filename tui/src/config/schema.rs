@@ -315,6 +315,15 @@ pub struct RoundhouseSchemaConfig {
     pub per_llm_token_budget: Option<u64>,
 }
 
+/// Circuits (scheduled recurring tasks) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CircuitsConfig {
+    /// Max concurrent circuits (default 5)
+    pub max_concurrent: Option<usize>,
+    /// Enable persistent circuits / daemon (default true)
+    pub persistent_enabled: Option<bool>,
+}
+
 /// External service configuration (web search, etc.).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServicesConfig {
