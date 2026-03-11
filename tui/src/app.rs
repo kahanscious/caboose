@@ -5220,20 +5220,9 @@ impl App {
 
         let args: Vec<&str> = slash.split_whitespace().collect();
 
-        match args.get(1).copied() {
-            None | Some("list") => {
-                let state = build_workspace_list_state(&self.state.config);
-                self.state.dialog_stack.push(DialogKind::WorkspaceList(state));
-            }
-            Some("add") => {
-                self.state.dialog_stack.push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
-            }
-            _ => {
-                self.state.chat_messages.push(ChatMessage::Error {
-                    content: "Usage: /workspace [list|add]".to_string(),
-                });
-            }
-        }
+        let _ = args.get(1); // subcommand reserved for future use
+        let state = build_workspace_list_state(&self.state.config);
+        self.state.dialog_stack.push(DialogKind::WorkspaceList(state));
     }
 
     /// Open the model dropdown (inline picker mode), loading models from the active provider.
