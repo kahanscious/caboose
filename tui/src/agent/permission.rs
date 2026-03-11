@@ -105,6 +105,16 @@ const TASK_TOOLS: &[&str] = &["todo_write", "todo_read"];
 /// File-write tools.
 const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "apply_patch"];
 
+/// Returns true if `path` is an absolute path that does NOT start with `primary_root`.
+/// Relative paths are assumed to be in the primary workspace (return false).
+pub fn is_cross_workspace_path(path: &str, primary_root: &std::path::Path) -> bool {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    !p.starts_with(primary_root)
+}
+
 /// Check whether a tool call should auto-execute, require approval, or be blocked.
 pub fn check_permission(
     mode: &PermissionMode,
@@ -114,7 +124,25 @@ pub fn check_permission(
     deny_list: &[String],
     session_allows: &HashSet<String>,
     tool_permission_override: Option<&str>,
+    primary_root: Option<&std::path::Path>,
 ) -> ToolDecision {
+    // Cross-workspace write check: write/edit targeting a secondary workspace
+    // always requires approval, regardless of mode.
+    // Note: apply_patch is excluded here — it has no top-level `path` field in
+    // tool_input (path is embedded in the diff body). apply_patch cross-workspace
+    // detection is deferred to a future enhancement.
+    if let Some(root) = primary_root {
+        if matches!(tool_name, "write_file" | "edit_file") {
+            let file_path = tool_input["path"]
+                .as_str()
+                .or_else(|| tool_input["file_path"].as_str())
+                .unwrap_or("");
+            if is_cross_workspace_path(file_path, root) {
+                return ToolDecision::RequireApproval;
+            }
+        }
+    }
+
     // Session allow-list override (from user pressing 'a' in approval UI)
     if session_allows.contains(tool_name) {
         return ToolDecision::AutoExecute;
@@ -227,6 +255,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -240,6 +269,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
@@ -255,6 +285,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -268,6 +299,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
@@ -283,6 +315,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -296,6 +329,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -311,6 +345,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -324,6 +359,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -339,6 +375,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -352,6 +389,7 @@ mod tests {
             &[],
             &["rm".to_string()],
             &Default::default(),
+            None,
             None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
@@ -369,6 +407,7 @@ mod tests {
             &[],
             &session_allows,
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -382,6 +421,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
@@ -397,6 +437,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -411,6 +452,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -424,6 +466,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
@@ -440,6 +483,7 @@ mod tests {
             &[],
             &[],
             &allows,
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -496,6 +540,7 @@ mod tests {
             &[],
             &HashSet::new(),
             None,
+            None,
         );
         assert_eq!(result, ToolDecision::AutoExecute);
     }
@@ -509,6 +554,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -524,6 +570,7 @@ mod tests {
             &[],
             &HashSet::new(),
             None,
+            None,
         );
         assert!(matches!(result, ToolDecision::AutoExecute));
     }
@@ -537,6 +584,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -552,6 +600,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -565,6 +614,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
@@ -580,6 +630,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -594,6 +645,7 @@ mod tests {
             &[],
             &Default::default(),
             Some("always_approve"),
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -608,6 +660,7 @@ mod tests {
             &[],
             &Default::default(),
             Some("deny"),
+            None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -621,6 +674,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
@@ -636,6 +690,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -649,6 +704,7 @@ mod tests {
             &[],
             &[],
             &Default::default(),
+            None,
             None,
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
@@ -664,6 +720,7 @@ mod tests {
             &[],
             &Default::default(),
             None,
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -678,6 +735,7 @@ mod tests {
             &[],
             &Default::default(),
             Some("deny"),
+            None,
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -692,6 +750,7 @@ mod tests {
             &[],
             &Default::default(),
             Some("always_approve"),
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -706,7 +765,52 @@ mod tests {
             &[],
             &Default::default(),
             Some("auto"),
+            None,
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
+    }
+}
+
+#[cfg(test)]
+mod cross_workspace_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn path_in_primary_is_not_cross_workspace() {
+        let primary = std::path::PathBuf::from("/home/alex/caboose");
+        let target = "/home/alex/caboose/src/main.rs";
+        assert!(!is_cross_workspace_path(target, &primary));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn path_in_primary_is_not_cross_workspace() {
+        let primary = std::path::PathBuf::from(r"C:\Users\alex\caboose");
+        let target = r"C:\Users\alex\caboose\src\main.rs";
+        assert!(!is_cross_workspace_path(target, &primary));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_in_secondary_is_cross_workspace() {
+        let primary = std::path::PathBuf::from("/home/alex/caboose");
+        let target = "/home/alex/caboose-web/src/index.ts";
+        assert!(is_cross_workspace_path(target, &primary));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn path_in_secondary_is_cross_workspace() {
+        let primary = std::path::PathBuf::from(r"C:\Users\alex\caboose");
+        let target = r"C:\Users\alex\caboose-web\src\index.ts";
+        assert!(is_cross_workspace_path(target, &primary));
+    }
+
+    #[test]
+    fn relative_path_is_not_cross_workspace() {
+        let primary = std::path::PathBuf::from("/home/alex/caboose");
+        let target = "src/main.rs"; // relative — assumed primary
+        assert!(!is_cross_workspace_path(target, &primary));
     }
 }

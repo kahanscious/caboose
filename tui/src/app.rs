@@ -596,6 +596,11 @@ impl App {
 
         let mut agent = AgentLoop::new(system_prompt, permission_mode);
 
+        // Wire primary_root into agent for cross-workspace write detection
+        let primary_root = std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
+            .unwrap_or_default();
+        agent.primary_root = primary_root.clone();
+
         // Wire tools config (allow/deny commands, additional secrets) into agent
         if let Some(ref tools_cfg) = config.tools {
             if let Some(ref allow) = tools_cfg.allow_commands {
@@ -705,8 +710,7 @@ impl App {
                 init_had_existing: false,
                 init_old_lines: None,
                 init_write_root: std::path::PathBuf::new(),
-                primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
-                    .unwrap_or_default(),
+                primary_root: primary_root.clone(),
                 workspace_scan_rx: None,
                 workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
@@ -6665,6 +6669,7 @@ impl App {
             &self.state.agent.deny_list,
             &self.state.agent.session_allows,
             tool_permission,
+            Some(&self.state.primary_root),
         );
 
         if let crate::agent::permission::ToolDecision::Blocked(reason) = decision {

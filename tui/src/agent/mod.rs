@@ -107,6 +107,8 @@ pub struct AgentLoop {
     pub(crate) stashed_tool_defs: Vec<ToolDefinition>,
     /// Recently read file paths (most recent first, max 10).
     pub recent_files: VecDeque<PathBuf>,
+    /// Absolute path of the primary repo root — used for cross-workspace write detection.
+    pub primary_root: std::path::PathBuf,
     event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
 }
 
@@ -137,6 +139,8 @@ impl AgentLoop {
             resume_after_compaction: false,
             stashed_tool_defs: Vec::new(),
             recent_files: VecDeque::new(),
+            primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
+                .unwrap_or_default(),
             event_rx: None,
         }
     }
@@ -408,6 +412,7 @@ impl AgentLoop {
                 &self.deny_list,
                 &self.session_allows,
                 None, // CLI tool overrides resolved later in execute_pending_tools
+                Some(&self.primary_root),
             );
             if matches!(decision, ToolDecision::RequireApproval) {
                 needs_approval = true;
@@ -497,6 +502,7 @@ impl AgentLoop {
                 &self.deny_list,
                 &self.session_allows,
                 tool_permission,
+                Some(&self.primary_root),
             );
 
             // Fire PermissionRequest hooks (only if tool would normally need approval)
@@ -688,6 +694,7 @@ impl AgentLoop {
                     &self.deny_list,
                     &self.session_allows,
                     None,
+                    Some(&self.primary_root),
                 );
                 matches!(d, ToolDecision::AutoExecute)
             });
