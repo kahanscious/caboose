@@ -1240,22 +1240,18 @@ impl App {
                     && self.state.workspace_scan_rx.is_none()
                 {
                     self.state.workspace_scan_last_query = query.clone();
-                    // Walk from parent of typed path if it contains a separator;
-                    // otherwise scan siblings of the primary repo (most common use case).
-                    // Fall back to home dir only if primary_root has no parent.
-                    let base = if query.contains('/') || query.contains('\\') {
-                        std::path::Path::new(&query)
+                    // If the user typed a partial path, walk from its parent.
+                    // Otherwise scan all filesystem roots (all drives on Windows, / on Unix).
+                    let roots = if query.contains('/') || query.contains('\\') {
+                        let parent = std::path::Path::new(&query)
                             .parent()
                             .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| query.clone())
+                            .unwrap_or_else(|| query.clone());
+                        vec![parent]
                     } else {
-                        self.state.primary_root
-                            .parent()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .or_else(|| dirs::home_dir().map(|h| h.to_string_lossy().to_string()))
-                            .unwrap_or_default()
+                        scan_roots()
                     };
-                    self.state.workspace_scan_rx = Some(spawn_dir_scan(base, query));
+                    self.state.workspace_scan_rx = Some(spawn_dir_scan(roots, query));
                 }
             }
 
@@ -8418,19 +8414,42 @@ fn parse_tasks_from_text(text: &str) -> Option<TaskOutline> {
     }
 }
 
-/// Spawn a background tokio task to walk directories starting from `base_path`.
+/// Returns all filesystem roots to search when no explicit path is typed.
+/// On Windows: all mounted drive roots (A:\ through Z:\).
+/// On Unix: ["/"].
+fn scan_roots() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        (b'A'..=b'Z')
+            .filter_map(|c| {
+                let root = format!("{}:\\", c as char);
+                if std::path::Path::new(&root).exists() {
+                    Some(root)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
+/// Spawn a background tokio task to walk directories under the given roots.
 /// Results are sent via the returned mpsc receiver.
-/// Constraints: max depth 6, max 100 candidates, 500ms timeout.
+/// Constraints: max depth 5, max 100 results, 1s timeout.
 fn spawn_dir_scan(
-    base_path: String,
+    roots: Vec<String>,
     query: String,
 ) -> tokio::sync::mpsc::Receiver<Vec<String>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
+            std::time::Duration::from_millis(1000),
             tokio::task::spawn_blocking(move || {
-                walk_dirs_fuzzy(&base_path, &query)
+                walk_dirs_fuzzy(&roots, &query)
             }),
         )
         .await
@@ -8443,24 +8462,22 @@ fn spawn_dir_scan(
     rx
 }
 
-/// Walk directories under `base`, returning up to 100 fuzzy-matched **absolute** paths.
-/// Returns absolute paths so they can be used directly in validation and display.
-fn walk_dirs_fuzzy(base: &str, query: &str) -> Vec<String> {
-    use std::path::Path;
-    let base_path = Path::new(base);
-    if !base_path.exists() {
-        return vec![];
+/// Walk directories under `roots`, returning up to 100 fuzzy-matched **absolute** paths.
+fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
+    let query_lower = query.to_lowercase();
+    let mut candidates: Vec<String> = Vec::new();
+
+    for root in roots {
+        let base_path = std::path::Path::new(root);
+        if base_path.exists() {
+            walk_dir_recursive(base_path, 0, 5, &mut candidates);
+        }
     }
 
-    let mut candidates: Vec<String> = Vec::new();
-    walk_dir_recursive(base_path, 0, 6, &mut candidates);
-
     // Fuzzy score against the last path component (dirname) for relevance
-    let query_lower = query.to_lowercase();
     let mut scored: Vec<(u32, String)> = candidates
         .into_iter()
         .filter_map(|abs_path| {
-            // Score against just the final component so "caboose-web" matches /home/alex/caboose-web
             let component = std::path::Path::new(&abs_path)
                 .file_name()
                 .and_then(|n| n.to_str())
