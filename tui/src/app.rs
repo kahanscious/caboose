@@ -1927,7 +1927,8 @@ impl App {
             Some(DialogKind::MigrationChecklist(_)) => {
                 self.handle_migration_checklist_key(key);
             }
-            Some(DialogKind::WorkspaceList(_)) | Some(DialogKind::WorkspaceAdd(_)) => {
+            Some(DialogKind::WorkspaceList(_)) => self.handle_workspace_list_key(key),
+            Some(DialogKind::WorkspaceAdd(_)) => {
                 // TODO: workspace dialog key handling
             }
             None => match self.state.dialog_stack.base {
@@ -4517,6 +4518,55 @@ impl App {
             KeyCode::Char(c) => {
                 if let Some(DialogKind::McpServerInput(state)) = self.state.dialog_stack.top_mut() {
                     state.focused_input_mut().push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_workspace_list_key(&mut self, key: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        use crate::tui::dialog::{DialogKind, WorkspaceAddState};
+
+        match key {
+            KeyCode::Esc => {
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
+                    if state.selected > 0 {
+                        state.selected -= 1;
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
+                    let max = state.workspaces.len().saturating_sub(1);
+                    if state.selected < max {
+                        state.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                self.state.dialog_stack.push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
+            }
+            KeyCode::Char('d') => {
+                let name_to_remove = if let Some(DialogKind::WorkspaceList(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    state.workspaces.get(state.selected).map(|(n, _, _)| n.clone())
+                } else {
+                    None
+                };
+
+                if let Some(name) = name_to_remove {
+                    crate::config::remove_workspace(&name);
+                    // Update in-memory config
+                    self.state.config.workspaces.remove(&name);
+                    if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
+                        state.workspaces.retain(|(n, _, _)| n != &name);
+                        state.clamp_selected();
+                    }
                 }
             }
             _ => {}
@@ -8194,5 +8244,42 @@ mod circuit_parse_tests {
     #[test]
     fn format_duration_mixed() {
         assert_eq!(format_duration(90), "1m 30s");
+    }
+}
+
+#[cfg(test)]
+mod workspace_list_handler_tests {
+    use crate::tui::dialog::{WorkspaceListState};
+    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+
+    fn make_state(n: usize) -> WorkspaceListState {
+        WorkspaceListState {
+            workspaces: (0..n)
+                .map(|i| (
+                    format!("ws-{i}"),
+                    WorkspaceConfig { path: format!("/tmp/ws{i}"), mode: WorkspaceMode::Proactive },
+                    true,
+                ))
+                .collect(),
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn remove_last_item_clamps_selected() {
+        let mut state = make_state(1);
+        state.selected = 0;
+        state.workspaces.remove(0);
+        state.clamp_selected();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn remove_item_mid_list_clamps_selected() {
+        let mut state = make_state(3);
+        state.selected = 2; // last item
+        state.workspaces.remove(2);
+        state.clamp_selected();
+        assert_eq!(state.selected, 1);
     }
 }
