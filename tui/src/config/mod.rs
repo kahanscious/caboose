@@ -75,6 +75,9 @@ pub struct Config {
     /// Local LLM provider instances (Ollama, LM Studio, llama.cpp, custom)
     #[serde(default)]
     pub local_providers: HashMap<String, schema::LocalProviderConfig>,
+    /// Registered secondary workspaces for this project. Key is the workspace name.
+    #[serde(default)]
+    pub workspaces: std::collections::HashMap<String, schema::WorkspaceConfig>,
 }
 
 impl Config {
@@ -209,6 +212,9 @@ impl Config {
         }
         for (name, local) in other.local_providers {
             self.local_providers.insert(name, local);
+        }
+        for (name, ws) in other.workspaces {
+            self.workspaces.insert(name, ws);
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {

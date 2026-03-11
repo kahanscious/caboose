@@ -367,6 +367,76 @@ pub struct ServiceConfig {
     pub enabled: bool,
 }
 
+/// Configuration for a registered secondary workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfig {
+    /// Absolute canonicalized path to the workspace root.
+    pub path: String,
+    /// How the agent should treat this workspace.
+    pub mode: WorkspaceMode,
+}
+
+/// Controls how the agent uses a secondary workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceMode {
+    /// Agent searches this workspace automatically alongside the primary repo.
+    Proactive,
+    /// Agent uses this workspace only when the user explicitly references it.
+    Explicit,
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_config_roundtrip() {
+        let cfg = WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: WorkspaceMode::Proactive,
+        };
+        let serialized = toml::to_string(&cfg).unwrap();
+        let deserialized: WorkspaceConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.path, cfg.path);
+        assert_eq!(deserialized.mode, WorkspaceMode::Proactive);
+    }
+
+    #[test]
+    fn workspace_mode_explicit_roundtrip() {
+        let cfg = WorkspaceConfig {
+            path: "/tmp/docs".to_string(),
+            mode: WorkspaceMode::Explicit,
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let d: WorkspaceConfig = toml::from_str(&s).unwrap();
+        assert_eq!(d.mode, WorkspaceMode::Explicit);
+    }
+
+    #[test]
+    fn config_without_workspaces_parses() {
+        // Config is the actual struct loaded from .caboose/config.toml — not ProjectConfig.
+        // ProjectConfig exists in schema.rs but is not used in the loading pipeline.
+        use crate::config::Config;
+        let toml_str = r#"default_provider = "anthropic""#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(cfg.workspaces.is_empty());
+    }
+
+    #[test]
+    fn config_with_workspaces_parses() {
+        use crate::config::Config;
+        let toml_str = r#"
+[workspaces.caboose-web]
+path = "/home/alex/caboose-web"
+mode = "proactive"
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.workspaces.len(), 1);
+        assert_eq!(cfg.workspaces["caboose-web"].mode, WorkspaceMode::Proactive);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
