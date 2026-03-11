@@ -23,6 +23,8 @@ pub fn render(
     modified_files: &std::collections::HashMap<String, FileStats>,
     task_outline: Option<&TaskOutline>,
     tick: u64,
+    roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
+    active_watchers: &[crate::scm::watcher::Watcher],
 ) {
     let colors = Colors::default();
 
@@ -162,6 +164,170 @@ pub fn render(
         }
     }
 
+    // --- Roundhouse section ---
+    if let Some(rh) = roundhouse_session {
+        // Separator
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                "\u{2500}".repeat(inner.width.saturating_sub(4) as usize)
+            ),
+            Style::default().fg(colors.border),
+        )));
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled(
+            "  Roundhouse",
+            Style::default().fg(colors.roundhouse).bold(),
+        )));
+        lines.push(Line::from(""));
+
+        // Phase label with animated dots for active phases
+        let phase_text = match rh.phase {
+            crate::roundhouse::RoundhousePhase::SelectingProviders => {
+                "Phase: selecting providers".to_string()
+            }
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt => {
+                "Phase: awaiting prompt".to_string()
+            }
+            crate::roundhouse::RoundhousePhase::Planning => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: planning{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Synthesizing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: synthesizing{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Reviewing => "Phase: reviewing".to_string(),
+            crate::roundhouse::RoundhousePhase::Executing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: executing{dots}")
+            }
+            crate::roundhouse::RoundhousePhase::Complete => "Phase: complete".to_string(),
+            crate::roundhouse::RoundhousePhase::Cancelled => "Phase: cancelled".to_string(),
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {phase_text}"),
+            Style::default().fg(colors.text_secondary),
+        )));
+
+        match rh.phase {
+            crate::roundhouse::RoundhousePhase::Reviewing => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Plan ready for review",
+                    Style::default().fg(colors.success),
+                )));
+                if let Some(ref path) = rh.plan_file {
+                    // Show relative path if possible
+                    let display = std::env::current_dir()
+                        .ok()
+                        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+                        .unwrap_or_else(|| path.clone());
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", display.display()),
+                        Style::default().fg(colors.text_muted),
+                    )));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  /roundhouse clear",
+                    Style::default().fg(colors.text_dim),
+                )));
+            }
+            crate::roundhouse::RoundhousePhase::Executing => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Executing plan...",
+                    Style::default().fg(colors.warning),
+                )));
+            }
+            crate::roundhouse::RoundhousePhase::Complete => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Plan executed",
+                    Style::default().fg(colors.success),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  /roundhouse clear",
+                    Style::default().fg(colors.text_dim),
+                )));
+            }
+            _ => {
+                // Show per-LLM status rows
+                lines.push(Line::from(""));
+
+                // Primary planner
+                let (primary_icon, primary_status_text, primary_color) =
+                    planner_status_parts(&rh.primary_status, &colors, tick, rh.primary_status_tick);
+                let primary_name = truncate_provider_name(&rh.primary_provider, 10);
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{primary_icon} "),
+                        Style::default().fg(primary_color),
+                    ),
+                    Span::styled(
+                        format!("{primary_name:<10} "),
+                        Style::default().fg(colors.text_secondary),
+                    ),
+                    Span::styled(primary_status_text, Style::default().fg(primary_color)),
+                ]));
+
+                // Secondary planners
+                for secondary in &rh.secondaries {
+                    let (icon, status_text, color) = planner_status_parts(
+                        &secondary.status,
+                        &colors,
+                        tick,
+                        secondary.status_tick,
+                    );
+                    let name = truncate_provider_name(&secondary.provider_name, 10);
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(format!("{icon} "), Style::default().fg(color)),
+                        Span::styled(
+                            format!("{name:<10} "),
+                            Style::default().fg(colors.text_secondary),
+                        ),
+                        Span::styled(status_text, Style::default().fg(color)),
+                    ]));
+                }
+
+                // Total cost
+                if rh.total_cost > 0.0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("  Total: ${:.4}", rh.total_cost),
+                        Style::default().fg(colors.text_muted),
+                    )));
+                }
+            }
+        }
+    }
+
+    // --- Watchers section ---
+    if !active_watchers.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Watchers",
+            Style::default().fg(colors.text_secondary).bold(),
+        )));
+        lines.push(Line::from(""));
+        for w in active_watchers {
+            let icon = w.last_status.icon();
+            lines.push(Line::from(Span::styled(
+                format!("  {} PR #{}", icon, w.pr_number),
+                Style::default().fg(colors.text_secondary),
+            )));
+        }
+    }
+
     // Render fixed sections
     let fixed_height = lines.len() as u16;
     let fixed_area = Rect {
@@ -294,6 +460,71 @@ fn render_tasks(frame: &mut Frame, area: Rect, outline: &TaskOutline, tick: u64,
 
     let tasks_paragraph = Paragraph::new(lines).scroll((scroll_offset, 0));
     frame.render_widget(tasks_paragraph, area);
+}
+
+/// Return (icon, status_text, color) for a PlannerStatus.
+///
+/// Active statuses use a typewriter reveal effect driven by `tick`.
+fn planner_status_parts(
+    status: &crate::roundhouse::PlannerStatus,
+    colors: &Colors,
+    tick: u64,
+    status_tick: u64,
+) -> (&'static str, String, Color) {
+    match status {
+        crate::roundhouse::PlannerStatus::Pending => {
+            ("\u{25CB}", "pending".to_string(), colors.text_dim)
+        }
+        crate::roundhouse::PlannerStatus::Thinking => (
+            "\u{25CF}",
+            typewriter("thinking", tick, status_tick),
+            colors.roundhouse,
+        ),
+        crate::roundhouse::PlannerStatus::Streaming => (
+            "\u{25CF}",
+            typewriter("streaming", tick, status_tick),
+            colors.roundhouse,
+        ),
+        crate::roundhouse::PlannerStatus::UsingTool(name) => (
+            "\u{25CF}",
+            typewriter(name, tick, status_tick),
+            colors.warning,
+        ),
+        crate::roundhouse::PlannerStatus::Done => ("\u{2713}", "done".to_string(), colors.success),
+        crate::roundhouse::PlannerStatus::Failed(_) => {
+            ("\u{2717}", "failed".to_string(), colors.error)
+        }
+        crate::roundhouse::PlannerStatus::TimedOut => {
+            ("\u{2717}", "timed out".to_string(), colors.error)
+        }
+    }
+}
+
+/// Looping typewriter effect: reveal `text` one character at a time, then
+/// pause briefly, then restart. Loops continuously until the status changes.
+fn typewriter(text: &str, tick: u64, status_tick: u64) -> String {
+    let elapsed = tick.saturating_sub(status_tick);
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len == 0 {
+        return String::new();
+    }
+    // Each cycle: reveal chars one per 2 ticks, then hold for 6 ticks
+    let cycle_len = (len * 2 + 6) as u64;
+    let pos = elapsed % cycle_len;
+    let reveal = ((pos / 2) as usize).min(len);
+    chars[..reveal].iter().collect()
+}
+
+/// Truncate or pad a provider name to at most `max` characters.
+fn truncate_provider_name(name: &str, max: usize) -> String {
+    let char_count = name.chars().count();
+    if char_count <= max {
+        name.to_string()
+    } else {
+        let truncated: String = name.chars().take(max.saturating_sub(1)).collect();
+        format!("{truncated}…")
+    }
 }
 
 /// Render the "Files Modified" sidebar section.

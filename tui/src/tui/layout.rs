@@ -104,6 +104,18 @@ pub fn render(frame: &mut Frame, app: &State) {
             } => {
                 render_paste_confirm(frame, *line_count, *char_count, &colors);
             }
+            DialogKind::LocalProviderConnect(state) => {
+                render_local_connect(frame, state, &colors);
+            }
+            DialogKind::RoundhouseProviderPicker(picker) => {
+                render_roundhouse_picker(frame, picker, app, &colors);
+            }
+            DialogKind::CircuitsList(list_state) => {
+                render_circuits_list(frame, list_state, app, &colors);
+            }
+            DialogKind::MigrationChecklist(checklist) => {
+                render_migration_checklist(frame, checklist, &colors);
+            }
         }
     }
 }
@@ -241,6 +253,8 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             &app.modified_files,
             task_outline,
             app.tick,
+            app.roundhouse_session.as_ref(),
+            &app.active_watchers,
         );
     }
 
@@ -421,6 +435,93 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 format!("{spinner} "),
                 Style::default().fg(accent),
             )));
+        }
+    }
+
+    // Show Roundhouse streaming text in main window (planning + synthesis)
+    if let Some(ref rh) = app.roundhouse_session {
+        let accent = colors.roundhouse;
+
+        // Primary planner streaming
+        if !rh.primary_streaming_text.is_empty() {
+            let still_streaming = matches!(
+                rh.primary_status,
+                crate::roundhouse::PlannerStatus::Streaming
+                    | crate::roundhouse::PlannerStatus::Thinking
+                    | crate::roundhouse::PlannerStatus::UsingTool(_)
+            );
+            msg_boundaries.push((lines.len(), 2u8));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_provider),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled("(planning)", Style::default().fg(colors.text_muted)),
+            ]));
+            let parsed =
+                crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
+            if still_streaming {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+        }
+
+        // Synthesis streaming
+        if !rh.synthesis_streaming_text.is_empty() {
+            let still_synthesizing =
+                matches!(rh.phase, crate::roundhouse::RoundhousePhase::Synthesizing);
+            msg_boundaries.push((lines.len(), 2u8));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_provider),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
+            ]));
+            let parsed =
+                crate::tui::chat::parse_markdown(&rh.synthesis_streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
+            if still_synthesizing {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+            // Show plan file path after synthesis completes
+            if let Some(ref path) = rh.plan_file {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let display = path
+                    .strip_prefix(&cwd)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string();
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Saved to ", Style::default().fg(colors.text_muted)),
+                    Span::styled(display, Style::default().fg(colors.text_secondary).bold()),
+                ]));
+            }
         }
     }
 
@@ -843,7 +944,17 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
 
     let quit_confirm = app.quit_first_press.is_some();
 
-    let agent_label: Option<&str> = None;
+    let is_roundhouse_awaiting = app
+        .roundhouse_session
+        .as_ref()
+        .map(|s| s.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt)
+        .unwrap_or(false);
+
+    let agent_label: Option<&str> = if is_roundhouse_awaiting {
+        Some("Roundhouse \u{203a} Enter your planning prompt")
+    } else {
+        None
+    };
 
     let (mut accent_color, info_left) = build_info_left(
         agent_label,
@@ -883,6 +994,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             colors,
             true,
             app.current_session_id.as_deref(),
+            &app.discovered_locals,
         );
     }
 
@@ -958,4 +1070,434 @@ fn render_paste_confirm(
         .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
     frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render the Roundhouse provider picker dialog.
+fn render_roundhouse_picker(
+    frame: &mut Frame,
+    picker: &crate::tui::dialog::RoundhousePickerState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    // 2 border + 1 primary + 1 blank + max(1, N secondaries) + 1 blank + 1 footer = max(1,N) + 6
+    let list_rows = picker.secondaries.len().max(1) as u16;
+    let content_lines = list_rows + 6;
+    let width: u16 = 55;
+    let height: u16 = content_lines.min(area.height);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Roundhouse \u{2014} Add Models ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let primary_label = if let Some(session) = &app.roundhouse_session {
+        format!(
+            "Primary: {}/{}",
+            session.primary_provider, session.primary_model
+        )
+    } else {
+        format!(
+            "Primary: {}/{}",
+            app.active_provider_name, app.active_model_name
+        )
+    };
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            primary_label,
+            Style::default().fg(colors.text_secondary),
+        )),
+        Line::from(""),
+    ];
+
+    if picker.secondaries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No secondaries added yet. Press 'a' to add.",
+            Style::default().fg(colors.text_dim),
+        )));
+    } else {
+        for (i, sec) in picker.secondaries.iter().enumerate() {
+            let prefix = if i == picker.selected { "▸ " } else { "  " };
+            let label = format!("{prefix}{}. {}/{}", i + 1, sec.display_name, sec.model);
+            let style = if i == picker.selected {
+                Style::default().fg(colors.brand).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(label, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "a: add model | d: remove | Enter: start | Esc: cancel",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_circuits_list(
+    frame: &mut Frame,
+    list_state: &crate::tui::dialog::CircuitsListState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    let circuits = &app.circuit_manager.circuits;
+
+    // Height: 2 border + 1 blank + max(1, N circuits) + 1 blank + 1 footer = N + 5 (min 6)
+    let content_rows = circuits.len().max(1) as u16;
+    let height: u16 = (content_rows + 5).min(area.height);
+    let width: u16 = 72_u16.min(area.width);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Circuits ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if circuits.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No active circuits. Use /circuit <interval> \"<prompt>\" to create one.",
+            Style::default().fg(colors.text_secondary),
+        )));
+    } else {
+        for (i, handle) in circuits.iter().enumerate() {
+            let c = &handle.circuit;
+
+            // Truncate prompt to fit
+            let max_prompt = 28_usize;
+            let prompt = if c.prompt.len() > max_prompt {
+                format!("\"{}…\"", &c.prompt[..max_prompt.saturating_sub(1)])
+            } else {
+                format!("\"{}\"", c.prompt)
+            };
+
+            // Format interval
+            let interval = if c.interval_secs >= 3600 {
+                format!("{}h", c.interval_secs / 3600)
+            } else if c.interval_secs >= 60 {
+                format!("{}m", c.interval_secs / 60)
+            } else {
+                format!("{}s", c.interval_secs)
+            };
+
+            let status = match &c.status {
+                crate::circuits::types::CircuitStatus::Active => "active",
+                crate::circuits::types::CircuitStatus::Paused => "paused",
+                crate::circuits::types::CircuitStatus::Error(_) => "error",
+            };
+
+            let runs = if c.run_count == 1 {
+                "1 run".to_string()
+            } else {
+                format!("{} runs", c.run_count)
+            };
+
+            let row = format!(
+                "  \u{25cf} {:<32} {:>4}   {:<8} {}",
+                prompt, interval, status, runs
+            );
+
+            let style = if i == list_state.selected {
+                Style::default().fg(colors.text).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(row, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "d/Del: delete | \u{2191}\u{2193}: navigate | Esc: close",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render the local provider connect dialog.
+fn render_local_connect(
+    frame: &mut Frame,
+    state: &crate::tui::dialog::LocalProviderConnectState,
+    colors: &theme::Colors,
+) {
+    use crate::tui::dialog::LocalConnectPhase;
+
+    let area = frame.area();
+
+    match &state.phase {
+        LocalConnectPhase::Address => {
+            let width: u16 = 55;
+            let height: u16 = if state.error.is_some() { 8 } else { 7 };
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(format!(" Connect {} ", state.provider_name))
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = vec![
+                Line::from(Span::styled(
+                    "Server address:",
+                    Style::default().fg(colors.text_secondary),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!(
+                            " {} ",
+                            if state.address.is_empty() {
+                                " "
+                            } else {
+                                &state.address
+                            }
+                        ),
+                        Style::default().fg(colors.text).bg(colors.bg_hover),
+                    ),
+                    Span::styled("\u{2588}", Style::default().fg(colors.brand)),
+                ]),
+            ];
+
+            if let Some(err) = &state.error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    err.as_str(),
+                    Style::default().fg(colors.error),
+                )));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: connect  |  Esc: cancel",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        LocalConnectPhase::Probing => {
+            let width: u16 = 45;
+            let height: u16 = 5;
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(format!(" Connect {} ", state.provider_name))
+                .border_style(Style::default().fg(colors.brand));
+
+            let text = format!("Connecting to {}...\n\nEsc: cancel", state.address);
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        LocalConnectPhase::ModelSelect => {
+            let visible_count = state.models.len().min(12);
+            let width: u16 = 55;
+            let height: u16 = visible_count as u16 + 4; // border + title line + footer
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(" Select Model ")
+                .border_style(Style::default().fg(colors.brand));
+
+            // Scroll window for long lists
+            let scroll_start = if state.selected_model >= visible_count {
+                state.selected_model - visible_count + 1
+            } else {
+                0
+            };
+
+            let mut lines: Vec<Line> = state
+                .models
+                .iter()
+                .enumerate()
+                .skip(scroll_start)
+                .take(visible_count)
+                .map(|(i, model)| {
+                    let style = if i == state.selected_model {
+                        Style::default().fg(colors.text).bg(colors.bg_hover)
+                    } else {
+                        Style::default().fg(colors.text_secondary)
+                    };
+                    let prefix = if i == state.selected_model {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    Line::from(Span::styled(format!("{prefix}{model}"), style))
+                })
+                .collect();
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: select  |  Esc: back",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+    }
+}
+
+fn render_migration_checklist(
+    frame: &mut Frame,
+    checklist: &crate::tui::dialog::MigrationChecklistState,
+    colors: &theme::Colors,
+) {
+    use crate::tui::dialog::{MigrationItemKind, MigrationPhase};
+
+    let area = frame.area();
+    let title = format!(" Migrate from {} ", checklist.platform.label());
+
+    match &checklist.phase {
+        MigrationPhase::Checklist => {
+            let content_lines = checklist.items.len() as u16 + 5;
+            let width: u16 = 65_u16.min(area.width);
+            let height: u16 = content_lines.min(area.height);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, item) in checklist.items.iter().enumerate() {
+                let checkbox = if item.toggled { "[x] " } else { "[ ] " };
+                let label = format!("{}{}: {}", checkbox, item.label, item.description);
+                let style = if i == checklist.selected {
+                    Style::default().fg(colors.text).bg(colors.bg_hover)
+                } else {
+                    Style::default().fg(colors.text)
+                };
+                lines.push(Line::from(Span::styled(label, style)));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Space: toggle | Enter: preview | Esc: cancel",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Preview => {
+            let mcp_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::McpServer { .. }))
+                .count();
+            let prompt_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::SystemPrompt(_)))
+                .count();
+            let claude_md_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::ClaudeMd(_)))
+                .count();
+
+            let mut preview_lines: Vec<String> = vec!["Will apply:".to_string(), String::new()];
+            if mcp_count > 0 {
+                preview_lines.push(format!("  + {} MCP server(s) to config", mcp_count));
+            }
+            if prompt_count > 0 {
+                preview_lines.push("  + System prompt to CABOOSE.md".to_string());
+            }
+            if claude_md_count > 0 {
+                preview_lines.push("  + CLAUDE.md content to CABOOSE.md".to_string());
+            }
+
+            let height: u16 = (preview_lines.len() as u16 + 5).min(area.height);
+            let width: u16 = 55_u16.min(area.width);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(colors.brand));
+
+            let mut lines: Vec<Line> = preview_lines
+                .iter()
+                .map(|s| Line::from(s.as_str()))
+                .collect();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enter: apply | Esc: back",
+                Style::default().fg(colors.text_dim),
+            )));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Done(summary) => {
+            let height: u16 = 5_u16.min(area.height);
+            let width: u16 = 55_u16.min(area.width);
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let dialog_area = Rect::new(x, y, width, height);
+
+            let block = Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(" Migration Complete ")
+                .border_style(Style::default().fg(colors.brand));
+
+            let text = format!("{}\n\nPress any key to close", summary);
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(paragraph, dialog_area);
+        }
+        MigrationPhase::Applying => {
+            // Brief spinner-like state (instant for now)
+        }
+    }
 }

@@ -111,7 +111,11 @@ fn truncate_output(output: &str) -> String {
             .collect::<Vec<_>>()
             .join("\n");
         let result = if truncated.len() > MAX_OUTPUT_BYTES {
-            truncated[..MAX_OUTPUT_BYTES].to_string()
+            let mut end = MAX_OUTPUT_BYTES;
+            while end > 0 && !truncated.is_char_boundary(end) {
+                end -= 1;
+            }
+            truncated[..end].to_string()
         } else {
             truncated
         };

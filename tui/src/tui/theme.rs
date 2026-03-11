@@ -42,7 +42,7 @@ impl ThemeVariant {
     #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Caboose => "Railroad amber-red (default)",
+            Self::Caboose => "Classic caboose maroon (default)",
             Self::Firebox => "Blazing orange, intense heat",
             Self::SteamDome => "Cool steel blue, ethereal",
             Self::Smokebox => "Warm ash, industrial soot",
@@ -123,6 +123,9 @@ pub struct Colors {
     pub brand: Color,
     pub brand_muted: Color,
 
+    // Roundhouse
+    pub roundhouse: Color,
+
     // Code blocks
     pub code_bg: Color,
     pub code_border: Color,
@@ -155,7 +158,7 @@ impl Colors {
         }
     }
 
-    /// Caboose — railroad amber-red (default).
+    /// Caboose — classic caboose maroon (default).
     fn caboose() -> Self {
         Self {
             // Backgrounds
@@ -165,8 +168,8 @@ impl Colors {
             bg_hover: Color::Rgb(30, 30, 30),     // #1e1e1e
 
             // Borders
-            border: Color::Rgb(42, 42, 42),         // #2a2a2a
-            border_active: Color::Rgb(212, 87, 42), // #d4572a — brand accent
+            border: Color::Rgb(42, 42, 42),          // #2a2a2a
+            border_active: Color::Rgb(155, 35, 53),  // #9b2335 — brand accent
 
             // Text hierarchy
             text: Color::Rgb(238, 238, 238),           // #eeeeee
@@ -177,7 +180,7 @@ impl Colors {
             // Chat roles
             user_msg: Color::Rgb(238, 238, 238),      // #eeeeee
             assistant_msg: Color::Rgb(200, 200, 200), // #c8c8c8
-            tool_msg: Color::Rgb(212, 87, 42),        // #d4572a — brand
+            tool_msg: Color::Rgb(155, 35, 53),        // #9b2335 — brand
             system_msg: Color::Rgb(96, 96, 96),       // #606060
 
             // Semantic
@@ -187,8 +190,10 @@ impl Colors {
             info: Color::Rgb(91, 155, 213),    // #5b9bd5
 
             // Brand
-            brand: Color::Rgb(212, 87, 42), // #d4572a — railroad amber-red
-            brand_muted: Color::Rgb(128, 128, 128), // #808080
+            brand: Color::Rgb(155, 35, 53),          // #9b2335 — classic caboose maroon
+            brand_muted: Color::Rgb(128, 128, 128),  // #808080
+
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
             // Code blocks
             code_bg: Color::Rgb(20, 20, 20),      // #141414
@@ -196,7 +201,7 @@ impl Colors {
             code_text: Color::Rgb(212, 212, 212), // #d4d4d4
 
             // Markdown elements
-            header_h1: Color::Rgb(212, 87, 42),  // #d4572a — brand
+            header_h1: Color::Rgb(155, 35, 53),  // #9b2335 — brand
             header_h2: Color::Rgb(212, 160, 42), // #d4a02a — warm amber
             header_h3: Color::Rgb(160, 160, 160), // #a0a0a0 — text_secondary
             blockquote_border: Color::Rgb(64, 64, 64), // #404040 — text_muted
@@ -234,6 +239,8 @@ impl Colors {
 
             brand: Color::Rgb(232, 84, 27), // #e8541b — blazing orange
             brand_muted: Color::Rgb(122, 64, 48), // #7a4030
+
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
             code_bg: Color::Rgb(22, 18, 16),      // #161210
             code_border: Color::Rgb(54, 42, 34),  // #362a22
@@ -278,6 +285,8 @@ impl Colors {
             brand: Color::Rgb(124, 184, 216), // #7cb8d8 — steel blue
             brand_muted: Color::Rgb(74, 104, 120), // #4a6878
 
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
+
             code_bg: Color::Rgb(16, 20, 24),      // #101418
             code_border: Color::Rgb(42, 48, 56),  // #2a3038
             code_text: Color::Rgb(200, 212, 220), // #c8d4dc
@@ -321,6 +330,8 @@ impl Colors {
             brand: Color::Rgb(160, 136, 120), // #a08878 — warm ash
             brand_muted: Color::Rgb(96, 84, 72), // #605448
 
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
+
             code_bg: Color::Rgb(20, 19, 16),      // #141310
             code_border: Color::Rgb(52, 46, 40),  // #342e28
             code_text: Color::Rgb(192, 184, 176), // #c0b8b0
@@ -363,6 +374,8 @@ impl Colors {
 
             brand: Color::Rgb(212, 168, 80), // #d4a850 — golden sand
             brand_muted: Color::Rgb(138, 122, 72), // #8a7a48
+
+            roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
             code_bg: Color::Rgb(22, 20, 8),       // #161408
             code_border: Color::Rgb(54, 44, 28),  // #362c1c

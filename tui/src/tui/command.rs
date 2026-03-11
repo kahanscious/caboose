@@ -222,6 +222,10 @@ pub fn build_default_registry() -> CommandRegistry {
             state.tool_counts.clear();
             state.focused_tool = None;
             state.pending_handoff = None;
+            state.roundhouse_session = None;
+            state.roundhouse_update_rx = None;
+            state.roundhouse_synthesis_rx = None;
+            state.roundhouse_model_add = false;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
             state.agent.turn_count = 0;
@@ -430,6 +434,54 @@ pub fn build_default_registry() -> CommandRegistry {
                 && !state.chat_messages.is_empty()
         },
         execute: |_state| Action::None, // Handled specially in app.rs — needs async
+    });
+
+    registry.register(Command {
+        id: "roundhouse.start",
+        name: "Roundhouse",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("roundhouse"),
+        available: |state| state.roundhouse_session.is_none(),
+        execute: |state| {
+            let primary_id = state.active_provider_name.clone();
+            let primary_model = state.active_model_name.clone();
+
+            state.roundhouse_session = Some(crate::roundhouse::RoundhouseSession::new(
+                primary_id,
+                primary_model,
+            ));
+
+            let picker = super::dialog::RoundhousePickerState {
+                secondaries: vec![],
+                selected: 0,
+            };
+            Action::PushDialog(super::dialog::DialogKind::RoundhouseProviderPicker(picker))
+        },
+    });
+
+    registry.register(Command {
+        id: "circuits.list",
+        name: "Circuits",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("circuits"),
+        available: |_state| true,
+        execute: |_state| {
+            Action::PushDialog(super::dialog::DialogKind::CircuitsList(
+                super::dialog::CircuitsListState { selected: 0 },
+            ))
+        },
+    });
+
+    registry.register(Command {
+        id: "scm.watch",
+        name: "Watch PR/MR",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("watch"),
+        available: |state| state.scm_provider != crate::scm::detection::ScmProvider::Unknown,
+        execute: |_state| Action::None, // Handled in app.rs
     });
 
     registry.register(Command {

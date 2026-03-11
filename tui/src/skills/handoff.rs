@@ -49,8 +49,9 @@ pub fn build_handoff_summary(ctx: &HandoffContext<'_>) -> String {
         for msg in &ctx.user_messages {
             // Take first line, truncate at 120 chars
             let first_line = msg.lines().next().unwrap_or(msg);
-            let truncated = if first_line.len() > 120 {
-                format!("{}...", &first_line[..117])
+            let truncated = if first_line.chars().count() > 120 {
+                let t: String = first_line.chars().take(117).collect();
+                format!("{t}...")
             } else {
                 first_line.to_string()
             };

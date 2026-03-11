@@ -155,6 +155,27 @@ pub struct State {
     pub update_available: Option<String>,
     /// Receiver for background update check result.
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
+    /// Active Roundhouse (multi-LLM planning) session.
+    pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// When true, the model picker adds to roundhouse secondaries instead of switching.
+    pub roundhouse_model_add: bool,
+    /// Receiver for roundhouse planner status updates (parallel planning engine).
+    pub roundhouse_update_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
+    /// Receiver for roundhouse synthesis streaming deltas.
+    pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// In-session circuit manager.
+    #[allow(dead_code)]
+    pub circuit_manager: crate::circuits::runner::CircuitManager,
+    /// Local LLM servers discovered at startup (background probe).
+    pub discovered_locals: Vec<crate::provider::local::LocalServer>,
+    /// Receiver for background local server discovery result.
+    pub local_discovery_rx:
+        Option<tokio::sync::oneshot::Receiver<Vec<crate::provider::local::LocalServer>>>,
+    /// Detected SCM provider for the current working directory.
+    pub scm_provider: crate::scm::detection::ScmProvider,
+    /// Active SCM watchers (each backed by a circuit).
+    pub active_watchers: Vec<crate::scm::watcher::Watcher>,
 }
 
 /// Status of a tool execution.
@@ -414,9 +435,12 @@ impl App {
             tools_cfg.executable = Some(discovered);
         }
 
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let scm_provider = crate::scm::detection::detect_provider(&cwd);
+
         let cli_tools_ref = config.tools.as_ref().and_then(|t| t.registry.as_ref());
         let exec_tools_ref = config.tools.as_ref().and_then(|t| t.executable.as_ref());
-        let tools = ToolRegistry::new(cli_tools_ref, exec_tools_ref);
+        let tools = ToolRegistry::new(cli_tools_ref, exec_tools_ref, &scm_provider);
         let mcp_config = config.mcp.clone().unwrap_or_default();
         let mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
         let (mcp_connect_tx, mcp_connect_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -680,6 +704,15 @@ impl App {
                 attachments: Vec::new(),
                 update_available: None,
                 update_check_rx: None,
+                roundhouse_session: None,
+                roundhouse_model_add: false,
+                roundhouse_update_rx: None,
+                roundhouse_synthesis_rx: None,
+                circuit_manager: crate::circuits::runner::CircuitManager::new(5),
+                discovered_locals: vec![],
+                local_discovery_rx: None,
+                scm_provider,
+                active_watchers: Vec::new(),
             },
             terminal,
             provider,
@@ -1053,6 +1086,17 @@ impl App {
             self.state.update_check_rx = Some(rx);
         }
 
+        // Background local LLM discovery
+        {
+            let (tx, rx) =
+                tokio::sync::oneshot::channel::<Vec<crate::provider::local::LocalServer>>();
+            tokio::spawn(async move {
+                let servers = crate::provider::local::discover_local_servers().await;
+                let _ = tx.send(servers);
+            });
+            self.state.local_discovery_rx = Some(rx);
+        }
+
         loop {
             // Expire quit confirmation after 2 seconds
             if let Some(first) = self.state.quit_first_press
@@ -1086,6 +1130,50 @@ impl App {
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         self.state.update_check_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Poll background local LLM discovery
+            if let Some(ref mut rx) = self.state.local_discovery_rx {
+                match rx.try_recv() {
+                    Ok(servers) => {
+                        self.state.discovered_locals = servers;
+                        self.state.local_discovery_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.state.local_discovery_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Poll local provider probe result
+            if let Some(DialogKind::LocalProviderConnect(lpc)) = self.state.dialog_stack.top_mut()
+                && let Some(rx) = &mut lpc.probe_rx
+            {
+                match rx.try_recv() {
+                    Ok(Ok(models)) => {
+                        if models.is_empty() {
+                            lpc.error = Some("Server responded but no models found".to_string());
+                            lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                        } else {
+                            lpc.models = models;
+                            lpc.selected_model = 0;
+                            lpc.phase = crate::tui::dialog::LocalConnectPhase::ModelSelect;
+                        }
+                        lpc.probe_rx = None;
+                    }
+                    Ok(Err(msg)) => {
+                        lpc.error = Some(msg);
+                        lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                        lpc.probe_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        lpc.error = Some("Probe failed unexpectedly".to_string());
+                        lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                        lpc.probe_rx = None;
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
@@ -1468,6 +1556,215 @@ impl App {
                 }
             }
 
+            // Poll roundhouse planner updates (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_update_rx {
+                let mut all_done = false;
+                let mut cancelled = false;
+                while let Ok(update) = rx.try_recv() {
+                    match update {
+                        crate::roundhouse::PlannerUpdate::StatusChanged {
+                            planner_index,
+                            status,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                let tick = self.state.tick;
+                                if planner_index == 0 {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        session.primary_streaming_text.clear();
+                                    }
+                                    session.primary_status = status;
+                                    session.primary_status_tick = tick;
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    s.status = status;
+                                    s.status_tick = tick;
+                                }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::StreamingDelta {
+                            planner_index,
+                            text,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_streaming_text.push_str(&text);
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::TokensUsed {
+                            planner_index: _,
+                            input_tokens: _,
+                            output_tokens: _,
+                        } => {
+                            // Token tracking — rolled up for future cost display
+                        }
+                        crate::roundhouse::PlannerUpdate::PlanComplete {
+                            planner_index,
+                            result,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                match result {
+                                    Ok(plan) => {
+                                        if planner_index == 0 {
+                                            session.primary_plan = Some(plan);
+                                            session.primary_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.plan = Some(plan);
+                                            s.status = crate::roundhouse::PlannerStatus::Done;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let provider_name = if planner_index == 0 {
+                                            session.primary_provider.clone()
+                                        } else {
+                                            session
+                                                .secondaries
+                                                .get(planner_index - 1)
+                                                .map(|s| s.provider_name.clone())
+                                                .unwrap_or_else(|| {
+                                                    format!("planner-{planner_index}")
+                                                })
+                                        };
+
+                                        if planner_index == 0 {
+                                            session.primary_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e.clone());
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.status =
+                                                crate::roundhouse::PlannerStatus::Failed(e.clone());
+                                        }
+
+                                        // Any planner failure cancels the entire roundhouse
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "Roundhouse cancelled: {} failed — {e}",
+                                                provider_name
+                                            ),
+                                        });
+                                        self.state.roundhouse_session = None;
+                                        self.state.roundhouse_model_add = false;
+                                        cancelled = true;
+                                        break;
+                                    }
+                                }
+
+                                if session.all_planners_done() {
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                    let plan_count = session.successful_plans().len();
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All planners complete ({plan_count} plans). Synthesizing..."
+                                        ),
+                                    });
+                                    all_done = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if cancelled {
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                } else if all_done {
+                    self.state.roundhouse_update_rx = None;
+                    self.start_roundhouse_synthesis();
+                }
+            }
+
+            // Poll roundhouse synthesis streaming deltas (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx {
+                let mut synthesis_done = false;
+                loop {
+                    match rx.try_recv() {
+                        Ok(delta) => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                session.synthesis_streaming_text.push_str(&delta);
+                            }
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            synthesis_done = true;
+                            break;
+                        }
+                    }
+                }
+                if synthesis_done {
+                    if let Some(session) = &mut self.state.roundhouse_session {
+                        let plan_text = session.synthesis_streaming_text.clone();
+                        let prompt = session.prompt.clone().unwrap_or_default();
+                        let individual_plans: Vec<(String, String)> = session
+                            .successful_plans()
+                            .iter()
+                            .map(|(p, t)| (p.to_string(), t.to_string()))
+                            .collect();
+                        let individual_refs: Vec<(&str, &str)> = individual_plans
+                            .iter()
+                            .map(|(p, t)| (p.as_str(), t.as_str()))
+                            .collect();
+
+                        session.synthesized_plan = Some(plan_text.clone());
+                        session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
+
+                        // Write plan file
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let full_doc = crate::roundhouse::output::format_plans_document(
+                            &prompt,
+                            &individual_refs,
+                            &plan_text,
+                        );
+                        match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
+                            Ok(path) => {
+                                session.plan_file = Some(path.clone());
+                                self.state.chat_messages.push(ChatMessage::Assistant {
+                                    content: format!(
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Plan saved to `{}`*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        plan_text,
+                                        path.display()
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                self.state.chat_messages.push(ChatMessage::Assistant {
+                                    content: format!(
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        plan_text, e
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    self.state.roundhouse_synthesis_rx = None;
+                }
+            }
+
+            // Poll circuit events (non-blocking)
+            self.poll_circuit_events().await;
+
+            // Roundhouse: transition Executing → Complete when agent goes idle
+            // and there are no queued messages waiting to be sent
+            if matches!(self.state.agent.state, AgentState::Idle)
+                && self.state.message_queue.is_empty()
+                && self
+                    .state
+                    .roundhouse_session
+                    .as_ref()
+                    .is_some_and(|rh| {
+                        rh.phase == crate::roundhouse::RoundhousePhase::Executing
+                    })
+            {
+                if let Some(ref mut rh) = self.state.roundhouse_session {
+                    rh.phase = crate::roundhouse::RoundhousePhase::Complete;
+                }
+            }
+
             if self.state.should_quit {
                 break;
             }
@@ -1575,17 +1872,19 @@ impl App {
             }
         }
 
-        // Ctrl+C dismisses any overlay before entering quit flow
+        // Ctrl+C dismisses any overlay and starts quit timer
         if key == KeyCode::Char('c')
             && modifiers.contains(KeyModifiers::CONTROL)
             && self.state.dialog_stack.has_overlay()
         {
             self.state.dialog_stack.pop();
+            self.request_quit();
             return;
         }
 
         match self.state.dialog_stack.top() {
             Some(DialogKind::ApiKeyInput(_)) => self.handle_key_input_key(key).await,
+            Some(DialogKind::LocalProviderConnect(_)) => self.handle_local_connect_key(key).await,
             Some(DialogKind::FileBrowser(_)) => self.handle_file_browser_key(key),
             Some(DialogKind::McpServerInput(_)) => self.handle_mcp_input_key(key),
             Some(DialogKind::CommandPalette(_)) => self.handle_command_palette_key(key).await,
@@ -1602,6 +1901,15 @@ impl App {
                 }
                 _ => {}
             },
+            Some(DialogKind::RoundhouseProviderPicker(_)) => {
+                self.handle_roundhouse_picker_key(key, modifiers).await;
+            }
+            Some(DialogKind::CircuitsList(_)) => {
+                self.handle_circuits_list_key(key, modifiers);
+            }
+            Some(DialogKind::MigrationChecklist(_)) => {
+                self.handle_migration_checklist_key(key);
+            }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -1725,7 +2033,12 @@ impl App {
                     return;
                 }
                 KeyCode::Enter => {
-                    if let Some(completed) = completion {
+                    // Only apply autocomplete if the input has no arguments
+                    // (no space after the slash command prefix). This lets
+                    // `/circuit 1m "hello"` fall through without being
+                    // replaced by `/circuits`.
+                    let has_args = input_text.trim_start().find(' ').is_some();
+                    if !has_args && let Some(completed) = completion {
                         self.state.input.set(&completed);
                     }
                     self.state.slash_auto = None;
@@ -1829,6 +2142,21 @@ impl App {
                         // /rewind — open checkpoint picker
                         if slash == "rewind" {
                             self.open_rewind_picker();
+                            return;
+                        }
+                        // /roundhouse execute|cancel — subcommands
+                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
+                            self.handle_roundhouse_subcommand(sub.trim());
+                            return;
+                        }
+                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        if let Some(args) = slash.strip_prefix("circuit ") {
+                            self.handle_circuit_command(args.trim()).await;
+                            return;
+                        }
+                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        if let Some(args) = slash.strip_prefix("watch ") {
+                            self.handle_watch_command(args.trim()).await;
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -2150,7 +2478,12 @@ impl App {
                     return;
                 }
                 KeyCode::Enter => {
-                    if let Some(completed) = completion {
+                    // Only apply autocomplete if the input has no arguments
+                    // (no space after the slash command prefix). This lets
+                    // `/circuit 1m "hello"` fall through without being
+                    // replaced by `/circuits`.
+                    let has_args = input_text.trim_start().find(' ').is_some();
+                    if !has_args && let Some(completed) = completion {
                         self.state.input.set(&completed);
                     }
                     self.state.slash_auto = None;
@@ -2420,6 +2753,31 @@ impl App {
                         }
                     }
 
+                    // Roundhouse: intercept Enter when awaiting planning prompt
+                    // Roundhouse: intercept Enter when awaiting planning prompt
+                    if self.state.roundhouse_session.as_ref().is_some_and(|rh| {
+                        rh.phase == crate::roundhouse::types::RoundhousePhase::AwaitingPrompt
+                    }) {
+                        let prompt = self.state.input.content().trim().to_string();
+                        self.state.input.clear();
+                        self.state.user_scrolled_up = false;
+                        if !prompt.is_empty() {
+                            if let Some(ref mut rh) = self.state.roundhouse_session {
+                                rh.prompt = Some(prompt.clone());
+                                rh.phase = crate::roundhouse::types::RoundhousePhase::Planning;
+                            }
+                            self.state.chat_messages.push(ChatMessage::User {
+                                content: format!("[Roundhouse] {prompt}"),
+                                images: vec![],
+                            });
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: "Roundhouse planning started...".to_string(),
+                            });
+                            self.start_roundhouse_planning();
+                        }
+                        return;
+                    }
+
                     let message = self.state.input.content();
                     self.state.history.push(message.clone());
                     self.state.history.save();
@@ -2549,6 +2907,21 @@ impl App {
                         if slash == "handoff" || slash.starts_with("handoff ") {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
                             self.handle_handoff_command(args).await;
+                            return;
+                        }
+                        // /roundhouse execute|cancel — subcommands
+                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
+                            self.handle_roundhouse_subcommand(sub.trim());
+                            return;
+                        }
+                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        if let Some(args) = slash.strip_prefix("circuit ") {
+                            self.handle_circuit_command(args.trim()).await;
+                            return;
+                        }
+                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        if let Some(args) = slash.strip_prefix("watch ") {
+                            self.handle_watch_command(args.trim()).await;
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -2870,6 +3243,7 @@ impl App {
             KeyCode::Esc => {
                 self.state.slash_auto = None;
                 self.state.input.clear();
+                self.state.roundhouse_model_add = false;
             }
             KeyCode::Up => {
                 if let Some(auto) = self.state.slash_auto.as_mut() {
@@ -3089,9 +3463,30 @@ impl App {
                             .map(|(_, m)| (m.supports_tools, m.supports_vision))
                     })
                     .unwrap_or((true, false));
+                // Build display name for roundhouse before clearing slash_auto
+                let display_for_roundhouse = selection.as_ref().map(|(provider, model_id)| {
+                    let display = crate::provider::catalog::by_id(provider)
+                        .map(|e| e.display_name.to_string())
+                        .unwrap_or_else(|| provider.clone());
+                    (provider.clone(), display, model_id.clone())
+                });
                 self.state.slash_auto = None;
                 self.state.input.clear();
-                if let Some((provider, model_id)) = selection {
+                if self.state.roundhouse_model_add {
+                    self.state.roundhouse_model_add = false;
+                    if let Some((provider_id, display_name, model_id)) = display_for_roundhouse
+                        && let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                            self.state.dialog_stack.top_mut()
+                    {
+                        picker
+                            .secondaries
+                            .push(crate::tui::dialog::RoundhouseSecondary {
+                                provider_id,
+                                display_name,
+                                model: model_id,
+                            });
+                    }
+                } else if let Some((provider, model_id)) = selection {
                     self.state.model_supports_tools = supports_tools;
                     self.state.model_supports_vision = supports_vision;
                     self.select_model(&provider, &model_id);
@@ -3112,14 +3507,43 @@ impl App {
                 if let Some(provider_id) = selected_id {
                     self.state.slash_auto = None;
                     self.state.input.clear();
-                    // Always show key input so user can add, update, or clear their key
-                    let has_existing = self.state.config.keys.get(&provider_id).is_some();
-                    self.state
-                        .dialog_stack
-                        .push(DialogKind::ApiKeyInput(KeyInputState::new(
-                            provider_id,
-                            has_existing,
-                        )));
+
+                    // Local providers use address+probe flow instead of API key
+                    if crate::provider::catalog::by_id(&provider_id)
+                        .map(|p| p.is_local())
+                        .unwrap_or(false)
+                    {
+                        let entry = crate::provider::catalog::by_id(&provider_id).unwrap();
+                        let server_type = match provider_id.as_str() {
+                            "ollama" => crate::provider::local::LocalServerType::Ollama,
+                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
+                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
+                            _ => crate::provider::local::LocalServerType::Custom,
+                        };
+                        self.state
+                            .dialog_stack
+                            .push(DialogKind::LocalProviderConnect(
+                                crate::tui::dialog::LocalProviderConnectState {
+                                    provider_id: provider_id.clone(),
+                                    provider_name: entry.display_name.to_string(),
+                                    address: server_type.default_address().to_string(),
+                                    models: vec![],
+                                    selected_model: 0,
+                                    phase: crate::tui::dialog::LocalConnectPhase::Address,
+                                    error: None,
+                                    probe_rx: None,
+                                },
+                            ));
+                    } else {
+                        // Always show key input so user can add, update, or clear their key
+                        let has_existing = self.state.config.keys.get(&provider_id).is_some();
+                        self.state
+                            .dialog_stack
+                            .push(DialogKind::ApiKeyInput(KeyInputState::new(
+                                provider_id,
+                                has_existing,
+                            )));
+                    }
                 }
             }
             DropdownMode::McpServers { servers } => {
@@ -3261,6 +3685,35 @@ impl App {
                                         .get_or_insert_with(Default::default)
                                         .max_session_cost = new_max;
                                     crate::config::save_behavior_max_session_cost(new_max);
+                                }
+                                "migrate" => {
+                                    if item.value != "(none)" {
+                                        let platform_label = item.value.clone();
+                                        let platform = crate::migrate::SourcePlatform::all()
+                                            .into_iter()
+                                            .find(|p| p.label() == platform_label);
+                                        if let Some(platform) = platform {
+                                            let checklist =
+                                                crate::tui::dialog::build_migration_checklist(
+                                                    platform,
+                                                );
+                                            if checklist.items.is_empty() {
+                                                self.state.chat_messages.push(
+                                                    ChatMessage::System {
+                                                        content: format!(
+                                                            "No importable items found for {}.",
+                                                            platform_label
+                                                        ),
+                                                    },
+                                                );
+                                            } else {
+                                                self.state.dialog_stack.push(
+                                                    DialogKind::MigrationChecklist(checklist),
+                                                );
+                                            }
+                                        }
+                                        item.value = "(none)".to_string();
+                                    }
                                 }
                                 _ => {}
                             }
@@ -3594,6 +4047,199 @@ impl App {
         }
     }
 
+    async fn handle_roundhouse_picker_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // If the model dropdown is open (from pressing 'a'), route keys there first
+        if self
+            .state
+            .slash_auto
+            .as_ref()
+            .map(|a| a.is_picker())
+            .unwrap_or(false)
+        {
+            self.handle_picker_key(key).await;
+            return;
+        }
+
+        match key {
+            KeyCode::Esc => {
+                self.state.roundhouse_session = None;
+                self.state.roundhouse_model_add = false;
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                    && picker.selected > 0
+                {
+                    picker.selected -= 1;
+                }
+            }
+            KeyCode::Down if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    let count = picker.secondaries.len();
+                    if count > 0 && picker.selected + 1 < count {
+                        picker.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                // Open model dropdown — when a model is selected, add it as a secondary
+                self.state.roundhouse_model_add = true;
+                self.open_model_dropdown().await;
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    self.state.dialog_stack.top_mut()
+                    && !picker.secondaries.is_empty()
+                {
+                    picker.secondaries.remove(picker.selected);
+                    if picker.selected > 0 && picker.selected >= picker.secondaries.len() {
+                        picker.selected = picker.secondaries.len().saturating_sub(1);
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                // Collect secondaries before mutating
+                let secondaries: Vec<(String, String)> =
+                    if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                        self.state.dialog_stack.top()
+                    {
+                        picker
+                            .secondaries
+                            .iter()
+                            .map(|s| (s.provider_id.clone(), s.model.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                if !secondaries.is_empty() {
+                    if let Some(session) = &mut self.state.roundhouse_session {
+                        for (id, model) in &secondaries {
+                            session.add_secondary(id.clone(), model.clone());
+                        }
+                        session.phase = crate::roundhouse::types::RoundhousePhase::AwaitingPrompt;
+                    }
+                    self.state.dialog_stack.pop();
+                    self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "Roundhouse: {} secondary model(s) selected. Enter your planning prompt.",
+                            secondaries.len()
+                        ),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_circuits_list_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        match key {
+            KeyCode::Esc => {
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up if modifiers == KeyModifiers::NONE => {
+                if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top_mut()
+                    && list_state.selected > 0
+                {
+                    list_state.selected -= 1;
+                }
+            }
+            KeyCode::Down if modifiers == KeyModifiers::NONE => {
+                let count = self.state.circuit_manager.active_count();
+                if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top_mut()
+                    && list_state.selected + 1 < count
+                {
+                    list_state.selected += 1;
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                let selected = if let Some(DialogKind::CircuitsList(list_state)) =
+                    self.state.dialog_stack.top()
+                {
+                    list_state.selected
+                } else {
+                    return;
+                };
+                let circuit_id = self
+                    .state
+                    .circuit_manager
+                    .circuits
+                    .get(selected)
+                    .map(|h| h.circuit.id.clone());
+                if let Some(id) = circuit_id {
+                    self.state.circuit_manager.stop_circuit(&id);
+                    if let Some(DialogKind::CircuitsList(list_state)) =
+                        self.state.dialog_stack.top_mut()
+                        && list_state.selected > 0
+                    {
+                        list_state.selected -= 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_migration_checklist_key(&mut self, key: KeyCode) {
+        use crate::tui::dialog::MigrationPhase;
+
+        let checklist = match self.state.dialog_stack.top_mut() {
+            Some(DialogKind::MigrationChecklist(c)) => c,
+            _ => return,
+        };
+
+        match &checklist.phase {
+            MigrationPhase::Checklist => match key {
+                KeyCode::Up => {
+                    if checklist.selected > 0 {
+                        checklist.selected -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if !checklist.items.is_empty() && checklist.selected < checklist.items.len() - 1
+                    {
+                        checklist.selected += 1;
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(item) = checklist.items.get_mut(checklist.selected) {
+                        item.toggled = !item.toggled;
+                    }
+                }
+                KeyCode::Enter => {
+                    let any_toggled = checklist.items.iter().any(|i| i.toggled);
+                    if any_toggled {
+                        checklist.phase = MigrationPhase::Preview;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                _ => {}
+            },
+            MigrationPhase::Preview => match key {
+                KeyCode::Enter => {
+                    let result = crate::migrate::converter::apply_migration(&checklist.items);
+                    checklist.phase = MigrationPhase::Done(result.format_summary());
+                }
+                KeyCode::Esc => {
+                    checklist.phase = MigrationPhase::Checklist;
+                }
+                _ => {}
+            },
+            MigrationPhase::Done(_) => {
+                self.state.dialog_stack.pop();
+            }
+            MigrationPhase::Applying => {}
+        }
+    }
+
     async fn handle_key_input_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc => {
@@ -3659,6 +4305,169 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    async fn handle_local_connect_key(&mut self, key: KeyCode) {
+        use crate::tui::dialog::LocalConnectPhase;
+
+        let phase = match self.state.dialog_stack.top() {
+            Some(DialogKind::LocalProviderConnect(state)) => match state.phase {
+                LocalConnectPhase::Address => 0u8,
+                LocalConnectPhase::Probing => 1,
+                LocalConnectPhase::ModelSelect => 2,
+            },
+            _ => return,
+        };
+
+        match phase {
+            // Address phase
+            0 => match key {
+                KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                KeyCode::Enter => {
+                    // Spawn async probe, transition to Probing
+                    let address = match self.state.dialog_stack.top() {
+                        Some(DialogKind::LocalProviderConnect(s)) => s.address.clone(),
+                        _ => return,
+                    };
+                    if address.is_empty() {
+                        if let Some(DialogKind::LocalProviderConnect(s)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            s.error = Some("Address cannot be empty".to_string());
+                        }
+                        return;
+                    }
+                    let provider_id = match self.state.dialog_stack.top() {
+                        Some(DialogKind::LocalProviderConnect(s)) => s.provider_id.clone(),
+                        _ => return,
+                    };
+                    let server_type = match provider_id.as_str() {
+                        "ollama" => crate::provider::local::LocalServerType::Ollama,
+                        "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
+                        "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
+                        _ => crate::provider::local::LocalServerType::Custom,
+                    };
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let addr = address.clone();
+                    tokio::spawn(async move {
+                        match crate::provider::local::probe_server(&addr, &server_type).await {
+                            Some(models) => {
+                                let _ = tx.send(Ok(models));
+                            }
+                            None => {
+                                let _ = tx.send(Err(format!("Could not connect to {addr}")));
+                            }
+                        }
+                    });
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        s.phase = LocalConnectPhase::Probing;
+                        s.error = None;
+                        s.probe_rx = Some(rx);
+                    }
+                }
+                _ => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        match key {
+                            KeyCode::Backspace => {
+                                s.address.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                s.address.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            },
+            // Probing phase
+            1 => {
+                if key == KeyCode::Esc
+                    && let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                {
+                    s.phase = LocalConnectPhase::Address;
+                    s.probe_rx = None;
+                }
+            }
+            // ModelSelect phase
+            2 => match key {
+                KeyCode::Esc => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        s.phase = LocalConnectPhase::Address;
+                        s.models.clear();
+                        s.selected_model = 0;
+                    }
+                }
+                KeyCode::Up => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                        && s.selected_model > 0
+                    {
+                        s.selected_model -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if let Some(DialogKind::LocalProviderConnect(s)) =
+                        self.state.dialog_stack.top_mut()
+                        && s.selected_model + 1 < s.models.len()
+                    {
+                        s.selected_model += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    // Extract data before mutating
+                    let (provider_id, address, model_name, provider_name) =
+                        match self.state.dialog_stack.top() {
+                            Some(DialogKind::LocalProviderConnect(s)) => {
+                                let model =
+                                    s.models.get(s.selected_model).cloned().unwrap_or_default();
+                                (
+                                    s.provider_id.clone(),
+                                    s.address.clone(),
+                                    model,
+                                    s.provider_name.clone(),
+                                )
+                            }
+                            _ => return,
+                        };
+
+                    if model_name.is_empty() {
+                        return;
+                    }
+
+                    // Save local provider config
+                    let local_config = crate::config::schema::LocalProviderConfig {
+                        provider_type: provider_id.clone(),
+                        address: address.clone(),
+                        model: Some(model_name.clone()),
+                        display_name: Some(provider_name.clone()),
+                    };
+                    crate::config::save_local_provider(&provider_id, &local_config);
+
+                    // Update in-memory config so connect_provider can find it
+                    self.state
+                        .config
+                        .local_providers
+                        .insert(provider_id.clone(), local_config);
+
+                    // Connect provider
+                    self.connect_provider(&provider_id).await;
+
+                    // Close all overlays
+                    self.state.dialog_stack.clear();
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 
@@ -4020,6 +4829,21 @@ impl App {
             }
         } else {
             error = Some("No provider connected. Use /connect first.".to_string());
+        }
+        // Add models from local providers
+        for (name, local_cfg) in &self.state.config.local_providers {
+            if let Some(ref model) = local_cfg.model {
+                models.push((
+                    name.clone(),
+                    crate::provider::ModelInfo {
+                        id: model.clone(),
+                        name: model.clone(),
+                        context_window: None,
+                        supports_tools: true,
+                        supports_vision: false,
+                    },
+                ));
+            }
         }
         // Cache context windows from provider API for models not in the static table
         let cw_entries: Vec<(String, Option<u32>)> = models
@@ -5121,6 +5945,159 @@ impl App {
         }
     }
 
+    /// Poll circuit events and handle TickStarted by spawning LLM execution,
+    /// and TickCompleted/Error by pushing messages to the chat.
+    async fn poll_circuit_events(&mut self) {
+        use crate::circuits::runner::CircuitEvent;
+        use crate::provider::{Message, StreamEvent};
+        use futures::StreamExt;
+
+        // Collect pending events without holding a borrow on circuit_manager
+        let mut events = Vec::new();
+        while let Ok(event) = self.state.circuit_manager.event_rx.try_recv() {
+            events.push(event);
+        }
+
+        for event in events {
+            match event {
+                CircuitEvent::TickStarted { circuit_id } => {
+                    // Look up circuit info to get prompt/provider/model
+                    let circuit_info = self
+                        .state
+                        .circuit_manager
+                        .get_circuit(&circuit_id)
+                        .map(|c| (c.prompt.clone(), c.provider.clone(), c.model.clone()));
+
+                    let Some((prompt, provider_name, model)) = circuit_info else {
+                        continue;
+                    };
+
+                    // Resolve provider — skip tick if provider unavailable
+                    let provider = match self
+                        .state
+                        .providers
+                        .get_provider(Some(&provider_name), Some(&model))
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = self
+                                .state
+                                .circuit_manager
+                                .event_tx
+                                .send(CircuitEvent::Error {
+                                    circuit_id: circuit_id.clone(),
+                                    error: format!("Provider error: {e}"),
+                                });
+                            continue;
+                        }
+                    };
+
+                    // Spawn LLM execution on a background task
+                    let event_tx = self.state.circuit_manager.event_tx.clone();
+                    tokio::spawn(async move {
+                        let messages = vec![
+                            Message {
+                                role: "system".to_string(),
+                                content: serde_json::json!(
+                                    "You are running a scheduled task. Be concise."
+                                ),
+                            },
+                            Message {
+                                role: "user".to_string(),
+                                content: serde_json::json!(prompt),
+                            },
+                        ];
+
+                        let mut stream = provider.stream(&messages, &[]);
+                        let mut response = String::new();
+                        let mut input_tokens: u32 = 0;
+                        let mut output_tokens: u32 = 0;
+
+                        while let Some(event_result) = stream.next().await {
+                            match event_result {
+                                Ok(StreamEvent::TextDelta(text)) => {
+                                    response.push_str(&text);
+                                }
+                                Ok(StreamEvent::Done {
+                                    input_tokens: it,
+                                    output_tokens: ot,
+                                    ..
+                                }) => {
+                                    input_tokens = it.unwrap_or(0);
+                                    output_tokens = ot.unwrap_or(0);
+                                    break;
+                                }
+                                Ok(StreamEvent::Error(e)) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: e,
+                                    });
+                                    return;
+                                }
+                                Ok(StreamEvent::ProviderError { message, .. }) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: message,
+                                    });
+                                    return;
+                                }
+                                Ok(
+                                    StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCall { .. },
+                                ) => {}
+                                Err(e) => {
+                                    let _ = event_tx.send(CircuitEvent::Error {
+                                        circuit_id: circuit_id.clone(),
+                                        error: e.to_string(),
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+
+                        let tokens_used = (input_tokens + output_tokens) as u64;
+                        let _ = event_tx.send(CircuitEvent::TickCompleted {
+                            circuit_id,
+                            output: response,
+                            cost: 0.0,
+                            tokens_used,
+                            success: true,
+                        });
+                    });
+                }
+                CircuitEvent::TickCompleted {
+                    circuit_id, output, ..
+                } => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "\u{27f3} Circuit {}: {}",
+                            &circuit_id[..8.min(circuit_id.len())],
+                            output
+                        ),
+                    });
+                    // Increment run count
+                    if let Some(handle) = self
+                        .state
+                        .circuit_manager
+                        .circuits
+                        .iter_mut()
+                        .find(|h| h.circuit.id == circuit_id)
+                    {
+                        handle.circuit.run_count += 1;
+                    }
+                }
+                CircuitEvent::Error { circuit_id, error } => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!(
+                            "Circuit {} error: {}",
+                            &circuit_id[..8.min(circuit_id.len())],
+                            error
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     /// Cancel all active agent operations. Called when Escape is pressed
     /// and the agent is not idle.
     fn cancel_all_operations(&mut self) {
@@ -5986,6 +6963,236 @@ impl App {
         }
     }
 
+    /// Spawn parallel planner tasks for Roundhouse mode.
+    fn start_roundhouse_planning(&mut self) {
+        let session = match self.state.roundhouse_session.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let prompt = match session.prompt.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let timeout = session.config.planning_timeout_secs;
+
+        // Get read-only tool subset
+        let tools =
+            crate::roundhouse::planner::planning_tool_subset(self.state.tools.definitions());
+
+        let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state.roundhouse_update_rx = Some(update_rx);
+
+        // Spawn primary planner (index 0)
+        if let Ok(primary_provider) = self.state.providers.get_provider(
+            Some(&session.primary_provider),
+            Some(&session.primary_model),
+        ) {
+            let tx = update_tx.clone();
+            let p = prompt.clone();
+            let t = tools.clone();
+            tokio::spawn(async move {
+                let result = crate::roundhouse::planner::run_planner(
+                    primary_provider,
+                    p,
+                    t,
+                    timeout,
+                    tx.clone(),
+                    0,
+                )
+                .await;
+                let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                    planner_index: 0,
+                    result,
+                });
+            });
+        }
+
+        // Spawn secondary planners (index 1, 2, ...)
+        let secondaries: Vec<(usize, String, String)> = session
+            .secondaries
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
+            .collect();
+
+        for (i, provider_name, model_name) in secondaries {
+            if let Ok(provider) = self
+                .state
+                .providers
+                .get_provider(Some(&provider_name), Some(&model_name))
+            {
+                let tx = update_tx.clone();
+                let p = prompt.clone();
+                let t = tools.clone();
+                let idx = i + 1;
+                tokio::spawn(async move {
+                    let result = crate::roundhouse::planner::run_planner(
+                        provider,
+                        p,
+                        t,
+                        timeout,
+                        tx.clone(),
+                        idx,
+                    )
+                    .await;
+                    let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                        planner_index: idx,
+                        result,
+                    });
+                });
+            } else {
+                // Mark as failed if we can't create the provider
+                if let Some(ref mut session) = self.state.roundhouse_session
+                    && let Some(s) = session.secondaries.get_mut(i)
+                {
+                    s.status = crate::roundhouse::PlannerStatus::Failed(format!(
+                        "Could not create provider '{provider_name}'"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Handle `/roundhouse execute` and `/roundhouse cancel` subcommands.
+    fn handle_roundhouse_subcommand(&mut self, sub: &str) {
+        match sub {
+            "execute" => {
+                if let Some(ref session) = self.state.roundhouse_session {
+                    if session.phase == crate::roundhouse::RoundhousePhase::Reviewing {
+                        let plan = session.synthesized_plan.clone().unwrap_or_default();
+                        let msg = format!(
+                            "Execute the following implementation plan now. Start implementing immediately — read the relevant files, make the code changes, and run any commands specified. Do not just describe what you would do; actually do it step by step using your tools.\n\n{plan}"
+                        );
+                        self.state.roundhouse_session.as_mut().unwrap().phase =
+                            crate::roundhouse::RoundhousePhase::Executing;
+                        // Queue the plan for the agent to execute
+                        self.state.message_queue.push_back(msg);
+                    } else {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!(
+                                "Cannot execute: roundhouse is in {:?} phase (expected Reviewing).",
+                                session.phase
+                            ),
+                        });
+                    }
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
+            "cancel" => {
+                if self.state.roundhouse_session.is_some() {
+                    self.state.roundhouse_session = None;
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_model_add = false;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Roundhouse cancelled.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
+            "clear" => {
+                if self.state.roundhouse_session.is_some() {
+                    self.state.roundhouse_session = None;
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_model_add = false;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Roundhouse session cleared.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "No active roundhouse session.".to_string(),
+                    });
+                }
+            }
+            other => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!(
+                        "Unknown roundhouse subcommand: `{other}`. Use `execute`, `cancel`, or `clear`."
+                    ),
+                });
+            }
+        }
+    }
+
+    /// Send all collected plans to the primary provider for synthesis.
+    fn start_roundhouse_synthesis(&mut self) {
+        let session = match self.state.roundhouse_session.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let plans = session.successful_plans();
+        if plans.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "No successful plans to synthesize.".to_string(),
+            });
+            if let Some(ref mut s) = self.state.roundhouse_session {
+                s.phase = crate::roundhouse::RoundhousePhase::Cancelled;
+            }
+            return;
+        }
+
+        let prompt = session.prompt.clone().unwrap_or_default();
+        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans);
+
+        let provider = match self.state.providers.get_provider(
+            Some(&session.primary_provider),
+            Some(&session.primary_model),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to create provider for synthesis: {e}"),
+                });
+                return;
+            }
+        };
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Build messages: system prompt as system message, then user asks to synthesize
+        let messages = vec![
+            crate::provider::Message {
+                role: "system".to_string(),
+                content: serde_json::json!(system),
+            },
+            crate::provider::Message {
+                role: "user".to_string(),
+                content: serde_json::json!(
+                    "Synthesize the plans above into a single unified implementation plan."
+                ),
+            },
+        ];
+
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut stream = provider.stream(&messages, &[]);
+
+            while let Some(event_result) = stream.next().await {
+                match event_result {
+                    Ok(crate::provider::StreamEvent::TextDelta(delta)) => {
+                        let _ = tx.send(delta);
+                    }
+                    Ok(crate::provider::StreamEvent::Error(_))
+                    | Ok(crate::provider::StreamEvent::ProviderError { .. })
+                    | Ok(crate::provider::StreamEvent::Done { .. }) => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            // tx drops here, signalling completion
+        });
+
+        self.state.roundhouse_synthesis_rx = Some(rx);
+    }
+
     /// Start the LLM-guided skill creation after name and goal are known.
     fn start_skill_creation(&mut self, name: String, goal: String) {
         if !self.require_provider() {
@@ -6256,6 +7463,18 @@ impl App {
                         .collect(),
                 ),
             },
+            {
+                let mut migrate_choices = vec!["(none)".to_string()];
+                for platform in crate::migrate::SourcePlatform::all() {
+                    migrate_choices.push(platform.label().to_string());
+                }
+                crate::tui::slash_auto::SettingsItem {
+                    key: "migrate".to_string(),
+                    label: "Migrate from...".to_string(),
+                    value: "(none)".to_string(),
+                    kind: crate::tui::slash_auto::SettingsKind::Choice(migrate_choices),
+                }
+            },
         ];
         self.state.slash_auto = Some(crate::tui::slash_auto::SlashAutoState::with_settings(items));
         self.state.input.clear();
@@ -6475,6 +7694,212 @@ impl App {
             memory_config.observation_retention_days,
         );
     }
+
+    async fn handle_circuit_command(&mut self, args: &str) {
+        // /circuit stop <id>
+        if let Some(id) = args.strip_prefix("stop ") {
+            let id = id.trim();
+            if id == "all" || id == "-all" {
+                let count = self.state.circuit_manager.active_count();
+                self.state.circuit_manager.stop_all();
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Stopped {} circuit(s).", count),
+                });
+            } else if self.state.circuit_manager.stop_circuit(id) {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Circuit {} stopped.", id),
+                });
+            } else {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Circuit {} not found.", id),
+                });
+            }
+            return;
+        }
+
+        // /circuit stop-all
+        if args == "stop-all" {
+            let count = self.state.circuit_manager.active_count();
+            self.state.circuit_manager.stop_all();
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Stopped {} circuit(s).", count),
+            });
+            return;
+        }
+
+        // /circuit [--persist] <interval> "prompt"
+        match parse_circuit_args(args) {
+            Some((persist, interval_secs, prompt)) => {
+                let kind = if persist {
+                    crate::circuits::CircuitKind::Persistent
+                } else {
+                    crate::circuits::CircuitKind::InSession
+                };
+                let _ = self.create_circuit(&prompt, interval_secs, kind).await;
+            }
+            None => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /circuit [--persist] <interval> \"<prompt>\"\nExamples: /circuit 5m \"check build\" | /circuit --persist 10m \"watch CI\"".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Create a circuit and return its ID on success, or None on failure.
+    async fn create_circuit(
+        &mut self,
+        prompt: &str,
+        interval_secs: u64,
+        kind: crate::circuits::CircuitKind,
+    ) -> Option<String> {
+        let ts = chrono::Utc::now().timestamp_millis() as u64;
+        let mut id = format!("c-{:x}", ts % 0x1000000);
+        // Ensure uniqueness against existing circuits
+        let mut counter = 1u64;
+        while self.state.circuit_manager.circuits.iter().any(|h| h.circuit.id == id) {
+            id = format!("c-{:x}", (ts + counter) % 0x1000000);
+            counter += 1;
+        }
+        let circuit = crate::circuits::Circuit {
+            id: id.clone(),
+            prompt: prompt.to_string(),
+            interval_secs,
+            provider: self.state.active_provider_name.clone(),
+            model: self.state.active_model_name.clone(),
+            permission_mode: "plan".to_string(),
+            kind,
+            status: crate::circuits::CircuitStatus::Active,
+            last_run: None,
+            next_run: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            total_cost: 0.0,
+            run_count: 0,
+        };
+
+        if let Err(e) = self.state.circuit_manager.start_circuit(circuit) {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: format!("Failed to start circuit: {}", e),
+            });
+            return None;
+        }
+
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!(
+                "Circuit started: \"{}\" every {}",
+                prompt,
+                format_duration(interval_secs)
+            ),
+        });
+        Some(id)
+    }
+
+    async fn handle_watch_command(&mut self, args: &str) {
+        // /watch pr <number> [--persist]
+        // /watch mr <number> [--persist]
+        let rest = if let Some(r) = args
+            .strip_prefix("pr ")
+            .or_else(|| args.strip_prefix("mr "))
+        {
+            r
+        } else {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Usage: /watch pr <number> [--persist]".to_string(),
+            });
+            return;
+        };
+
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let pr_number = match parts.first().and_then(|s| s.parse::<u32>().ok()) {
+            Some(n) => n,
+            None => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /watch pr <number> [--persist]".to_string(),
+                });
+                return;
+            }
+        };
+        let persist = parts.contains(&"--persist");
+
+        self.create_watcher(pr_number, persist).await;
+    }
+
+    async fn create_watcher(&mut self, pr_number: u32, persist: bool) {
+        let interval_secs = 180; // 3 minutes
+        let prompt = format!(
+            "Check the status of PR/MR #{pr_number}. Use the check_ci tool and report: is CI passing, failing, or pending? Is the PR merged or closed?"
+        );
+
+        let kind = if persist {
+            crate::circuits::CircuitKind::Persistent
+        } else {
+            crate::circuits::CircuitKind::InSession
+        };
+
+        if let Some(circuit_id) = self.create_circuit(&prompt, interval_secs, kind).await {
+            let watcher = crate::scm::watcher::Watcher {
+                circuit_id,
+                pr_number,
+                title: None,
+                last_status: crate::scm::watcher::WatcherStatus::Unknown,
+            };
+            self.state.active_watchers.push(watcher);
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
+            });
+        }
+    }
+}
+
+/// Parse "5m" → 300, "30s" → 30, "1h" → 3600
+fn parse_interval(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('s') {
+        n.parse().ok()
+    } else if let Some(n) = s.strip_suffix('m') {
+        n.parse::<u64>().ok().map(|n| n * 60)
+    } else if let Some(n) = s.strip_suffix('h') {
+        n.parse::<u64>().ok().map(|n| n * 3600)
+    } else {
+        None
+    }
+}
+
+/// Format seconds back to human-readable: 300 → "5m", 3600 → "1h", 90 → "1m 30s"
+fn format_duration(secs: u64) -> String {
+    if secs >= 3600 && secs.is_multiple_of(3600) {
+        format!("{}h", secs / 3600)
+    } else if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Parse circuit command args: "[--persist] <interval> <prompt>"
+fn parse_circuit_args(args: &str) -> Option<(bool, u64, String)> {
+    let args = args.trim();
+    let persist = args.starts_with("--persist");
+    let rest = if persist {
+        args.strip_prefix("--persist").unwrap().trim()
+    } else {
+        args
+    };
+
+    // First token is interval
+    let space = rest.find(' ')?;
+    let interval_str = &rest[..space];
+    let interval = parse_interval(interval_str)?;
+
+    // Rest is prompt (strip quotes if present)
+    let prompt = rest[space..].trim();
+    let prompt = prompt.trim_matches('"').trim_matches('\'').trim();
+    if prompt.is_empty() {
+        return None;
+    }
+
+    Some((persist, interval, prompt.to_string()))
 }
 
 /// Parse task-like patterns from assistant text output.
@@ -6670,5 +8095,84 @@ mod task_outline_tests {
         let outline2 = TaskOutline::from_tool_input(&restored).unwrap();
         assert_eq!(outline2.tasks[0].content, "Do X");
         assert_eq!(outline2.tasks[0].status, TaskStatus::InProgress);
+    }
+}
+
+#[cfg(test)]
+mod circuit_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_interval_seconds() {
+        assert_eq!(parse_interval("30s"), Some(30));
+    }
+
+    #[test]
+    fn parse_interval_minutes() {
+        assert_eq!(parse_interval("5m"), Some(300));
+    }
+
+    #[test]
+    fn parse_interval_hours() {
+        assert_eq!(parse_interval("1h"), Some(3600));
+    }
+
+    #[test]
+    fn parse_interval_invalid() {
+        assert_eq!(parse_interval("abc"), None);
+        assert_eq!(parse_interval(""), None);
+    }
+
+    #[test]
+    fn parse_circuit_args_basic() {
+        let (persist, interval, prompt) = parse_circuit_args("5m \"check build\"").unwrap();
+        assert!(!persist);
+        assert_eq!(interval, 300);
+        assert_eq!(prompt, "check build");
+    }
+
+    #[test]
+    fn parse_circuit_args_persist() {
+        let (persist, interval, prompt) = parse_circuit_args("--persist 10m \"watch CI\"").unwrap();
+        assert!(persist);
+        assert_eq!(interval, 600);
+        assert_eq!(prompt, "watch CI");
+    }
+
+    #[test]
+    fn parse_circuit_args_no_quotes() {
+        let (_, _, prompt) = parse_circuit_args("5m check build status").unwrap();
+        assert_eq!(prompt, "check build status");
+    }
+
+    #[test]
+    fn parse_circuit_args_missing_prompt() {
+        assert!(parse_circuit_args("5m").is_none());
+        assert!(parse_circuit_args("5m \"\"").is_none());
+    }
+
+    #[test]
+    fn parse_circuit_args_bad_interval() {
+        assert!(parse_circuit_args("abc \"prompt\"").is_none());
+    }
+
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(300), "5m");
+    }
+
+    #[test]
+    fn format_duration_hours() {
+        assert_eq!(format_duration(3600), "1h");
+    }
+
+    #[test]
+    fn format_duration_mixed() {
+        assert_eq!(format_duration(90), "1m 30s");
     }
 }

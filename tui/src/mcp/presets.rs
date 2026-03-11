@@ -50,6 +50,38 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             },
             env_vars_needed: &[],
         },
+        McpPreset {
+            id: "github",
+            display_name: "GitHub",
+            description: "GitHub API integration (issues, PRs, repos)",
+            config: McpServerConfig {
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-github".to_string(),
+                ],
+                env: std::collections::HashMap::new(),
+                disabled: true,
+                removed: false,
+            },
+            env_vars_needed: &["GITHUB_TOKEN"],
+        },
+        McpPreset {
+            id: "gitlab",
+            display_name: "GitLab",
+            description: "GitLab API integration (issues, MRs, repos)",
+            config: McpServerConfig {
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-gitlab".to_string(),
+                ],
+                env: std::collections::HashMap::new(),
+                disabled: true,
+                removed: false,
+            },
+            env_vars_needed: &["GITLAB_TOKEN"],
+        },
     ]
 }
 
@@ -96,6 +128,8 @@ mod tests {
     fn find_preset_by_id() {
         assert!(find_preset("context7").is_some());
         assert!(find_preset("fetch").is_some());
+        assert!(find_preset("github").is_some());
+        assert!(find_preset("gitlab").is_some());
         assert!(find_preset("nonexistent").is_none());
     }
 
@@ -104,5 +138,7 @@ mod tests {
         let ids = preset_ids();
         assert!(ids.contains(&"context7"));
         assert!(ids.contains(&"fetch"));
+        assert!(ids.contains(&"github"));
+        assert!(ids.contains(&"gitlab"));
     }
 }

@@ -306,6 +306,46 @@ pub struct McpServerConfig {
     pub removed: bool,
 }
 
+/// Roundhouse (multi-LLM planning) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RoundhouseSchemaConfig {
+    /// Timeout for each secondary LLM during planning (seconds)
+    pub planning_timeout: Option<u64>,
+    /// Max tokens per secondary LLM during planning
+    pub per_llm_token_budget: Option<u64>,
+}
+
+/// Circuits (scheduled recurring tasks) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CircuitsConfig {
+    /// Max concurrent circuits (default 5)
+    pub max_concurrent: Option<usize>,
+    /// Enable persistent circuits / daemon (default true)
+    pub persistent_enabled: Option<bool>,
+}
+
+/// Configuration for a local LLM provider instance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LocalProviderConfig {
+    /// Provider type: "ollama", "lmstudio", "llamacpp", "custom"
+    pub provider_type: String,
+    /// Server address (e.g. "http://localhost:11434")
+    pub address: String,
+    /// Selected model name
+    pub model: Option<String>,
+    /// Display name for UI
+    pub display_name: Option<String>,
+}
+
+/// SCM (GitHub/GitLab) integration configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScmConfig {
+    /// Preferred SCM provider (auto-detected if not set)
+    pub provider: Option<String>,
+    /// Enable SCM tools (default true)
+    pub enabled: Option<bool>,
+}
+
 /// External service configuration (web search, etc.).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServicesConfig {
@@ -330,6 +370,21 @@ pub struct ServiceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_provider_config_roundtrip() {
+        let cfg = LocalProviderConfig {
+            provider_type: "ollama".to_string(),
+            address: "http://localhost:11434".to_string(),
+            model: Some("llama3".to_string()),
+            display_name: Some("My Ollama".to_string()),
+        };
+        let toml_str = toml::to_string(&cfg).unwrap();
+        let parsed: LocalProviderConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.provider_type, "ollama");
+        assert_eq!(parsed.address, "http://localhost:11434");
+        assert_eq!(parsed.model.as_deref(), Some("llama3"));
+    }
 
     #[test]
     fn parse_memory_config_defaults() {

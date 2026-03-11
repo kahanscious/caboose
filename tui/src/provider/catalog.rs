@@ -19,6 +19,12 @@ pub struct ProviderEntry {
     pub functional: bool,
 }
 
+impl ProviderEntry {
+    pub fn is_local(&self) -> bool {
+        matches!(self.id, "ollama" | "lmstudio" | "llamacpp" | "custom")
+    }
+}
+
 /// Full provider catalog. Popular entries appear first in their section.
 pub const CATALOG: &[ProviderEntry] = &[
     // --- Popular ---
@@ -79,6 +85,39 @@ pub const CATALOG: &[ProviderEntry] = &[
         popular: false,
         functional: true,
     },
+    // --- Local ---
+    ProviderEntry {
+        id: "ollama",
+        display_name: "Ollama",
+        description: "Local — localhost:11434",
+        env_var: "",
+        popular: false,
+        functional: true,
+    },
+    ProviderEntry {
+        id: "lmstudio",
+        display_name: "LM Studio",
+        description: "Local — localhost:1234",
+        env_var: "",
+        popular: false,
+        functional: true,
+    },
+    ProviderEntry {
+        id: "llamacpp",
+        display_name: "llama.cpp",
+        description: "Local — localhost:8080",
+        env_var: "",
+        popular: false,
+        functional: true,
+    },
+    ProviderEntry {
+        id: "custom",
+        display_name: "Custom (OpenAI-compatible)",
+        description: "Local — enter your server address",
+        env_var: "",
+        popular: false,
+        functional: true,
+    },
 ];
 
 /// Get popular providers (for the top section of the picker).
@@ -97,4 +136,40 @@ pub fn other() -> impl Iterator<Item = &'static ProviderEntry> {
 #[allow(dead_code)]
 pub fn by_id(id: &str) -> Option<&'static ProviderEntry> {
     CATALOG.iter().find(|e| e.id == id)
+}
+
+/// Get local providers (no API key required).
+#[allow(dead_code)]
+pub fn local() -> impl Iterator<Item = &'static ProviderEntry> {
+    CATALOG.iter().filter(|e| e.is_local())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_has_local_providers() {
+        let locals: Vec<_> = local().collect();
+        assert_eq!(locals.len(), 4);
+        assert!(locals.iter().any(|p| p.id == "ollama"));
+        assert!(locals.iter().any(|p| p.id == "lmstudio"));
+        assert!(locals.iter().any(|p| p.id == "llamacpp"));
+        assert!(locals.iter().any(|p| p.id == "custom"));
+    }
+
+    #[test]
+    fn local_providers_have_empty_env_var() {
+        for p in local() {
+            assert!(p.env_var.is_empty(), "{} should have empty env_var", p.id);
+        }
+    }
+
+    #[test]
+    fn is_local_correct() {
+        assert!(by_id("ollama").unwrap().is_local());
+        assert!(by_id("custom").unwrap().is_local());
+        assert!(!by_id("anthropic").unwrap().is_local());
+        assert!(!by_id("openai").unwrap().is_local());
+    }
 }

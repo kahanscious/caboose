@@ -63,6 +63,18 @@ pub struct Config {
     /// Lifecycle hooks configuration
     #[serde(default)]
     pub hooks: Option<schema::HooksConfig>,
+    /// Roundhouse (multi-LLM planning) configuration
+    #[serde(default)]
+    pub roundhouse: Option<schema::RoundhouseSchemaConfig>,
+    /// Circuits (scheduled tasks) configuration
+    #[serde(default)]
+    pub circuits: Option<schema::CircuitsConfig>,
+    /// SCM (GitHub/GitLab) integration configuration
+    #[serde(default)]
+    pub scm: Option<schema::ScmConfig>,
+    /// Local LLM provider instances (Ollama, LM Studio, llama.cpp, custom)
+    #[serde(default)]
+    pub local_providers: HashMap<String, schema::LocalProviderConfig>,
 }
 
 impl Config {
@@ -186,6 +198,18 @@ impl Config {
             self_hooks.subagent_stop.extend(other_hooks.subagent_stop);
             self_hooks.setup.extend(other_hooks.setup);
         }
+        if other.roundhouse.is_some() {
+            self.roundhouse = other.roundhouse;
+        }
+        if other.circuits.is_some() {
+            self.circuits = other.circuits;
+        }
+        if other.scm.is_some() {
+            self.scm = other.scm;
+        }
+        for (name, local) in other.local_providers {
+            self.local_providers.insert(name, local);
+        }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {
             let entry = self.providers.entry(name).or_default();
@@ -228,7 +252,9 @@ pub fn save_skills_disabled(disabled: &[String], project_config_exists: bool) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = config.as_table_mut().unwrap();
+    let Some(table) = config.as_table_mut() else {
+        return;
+    };
     let skills = table
         .entry("skills")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -263,7 +289,9 @@ pub fn save_mcp_server_toggle(name: &str, config: &schema::McpServerConfig) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = doc.as_table_mut().unwrap();
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
     let mcp = table
         .entry("mcp")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -302,7 +330,9 @@ pub fn save_behavior_max_session_cost(max_cost: Option<f64>) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = config.as_table_mut().unwrap();
+    let Some(table) = config.as_table_mut() else {
+        return;
+    };
     let behavior = table
         .entry("behavior")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -322,6 +352,44 @@ pub fn save_behavior_max_session_cost(max_cost: Option<f64>) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&path, toml::to_string_pretty(&config).unwrap_or_default());
+}
+
+/// Persist a local provider entry to the global config file.
+///
+/// Creates or replaces the `[local_providers.<name>]` section in the global
+/// config, leaving all other sections untouched.
+pub fn save_local_provider(name: &str, config: &schema::LocalProviderConfig) {
+    let path = match dirs::config_dir() {
+        Some(d) => d.join("caboose").join("config.toml"),
+        None => return,
+    };
+
+    let mut doc: toml::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or(toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
+    let local_providers = table
+        .entry("local_providers")
+        .or_insert(toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .unwrap();
+
+    if let Ok(val) = toml::Value::try_from(config) {
+        local_providers.insert(name.to_string(), val);
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
 }
 
 /// Remove a custom MCP server entry from project config.
@@ -887,7 +955,11 @@ command = "echo started"
         assert_eq!(hooks.session_start.len(), 1);
 
         // ToolRegistry wiring
-        let tool_reg = crate::tools::ToolRegistry::new(tools.registry.as_ref(), None);
+        let tool_reg = crate::tools::ToolRegistry::new(
+            tools.registry.as_ref(),
+            None,
+            &crate::scm::detection::ScmProvider::Unknown,
+        );
         let defs = tool_reg.definitions();
         assert!(defs.iter().any(|d| d.name == "cli_test"));
         assert!(defs.iter().any(|d| d.name == "cli_deploy"));

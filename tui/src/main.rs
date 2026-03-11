@@ -7,6 +7,7 @@ mod agent;
 mod app;
 mod attachment;
 mod checkpoint;
+mod circuits;
 mod clipboard;
 mod config;
 mod hooks;
@@ -14,8 +15,11 @@ mod init;
 mod lsp;
 mod mcp;
 mod memory;
+mod migrate;
 mod provider;
+mod roundhouse;
 mod safety;
+mod scm;
 mod session;
 mod skills;
 mod terminal;
@@ -67,6 +71,21 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run the background circuit daemon
+    Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonAction>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum DaemonAction {
+    /// Start the daemon
+    Start,
+    /// Stop the daemon
+    Stop,
+    /// List active circuits
+    List,
 }
 
 #[tokio::main]
@@ -104,6 +123,85 @@ async fn main() -> Result<()> {
         match command {
             Command::Update { check } => {
                 return update::run(check).await;
+            }
+            Command::Daemon { action } => {
+                match action {
+                    Some(DaemonAction::Start) | None => {
+                        if circuits::daemon::is_daemon_running() {
+                            eprintln!("daemon is already running");
+                            std::process::exit(1);
+                        }
+                        return circuits::daemon::run_daemon().await;
+                    }
+                    Some(DaemonAction::Stop) => {
+                        if !circuits::daemon::is_daemon_running() {
+                            eprintln!("no daemon running");
+                            std::process::exit(1);
+                        }
+                        if let Some(port) = circuits::ipc::read_daemon_port() {
+                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
+                            {
+                                Ok(mut stream) => {
+                                    use circuits::ipc::*;
+                                    let _ =
+                                        send_message(&mut stream, &DaemonRequest::Shutdown).await;
+                                    eprintln!("daemon stop requested");
+                                }
+                                Err(e) => {
+                                    eprintln!("could not connect to daemon: {e}");
+                                    // Stale lockfile — clean it up
+                                    let _ = circuits::daemon::remove_lockfile();
+                                }
+                            }
+                        } else {
+                            eprintln!("could not read daemon port from lockfile");
+                        }
+                        return Ok(());
+                    }
+                    Some(DaemonAction::List) => {
+                        if !circuits::daemon::is_daemon_running() {
+                            eprintln!("no daemon running");
+                            std::process::exit(1);
+                        }
+                        if let Some(port) = circuits::ipc::read_daemon_port() {
+                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
+                            {
+                                Ok(mut stream) => {
+                                    use circuits::ipc::*;
+                                    let _ = send_message(&mut stream, &DaemonRequest::ListCircuits)
+                                        .await;
+                                    let mut reader = tokio::io::BufReader::new(&mut stream);
+                                    match read_message::<DaemonResponse>(&mut reader).await {
+                                        Ok(DaemonResponse::CircuitList(circuits)) => {
+                                            if circuits.is_empty() {
+                                                println!("no circuits");
+                                            } else {
+                                                for c in &circuits {
+                                                    println!(
+                                                        "{} | {:?} | {} | {}s",
+                                                        c.id, c.status, c.prompt, c.interval_secs
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Ok(DaemonResponse::Error(e)) => {
+                                            eprintln!("daemon error: {e}")
+                                        }
+                                        Ok(_) => eprintln!("unexpected response"),
+                                        Err(e) => eprintln!("failed to read response: {e}"),
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("could not connect to daemon: {e}");
+                                    let _ = circuits::daemon::remove_lockfile();
+                                }
+                            }
+                        } else {
+                            eprintln!("could not read daemon port from lockfile");
+                        }
+                        return Ok(());
+                    }
+                }
             }
         }
     }
@@ -214,7 +312,9 @@ async fn run_non_interactive(
 
     let cli_tools_ref = config.tools.as_ref().and_then(|t| t.registry.as_ref());
     let exec_tools_ref = config.tools.as_ref().and_then(|t| t.executable.as_ref());
-    let tool_registry = tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref);
+    let headless_cwd = std::env::current_dir().unwrap_or_default();
+    let headless_scm = crate::scm::detection::detect_provider(&headless_cwd);
+    let tool_registry = tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref, &headless_scm);
     let mcp_config = config.mcp.clone().unwrap_or_default();
     let mut mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
     mcp_manager.connect_all().await;
