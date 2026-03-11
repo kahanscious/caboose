@@ -113,6 +113,14 @@ pub struct State {
     pub init_old_lines: Option<usize>,
     /// /init generation: directory to write CABOOSE.md to.
     pub init_write_root: std::path::PathBuf,
+    /// Absolute canonicalized path of the primary repository root.
+    /// Captured at startup via `canonicalize(current_dir())`.
+    pub primary_root: std::path::PathBuf,
+    /// Receiver for async directory scan results used by WorkspaceAdd dialog.
+    /// `None` when no scan is in progress.
+    pub workspace_scan_rx: Option<tokio::sync::mpsc::Receiver<Vec<String>>>,
+    /// Debounce tracking: last path_input value when scan was triggered.
+    pub workspace_scan_last_query: String,
     /// Screen y → message index for clickable truncation indicators.
     pub truncation_click_zones: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
@@ -685,6 +693,10 @@ impl App {
                 init_had_existing: false,
                 init_old_lines: None,
                 init_write_root: std::path::PathBuf::new(),
+                primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
+                    .unwrap_or_default(),
+                workspace_scan_rx: None,
+                workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
