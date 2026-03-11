@@ -162,8 +162,8 @@ pub struct State {
     /// Receiver for roundhouse planner status updates (parallel planning engine).
     pub roundhouse_update_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
-    /// Receiver for roundhouse synthesis result (primary LLM synthesizes all plans).
-    pub roundhouse_synthesis_rx: Option<tokio::sync::oneshot::Receiver<String>>,
+    /// Receiver for roundhouse synthesis streaming deltas.
+    pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -1150,35 +1150,34 @@ impl App {
             }
 
             // Poll local provider probe result
-            if let Some(DialogKind::LocalProviderConnect(lpc)) =
-                self.state.dialog_stack.top_mut()
-                && let Some(rx) = &mut lpc.probe_rx {
-                    match rx.try_recv() {
-                        Ok(Ok(models)) => {
-                            if models.is_empty() {
-                                lpc.error =
-                                    Some("Server responded but no models found".to_string());
-                                lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
-                            } else {
-                                lpc.models = models;
-                                lpc.selected_model = 0;
-                                lpc.phase = crate::tui::dialog::LocalConnectPhase::ModelSelect;
-                            }
-                            lpc.probe_rx = None;
-                        }
-                        Ok(Err(msg)) => {
-                            lpc.error = Some(msg);
+            if let Some(DialogKind::LocalProviderConnect(lpc)) = self.state.dialog_stack.top_mut()
+                && let Some(rx) = &mut lpc.probe_rx
+            {
+                match rx.try_recv() {
+                    Ok(Ok(models)) => {
+                        if models.is_empty() {
+                            lpc.error = Some("Server responded but no models found".to_string());
                             lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
-                            lpc.probe_rx = None;
+                        } else {
+                            lpc.models = models;
+                            lpc.selected_model = 0;
+                            lpc.phase = crate::tui::dialog::LocalConnectPhase::ModelSelect;
                         }
-                        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                            lpc.error = Some("Probe failed unexpectedly".to_string());
-                            lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
-                            lpc.probe_rx = None;
-                        }
-                        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                        lpc.probe_rx = None;
                     }
+                    Ok(Err(msg)) => {
+                        lpc.error = Some(msg);
+                        lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                        lpc.probe_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        lpc.error = Some("Probe failed unexpectedly".to_string());
+                        lpc.phase = crate::tui::dialog::LocalConnectPhase::Address;
+                        lpc.probe_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
+            }
 
             // Draw UI
             let state = &self.state;
@@ -1567,13 +1566,30 @@ impl App {
                             status,
                         } => {
                             if let Some(ref mut session) = self.state.roundhouse_session {
+                                let tick = self.state.tick;
                                 if planner_index == 0 {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        session.primary_streaming_text.clear();
+                                    }
                                     session.primary_status = status;
+                                    session.primary_status_tick = tick;
                                 } else if let Some(s) =
                                     session.secondaries.get_mut(planner_index - 1)
                                 {
                                     s.status = status;
+                                    s.status_tick = tick;
                                 }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::StreamingDelta {
+                            planner_index,
+                            text,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_streaming_text.push_str(&text);
                             }
                         }
                         crate::roundhouse::PlannerUpdate::TokensUsed {
@@ -1609,21 +1625,19 @@ impl App {
                                                 .secondaries
                                                 .get(planner_index - 1)
                                                 .map(|s| s.provider_name.clone())
-                                                .unwrap_or_else(|| format!("planner-{planner_index}"))
+                                                .unwrap_or_else(|| {
+                                                    format!("planner-{planner_index}")
+                                                })
                                         };
 
                                         if planner_index == 0 {
                                             session.primary_status =
-                                                crate::roundhouse::PlannerStatus::Failed(
-                                                    e.clone(),
-                                                );
+                                                crate::roundhouse::PlannerStatus::Failed(e.clone());
                                         } else if let Some(s) =
                                             session.secondaries.get_mut(planner_index - 1)
                                         {
                                             s.status =
-                                                crate::roundhouse::PlannerStatus::Failed(
-                                                    e.clone(),
-                                                );
+                                                crate::roundhouse::PlannerStatus::Failed(e.clone());
                                         }
 
                                         // Any planner failure cancels the entire roundhouse
@@ -1659,10 +1673,26 @@ impl App {
                 }
             }
 
-            // Poll roundhouse synthesis result (non-blocking)
-            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx
-                && let Ok(plan_text) = rx.try_recv() {
+            // Poll roundhouse synthesis streaming deltas (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_synthesis_rx {
+                let mut synthesis_done = false;
+                loop {
+                    match rx.try_recv() {
+                        Ok(delta) => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                session.synthesis_streaming_text.push_str(&delta);
+                            }
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            synthesis_done = true;
+                            break;
+                        }
+                    }
+                }
+                if synthesis_done {
                     if let Some(session) = &mut self.state.roundhouse_session {
+                        let plan_text = session.synthesis_streaming_text.clone();
                         let prompt = session.prompt.clone().unwrap_or_default();
                         let individual_plans: Vec<(String, String)> = session
                             .successful_plans()
@@ -1684,11 +1714,7 @@ impl App {
                             &individual_refs,
                             &plan_text,
                         );
-                        match crate::roundhouse::output::write_plan_file(
-                            &cwd,
-                            &full_doc,
-                            &prompt,
-                        ) {
+                        match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
                             Ok(path) => {
                                 session.plan_file = Some(path.clone());
                                 self.state.chat_messages.push(ChatMessage::Assistant {
@@ -1711,6 +1737,7 @@ impl App {
                     }
                     self.state.roundhouse_synthesis_rx = None;
                 }
+            }
 
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
@@ -1988,10 +2015,8 @@ impl App {
                     // `/circuit 1m "hello"` fall through without being
                     // replaced by `/circuits`.
                     let has_args = input_text.trim_start().find(' ').is_some();
-                    if !has_args {
-                        if let Some(completed) = completion {
-                            self.state.input.set(&completed);
-                        }
+                    if !has_args && let Some(completed) = completion {
+                        self.state.input.set(&completed);
                     }
                     self.state.slash_auto = None;
                     // Fall through to normal Enter handler to execute the command
@@ -2435,10 +2460,8 @@ impl App {
                     // `/circuit 1m "hello"` fall through without being
                     // replaced by `/circuits`.
                     let has_args = input_text.trim_start().find(' ').is_some();
-                    if !has_args {
-                        if let Some(completed) = completion {
-                            self.state.input.set(&completed);
-                        }
+                    if !has_args && let Some(completed) = completion {
+                        self.state.input.set(&completed);
                     }
                     self.state.slash_auto = None;
                     // Fall through to normal Enter handler to execute the command
@@ -3428,18 +3451,17 @@ impl App {
                 self.state.input.clear();
                 if self.state.roundhouse_model_add {
                     self.state.roundhouse_model_add = false;
-                    if let Some((provider_id, display_name, model_id)) = display_for_roundhouse {
-                        if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
+                    if let Some((provider_id, display_name, model_id)) = display_for_roundhouse
+                        && let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                             self.state.dialog_stack.top_mut()
-                        {
-                            picker.secondaries.push(
-                                crate::tui::dialog::RoundhouseSecondary {
-                                    provider_id,
-                                    display_name,
-                                    model: model_id,
-                                },
-                            );
-                        }
+                    {
+                        picker
+                            .secondaries
+                            .push(crate::tui::dialog::RoundhouseSecondary {
+                                provider_id,
+                                display_name,
+                                model: model_id,
+                            });
                     }
                 } else if let Some((provider, model_id)) = selection {
                     self.state.model_supports_tools = supports_tools;
@@ -3475,18 +3497,20 @@ impl App {
                             "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
                             _ => crate::provider::local::LocalServerType::Custom,
                         };
-                        self.state.dialog_stack.push(DialogKind::LocalProviderConnect(
-                            crate::tui::dialog::LocalProviderConnectState {
-                                provider_id: provider_id.clone(),
-                                provider_name: entry.display_name.to_string(),
-                                address: server_type.default_address().to_string(),
-                                models: vec![],
-                                selected_model: 0,
-                                phase: crate::tui::dialog::LocalConnectPhase::Address,
-                                error: None,
-                                probe_rx: None,
-                            },
-                        ));
+                        self.state
+                            .dialog_stack
+                            .push(DialogKind::LocalProviderConnect(
+                                crate::tui::dialog::LocalProviderConnectState {
+                                    provider_id: provider_id.clone(),
+                                    provider_name: entry.display_name.to_string(),
+                                    address: server_type.default_address().to_string(),
+                                    models: vec![],
+                                    selected_model: 0,
+                                    phase: crate::tui::dialog::LocalConnectPhase::Address,
+                                    error: None,
+                                    probe_rx: None,
+                                },
+                            ));
                     } else {
                         // Always show key input so user can add, update, or clear their key
                         let has_existing = self.state.config.keys.get(&provider_id).is_some();
@@ -3646,13 +3670,23 @@ impl App {
                                             .into_iter()
                                             .find(|p| p.label() == platform_label);
                                         if let Some(platform) = platform {
-                                            let checklist = crate::tui::dialog::build_migration_checklist(platform);
+                                            let checklist =
+                                                crate::tui::dialog::build_migration_checklist(
+                                                    platform,
+                                                );
                                             if checklist.items.is_empty() {
-                                                self.state.chat_messages.push(ChatMessage::System {
-                                                    content: format!("No importable items found for {}.", platform_label),
-                                                });
+                                                self.state.chat_messages.push(
+                                                    ChatMessage::System {
+                                                        content: format!(
+                                                            "No importable items found for {}.",
+                                                            platform_label
+                                                        ),
+                                                    },
+                                                );
                                             } else {
-                                                self.state.dialog_stack.push(DialogKind::MigrationChecklist(checklist));
+                                                self.state.dialog_stack.push(
+                                                    DialogKind::MigrationChecklist(checklist),
+                                                );
                                             }
                                         }
                                         item.value = "(none)".to_string();
@@ -4011,9 +4045,10 @@ impl App {
             KeyCode::Up if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
-                    && picker.selected > 0 {
-                        picker.selected -= 1;
-                    }
+                    && picker.selected > 0
+                {
+                    picker.selected -= 1;
+                }
             }
             KeyCode::Down if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
@@ -4033,14 +4068,11 @@ impl App {
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(DialogKind::RoundhouseProviderPicker(picker)) =
                     self.state.dialog_stack.top_mut()
+                    && !picker.secondaries.is_empty()
                 {
-                    if !picker.secondaries.is_empty() {
-                        picker.secondaries.remove(picker.selected);
-                        if picker.selected > 0
-                            && picker.selected >= picker.secondaries.len()
-                        {
-                            picker.selected = picker.secondaries.len().saturating_sub(1);
-                        }
+                    picker.secondaries.remove(picker.selected);
+                    if picker.selected > 0 && picker.selected >= picker.secondaries.len() {
+                        picker.selected = picker.secondaries.len().saturating_sub(1);
                     }
                 }
             }
@@ -4064,8 +4096,7 @@ impl App {
                         for (id, model) in &secondaries {
                             session.add_secondary(id.clone(), model.clone());
                         }
-                        session.phase =
-                            crate::roundhouse::types::RoundhousePhase::AwaitingPrompt;
+                        session.phase = crate::roundhouse::types::RoundhousePhase::AwaitingPrompt;
                     }
                     self.state.dialog_stack.pop();
                     self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
@@ -4089,17 +4120,19 @@ impl App {
             KeyCode::Up if modifiers == KeyModifiers::NONE => {
                 if let Some(DialogKind::CircuitsList(list_state)) =
                     self.state.dialog_stack.top_mut()
-                    && list_state.selected > 0 {
-                        list_state.selected -= 1;
-                    }
+                    && list_state.selected > 0
+                {
+                    list_state.selected -= 1;
+                }
             }
             KeyCode::Down if modifiers == KeyModifiers::NONE => {
                 let count = self.state.circuit_manager.active_count();
                 if let Some(DialogKind::CircuitsList(list_state)) =
                     self.state.dialog_stack.top_mut()
-                    && list_state.selected + 1 < count {
-                        list_state.selected += 1;
-                    }
+                    && list_state.selected + 1 < count
+                {
+                    list_state.selected += 1;
+                }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
                 let selected = if let Some(DialogKind::CircuitsList(list_state)) =
@@ -4119,9 +4152,10 @@ impl App {
                     self.state.circuit_manager.stop_circuit(&id);
                     if let Some(DialogKind::CircuitsList(list_state)) =
                         self.state.dialog_stack.top_mut()
-                        && list_state.selected > 0 {
-                            list_state.selected -= 1;
-                        }
+                        && list_state.selected > 0
+                    {
+                        list_state.selected -= 1;
+                    }
                 }
             }
             _ => {}
@@ -4144,8 +4178,7 @@ impl App {
                     }
                 }
                 KeyCode::Down => {
-                    if !checklist.items.is_empty()
-                        && checklist.selected < checklist.items.len() - 1
+                    if !checklist.items.is_empty() && checklist.selected < checklist.items.len() - 1
                     {
                         checklist.selected += 1;
                     }
@@ -4301,9 +4334,7 @@ impl App {
                                 let _ = tx.send(Ok(models));
                             }
                             None => {
-                                let _ = tx.send(Err(format!(
-                                    "Could not connect to {addr}"
-                                )));
+                                let _ = tx.send(Err(format!("Could not connect to {addr}")));
                             }
                         }
                     });
@@ -4336,10 +4367,10 @@ impl App {
                 if key == KeyCode::Esc
                     && let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
-                    {
-                        s.phase = LocalConnectPhase::Address;
-                        s.probe_rx = None;
-                    }
+                {
+                    s.phase = LocalConnectPhase::Address;
+                    s.probe_rx = None;
+                }
             }
             // ModelSelect phase
             2 => match key {
@@ -4355,27 +4386,26 @@ impl App {
                 KeyCode::Up => {
                     if let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
-                        && s.selected_model > 0 {
-                            s.selected_model -= 1;
-                        }
+                        && s.selected_model > 0
+                    {
+                        s.selected_model -= 1;
+                    }
                 }
                 KeyCode::Down => {
                     if let Some(DialogKind::LocalProviderConnect(s)) =
                         self.state.dialog_stack.top_mut()
-                        && s.selected_model + 1 < s.models.len() {
-                            s.selected_model += 1;
-                        }
+                        && s.selected_model + 1 < s.models.len()
+                    {
+                        s.selected_model += 1;
+                    }
                 }
                 KeyCode::Enter => {
                     // Extract data before mutating
                     let (provider_id, address, model_name, provider_name) =
                         match self.state.dialog_stack.top() {
                             Some(DialogKind::LocalProviderConnect(s)) => {
-                                let model = s
-                                    .models
-                                    .get(s.selected_model)
-                                    .cloned()
-                                    .unwrap_or_default();
+                                let model =
+                                    s.models.get(s.selected_model).cloned().unwrap_or_default();
                                 (
                                     s.provider_id.clone(),
                                     s.address.clone(),
@@ -4779,13 +4809,16 @@ impl App {
         // Add models from local providers
         for (name, local_cfg) in &self.state.config.local_providers {
             if let Some(ref model) = local_cfg.model {
-                models.push((name.clone(), crate::provider::ModelInfo {
-                    id: model.clone(),
-                    name: model.clone(),
-                    context_window: None,
-                    supports_tools: true,
-                    supports_vision: false,
-                }));
+                models.push((
+                    name.clone(),
+                    crate::provider::ModelInfo {
+                        id: model.clone(),
+                        name: model.clone(),
+                        context_window: None,
+                        supports_tools: true,
+                        supports_vision: false,
+                    },
+                ));
             }
         }
         // Cache context windows from provider API for models not in the static table
@@ -5916,18 +5949,21 @@ impl App {
                     };
 
                     // Resolve provider — skip tick if provider unavailable
-                    let provider = match self.state.providers.get_provider(
-                        Some(&provider_name),
-                        Some(&model),
-                    ) {
+                    let provider = match self
+                        .state
+                        .providers
+                        .get_provider(Some(&provider_name), Some(&model))
+                    {
                         Ok(p) => p,
                         Err(e) => {
-                            let _ = self.state.circuit_manager.event_tx.send(
-                                CircuitEvent::Error {
+                            let _ = self
+                                .state
+                                .circuit_manager
+                                .event_tx
+                                .send(CircuitEvent::Error {
                                     circuit_id: circuit_id.clone(),
                                     error: format!("Provider error: {e}"),
-                                },
-                            );
+                                });
                             continue;
                         }
                     };
@@ -5981,7 +6017,9 @@ impl App {
                                     });
                                     return;
                                 }
-                                Ok(StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCall { .. }) => {}
+                                Ok(
+                                    StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCall { .. },
+                                ) => {}
                                 Err(e) => {
                                     let _ = event_tx.send(CircuitEvent::Error {
                                         circuit_id: circuit_id.clone(),
@@ -6003,9 +6041,7 @@ impl App {
                     });
                 }
                 CircuitEvent::TickCompleted {
-                    circuit_id,
-                    output,
-                    ..
+                    circuit_id, output, ..
                 } => {
                     self.state.chat_messages.push(ChatMessage::System {
                         content: format!(
@@ -6916,9 +6952,8 @@ impl App {
         let timeout = session.config.planning_timeout_secs;
 
         // Get read-only tool subset
-        let tools = crate::roundhouse::planner::planning_tool_subset(
-            self.state.tools.definitions(),
-        );
+        let tools =
+            crate::roundhouse::planner::planning_tool_subset(self.state.tools.definitions());
 
         let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
         self.state.roundhouse_update_rx = Some(update_rx);
@@ -6933,7 +6968,12 @@ impl App {
             let t = tools.clone();
             tokio::spawn(async move {
                 let result = crate::roundhouse::planner::run_planner(
-                    primary_provider, p, t, timeout, tx.clone(), 0,
+                    primary_provider,
+                    p,
+                    t,
+                    timeout,
+                    tx.clone(),
+                    0,
                 )
                 .await;
                 let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
@@ -6963,7 +7003,12 @@ impl App {
                 let idx = i + 1;
                 tokio::spawn(async move {
                     let result = crate::roundhouse::planner::run_planner(
-                        provider, p, t, timeout, tx.clone(), idx,
+                        provider,
+                        p,
+                        t,
+                        timeout,
+                        tx.clone(),
+                        idx,
                     )
                     .await;
                     let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
@@ -6974,11 +7019,12 @@ impl App {
             } else {
                 // Mark as failed if we can't create the provider
                 if let Some(ref mut session) = self.state.roundhouse_session
-                    && let Some(s) = session.secondaries.get_mut(i) {
-                        s.status = crate::roundhouse::PlannerStatus::Failed(
-                            format!("Could not create provider '{provider_name}'"),
-                        );
-                    }
+                    && let Some(s) = session.secondaries.get_mut(i)
+                {
+                    s.status = crate::roundhouse::PlannerStatus::Failed(format!(
+                        "Could not create provider '{provider_name}'"
+                    ));
+                }
             }
         }
     }
@@ -6990,9 +7036,7 @@ impl App {
                 if let Some(ref session) = self.state.roundhouse_session {
                     if session.phase == crate::roundhouse::RoundhousePhase::Reviewing {
                         let plan = session.synthesized_plan.clone().unwrap_or_default();
-                        let msg = format!(
-                            "Execute the following implementation plan:\n\n{plan}"
-                        );
+                        let msg = format!("Execute the following implementation plan:\n\n{plan}");
                         self.state.roundhouse_session.as_mut().unwrap().phase =
                             crate::roundhouse::RoundhousePhase::Executing;
                         // Queue the plan for the agent to execute
@@ -7067,10 +7111,7 @@ impl App {
         }
 
         let prompt = session.prompt.clone().unwrap_or_default();
-        let system = crate::roundhouse::planner::synthesis_system_prompt(
-            &prompt,
-            &plans,
-        );
+        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans);
 
         let provider = match self.state.providers.get_provider(
             Some(&session.primary_provider),
@@ -7085,7 +7126,7 @@ impl App {
             }
         };
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Build messages: system prompt as system message, then user asks to synthesize
         let messages = vec![
@@ -7095,40 +7136,30 @@ impl App {
             },
             crate::provider::Message {
                 role: "user".to_string(),
-                content: serde_json::json!("Synthesize the plans above into a single unified implementation plan."),
+                content: serde_json::json!(
+                    "Synthesize the plans above into a single unified implementation plan."
+                ),
             },
         ];
 
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = provider.stream(&messages, &[]);
-            let mut text = String::new();
 
             while let Some(event_result) = stream.next().await {
                 match event_result {
                     Ok(crate::provider::StreamEvent::TextDelta(delta)) => {
-                        text.push_str(&delta);
+                        let _ = tx.send(delta);
                     }
-                    Ok(crate::provider::StreamEvent::Error(e)) => {
-                        if text.is_empty() {
-                            text = format!("Synthesis error: {e}");
-                        }
-                        break;
-                    }
-                    Ok(crate::provider::StreamEvent::ProviderError { message, .. }) => {
-                        if text.is_empty() {
-                            text = format!("Synthesis error: {message}");
-                        }
-                        break;
-                    }
-                    Ok(crate::provider::StreamEvent::Done { .. }) => {
+                    Ok(crate::provider::StreamEvent::Error(_))
+                    | Ok(crate::provider::StreamEvent::ProviderError { .. })
+                    | Ok(crate::provider::StreamEvent::Done { .. }) => {
                         break;
                     }
                     _ => {}
                 }
             }
-
-            let _ = tx.send(text);
+            // tx drops here, signalling completion
         });
 
         self.state.roundhouse_synthesis_rx = Some(rx);
@@ -7693,10 +7724,7 @@ impl App {
         interval_secs: u64,
         kind: crate::circuits::CircuitKind,
     ) -> Option<String> {
-        let id = format!(
-            "c-{}",
-            chrono::Utc::now().timestamp_millis() % 100_000
-        );
+        let id = format!("c-{}", chrono::Utc::now().timestamp_millis() % 100_000);
         let circuit = crate::circuits::Circuit {
             id: id.clone(),
             prompt: prompt.to_string(),
@@ -7733,7 +7761,10 @@ impl App {
     async fn handle_watch_command(&mut self, args: &str) {
         // /watch pr <number> [--persist]
         // /watch mr <number> [--persist]
-        let rest = if let Some(r) = args.strip_prefix("pr ").or_else(|| args.strip_prefix("mr ")) {
+        let rest = if let Some(r) = args
+            .strip_prefix("pr ")
+            .or_else(|| args.strip_prefix("mr "))
+        {
             r
         } else {
             self.state.chat_messages.push(ChatMessage::Error {
@@ -8067,8 +8098,7 @@ mod circuit_parse_tests {
 
     #[test]
     fn parse_circuit_args_persist() {
-        let (persist, interval, prompt) =
-            parse_circuit_args("--persist 10m \"watch CI\"").unwrap();
+        let (persist, interval, prompt) = parse_circuit_args("--persist 10m \"watch CI\"").unwrap();
         assert!(persist);
         assert_eq!(interval, 600);
         assert_eq!(prompt, "watch CI");

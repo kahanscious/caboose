@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::circuits::types::Circuit;
+use serde::{Deserialize, Serialize};
 
 /// Messages from TUI to Daemon
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,8 +48,7 @@ pub async fn read_message<T: serde::de::DeserializeOwned>(
             "connection closed",
         ));
     }
-    serde_json::from_str(&line)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_str(&line).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 /// Read the daemon port from the lockfile

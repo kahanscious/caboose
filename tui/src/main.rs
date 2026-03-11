@@ -139,10 +139,12 @@ async fn main() -> Result<()> {
                             std::process::exit(1);
                         }
                         if let Some(port) = circuits::ipc::read_daemon_port() {
-                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
+                            {
                                 Ok(mut stream) => {
                                     use circuits::ipc::*;
-                                    let _ = send_message(&mut stream, &DaemonRequest::Shutdown).await;
+                                    let _ =
+                                        send_message(&mut stream, &DaemonRequest::Shutdown).await;
                                     eprintln!("daemon stop requested");
                                 }
                                 Err(e) => {
@@ -162,10 +164,12 @@ async fn main() -> Result<()> {
                             std::process::exit(1);
                         }
                         if let Some(port) = circuits::ipc::read_daemon_port() {
-                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
+                            {
                                 Ok(mut stream) => {
                                     use circuits::ipc::*;
-                                    let _ = send_message(&mut stream, &DaemonRequest::ListCircuits).await;
+                                    let _ = send_message(&mut stream, &DaemonRequest::ListCircuits)
+                                        .await;
                                     let mut reader = tokio::io::BufReader::new(&mut stream);
                                     match read_message::<DaemonResponse>(&mut reader).await {
                                         Ok(DaemonResponse::CircuitList(circuits)) => {
@@ -173,11 +177,16 @@ async fn main() -> Result<()> {
                                                 println!("no circuits");
                                             } else {
                                                 for c in &circuits {
-                                                    println!("{} | {:?} | {} | {}s", c.id, c.status, c.prompt, c.interval_secs);
+                                                    println!(
+                                                        "{} | {:?} | {} | {}s",
+                                                        c.id, c.status, c.prompt, c.interval_secs
+                                                    );
                                                 }
                                             }
                                         }
-                                        Ok(DaemonResponse::Error(e)) => eprintln!("daemon error: {e}"),
+                                        Ok(DaemonResponse::Error(e)) => {
+                                            eprintln!("daemon error: {e}")
+                                        }
                                         Ok(_) => eprintln!("unexpected response"),
                                         Err(e) => eprintln!("failed to read response: {e}"),
                                     }

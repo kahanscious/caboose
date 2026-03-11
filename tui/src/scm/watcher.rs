@@ -13,7 +13,10 @@ pub struct Watcher {
 pub enum WatcherStatus {
     #[default]
     Unknown,
-    Open { ci: CiState, reviews: u32 },
+    Open {
+        ci: CiState,
+        reviews: u32,
+    },
     Merged,
     Closed,
 }

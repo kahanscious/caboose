@@ -1,8 +1,8 @@
-pub mod types;
-pub mod session;
-pub mod planner;
 pub mod output;
+pub mod planner;
+pub mod session;
+pub mod types;
 
-pub use types::*;
-pub use session::RoundhouseSession;
 pub use planner::PlannerUpdate;
+pub use session::RoundhouseSession;
+pub use types::*;

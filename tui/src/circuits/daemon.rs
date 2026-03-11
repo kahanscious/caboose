@@ -32,10 +32,11 @@ pub fn is_daemon_running() -> bool {
         Ok(contents) => {
             // Format: "PID:PORT"
             if let Some(pid_str) = contents.split(':').next()
-                && let Ok(_pid) = pid_str.parse::<u32>() {
-                    // TODO: check if PID is alive (platform-specific)
-                    return true;
-                }
+                && let Ok(_pid) = pid_str.parse::<u32>()
+            {
+                // TODO: check if PID is alive (platform-specific)
+                return true;
+            }
             false
         }
         Err(_) => false,
@@ -64,9 +65,9 @@ pub fn remove_lockfile() -> Result<()> {
 
 /// Run the daemon main loop: TCP listener + circuit scheduler
 pub async fn run_daemon() -> Result<()> {
-    use tokio::net::TcpListener;
     use crate::circuits::storage;
     use rusqlite::Connection;
+    use tokio::net::TcpListener;
 
     let db_path = circuits_db_path();
     let conn = Connection::open(&db_path)?;

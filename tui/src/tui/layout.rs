@@ -438,6 +438,93 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         }
     }
 
+    // Show Roundhouse streaming text in main window (planning + synthesis)
+    if let Some(ref rh) = app.roundhouse_session {
+        let accent = colors.roundhouse;
+
+        // Primary planner streaming
+        if !rh.primary_streaming_text.is_empty() {
+            let still_streaming = matches!(
+                rh.primary_status,
+                crate::roundhouse::PlannerStatus::Streaming
+                    | crate::roundhouse::PlannerStatus::Thinking
+                    | crate::roundhouse::PlannerStatus::UsingTool(_)
+            );
+            msg_boundaries.push((lines.len(), 2u8));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_provider),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled("(planning)", Style::default().fg(colors.text_muted)),
+            ]));
+            let parsed =
+                crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
+            if still_streaming {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+        }
+
+        // Synthesis streaming
+        if !rh.synthesis_streaming_text.is_empty() {
+            let still_synthesizing =
+                matches!(rh.phase, crate::roundhouse::RoundhousePhase::Synthesizing);
+            msg_boundaries.push((lines.len(), 2u8));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_provider),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
+            ]));
+            let parsed =
+                crate::tui::chat::parse_markdown(&rh.synthesis_streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
+            if still_synthesizing {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+            // Show plan file path after synthesis completes
+            if let Some(ref path) = rh.plan_file {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let display = path
+                    .strip_prefix(&cwd)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string();
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Saved to ", Style::default().fg(colors.text_muted)),
+                    Span::styled(display, Style::default().fg(colors.text_secondary).bold()),
+                ]));
+            }
+        }
+    }
+
     // Show streaming text during /init generation
     if app.init_rx.is_some() && !app.init_text.is_empty() {
         msg_boundaries.push((lines.len(), 0u8)); // init generation (other)
@@ -1008,9 +1095,15 @@ fn render_roundhouse_picker(
         .border_style(Style::default().fg(colors.brand));
 
     let primary_label = if let Some(session) = &app.roundhouse_session {
-        format!("Primary: {}/{}", session.primary_provider, session.primary_model)
+        format!(
+            "Primary: {}/{}",
+            session.primary_provider, session.primary_model
+        )
     } else {
-        format!("Primary: {}/{}", app.active_provider_name, app.active_model_name)
+        format!(
+            "Primary: {}/{}",
+            app.active_provider_name, app.active_model_name
+        )
     };
 
     let mut lines: Vec<Line> = vec![
@@ -1172,13 +1265,17 @@ fn render_local_connect(
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(
-                        format!(" {} ", if state.address.is_empty() { " " } else { &state.address }),
+                        format!(
+                            " {} ",
+                            if state.address.is_empty() {
+                                " "
+                            } else {
+                                &state.address
+                            }
+                        ),
                         Style::default().fg(colors.text).bg(colors.bg_hover),
                     ),
-                    Span::styled(
-                        "\u{2588}",
-                        Style::default().fg(colors.brand),
-                    ),
+                    Span::styled("\u{2588}", Style::default().fg(colors.brand)),
                 ]),
             ];
 

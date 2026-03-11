@@ -55,9 +55,7 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
 pub fn detect_installed_platforms() -> Vec<SourcePlatform> {
     SourcePlatform::all()
         .into_iter()
-        .filter(|p| {
-            config_paths(p).iter().any(|path| path.exists())
-        })
+        .filter(|p| config_paths(p).iter().any(|path| path.exists()))
         .collect()
 }
 
@@ -88,16 +86,28 @@ mod tests {
 
     #[test]
     fn config_paths_returns_nonempty() {
-        for platform in &[SourcePlatform::ClaudeCode, SourcePlatform::OpenCode, SourcePlatform::Codex] {
+        for platform in &[
+            SourcePlatform::ClaudeCode,
+            SourcePlatform::OpenCode,
+            SourcePlatform::Codex,
+        ] {
             let paths = config_paths(platform);
-            assert!(!paths.is_empty(), "{:?} should have at least one path", platform);
+            assert!(
+                !paths.is_empty(),
+                "{:?} should have at least one path",
+                platform
+            );
         }
     }
 
     #[test]
     fn claude_code_path_contains_dot_claude() {
         let paths = config_paths(&SourcePlatform::ClaudeCode);
-        assert!(paths.iter().any(|p| p.to_string_lossy().contains(".claude")));
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains(".claude"))
+        );
     }
 
     #[test]

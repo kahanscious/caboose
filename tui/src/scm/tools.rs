@@ -172,7 +172,9 @@ pub fn execute_scm_tool(
             let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let mut cmd = std::process::Command::new("gh");
-            cmd.args(["pr", "create", "--title", title, "--body", body, "--base", base]);
+            cmd.args([
+                "pr", "create", "--title", title, "--body", body, "--base", base,
+            ]);
             if draft {
                 cmd.arg("--draft");
             }
@@ -186,10 +188,14 @@ pub fn execute_scm_tool(
 
             let mut cmd = std::process::Command::new("gh");
             cmd.args([
-                "pr", "list",
-                "--state", state,
-                "--limit", &limit.to_string(),
-                "--json", "number,title,state,author,updatedAt",
+                "pr",
+                "list",
+                "--state",
+                state,
+                "--limit",
+                &limit.to_string(),
+                "--json",
+                "number,title,state,author,updatedAt",
             ]);
             cmd.current_dir(cwd);
             run_command(cmd)
@@ -198,22 +204,35 @@ pub fn execute_scm_tool(
             let pr = args.get("pr").and_then(|v| v.as_u64()).unwrap_or(0);
             let mut cmd = std::process::Command::new("gh");
             cmd.args([
-                "pr", "view", &pr.to_string(),
-                "--json", "number,title,body,state,reviews,comments,additions,deletions,files",
+                "pr",
+                "view",
+                &pr.to_string(),
+                "--json",
+                "number,title,body,state,reviews,comments,additions,deletions,files",
             ]);
             cmd.current_dir(cwd);
             run_command(cmd)
         }
         "merge_pr" => {
             let pr = args.get("pr").and_then(|v| v.as_u64()).unwrap_or(0);
-            let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("merge");
+            let method = args
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("merge");
             let merge_flag = match method {
                 "squash" => "--squash",
                 "rebase" => "--rebase",
                 _ => "--merge",
             };
             let mut cmd = std::process::Command::new("gh");
-            cmd.args(["pr", "merge", &pr.to_string(), merge_flag, "--json", "number,url"]);
+            cmd.args([
+                "pr",
+                "merge",
+                &pr.to_string(),
+                merge_flag,
+                "--json",
+                "number,url",
+            ]);
             cmd.current_dir(cwd);
             run_command(cmd)
         }
@@ -222,11 +241,24 @@ pub fn execute_scm_tool(
         "create_mr" => {
             let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
-            let target = args.get("target").and_then(|v| v.as_str()).unwrap_or("main");
+            let target = args
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main");
             let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let mut cmd = std::process::Command::new("glab");
-            cmd.args(["mr", "create", "--title", title, "--description", body, "--target-branch", target, "--yes"]);
+            cmd.args([
+                "mr",
+                "create",
+                "--title",
+                title,
+                "--description",
+                body,
+                "--target-branch",
+                target,
+                "--yes",
+            ]);
             if draft {
                 cmd.arg("--draft");
             }
@@ -234,14 +266,20 @@ pub fn execute_scm_tool(
             run_command(cmd)
         }
         "list_mrs" => {
-            let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("opened");
+            let state = args
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("opened");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
 
             let mut cmd = std::process::Command::new("glab");
             cmd.args([
-                "mr", "list",
-                "--state", state,
-                "--per-page", &limit.to_string(),
+                "mr",
+                "list",
+                "--state",
+                state,
+                "--per-page",
+                &limit.to_string(),
             ]);
             cmd.current_dir(cwd);
             run_command(cmd)
@@ -255,7 +293,10 @@ pub fn execute_scm_tool(
         }
         "merge_mr" => {
             let mr = args.get("mr").and_then(|v| v.as_u64()).unwrap_or(0);
-            let squash = args.get("squash").and_then(|v| v.as_bool()).unwrap_or(false);
+            let squash = args
+                .get("squash")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let mut cmd = std::process::Command::new("glab");
             cmd.args(["mr", "merge", &mr.to_string()]);
             if squash {
@@ -269,14 +310,20 @@ pub fn execute_scm_tool(
         // ── Shared tool names — route by provider ─────────────────────────
         "list_issues" => match provider {
             ScmProvider::GitLab => {
-                let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("opened");
+                let state = args
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("opened");
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
 
                 let mut cmd = std::process::Command::new("glab");
                 cmd.args([
-                    "issue", "list",
-                    "--state", state,
-                    "--per-page", &limit.to_string(),
+                    "issue",
+                    "list",
+                    "--state",
+                    state,
+                    "--per-page",
+                    &limit.to_string(),
                 ]);
                 if let Some(label) = args.get("label").and_then(|v| v.as_str()) {
                     cmd.args(["--label", label]);
@@ -290,10 +337,14 @@ pub fn execute_scm_tool(
 
                 let mut cmd = std::process::Command::new("gh");
                 cmd.args([
-                    "issue", "list",
-                    "--state", state,
-                    "--limit", &limit.to_string(),
-                    "--json", "number,title,state,labels,assignees",
+                    "issue",
+                    "list",
+                    "--state",
+                    state,
+                    "--limit",
+                    &limit.to_string(),
+                    "--json",
+                    "number,title,state,labels,assignees",
                 ]);
                 if let Some(label) = args.get("label").and_then(|v| v.as_str()) {
                     cmd.args(["--label", label]);
@@ -316,9 +367,22 @@ pub fn execute_scm_tool(
             _ => {
                 let mut cmd = std::process::Command::new("gh");
                 if let Some(pr) = args.get("pr").and_then(|v| v.as_u64()) {
-                    cmd.args(["pr", "checks", &pr.to_string(), "--json", "name,state,conclusion"]);
+                    cmd.args([
+                        "pr",
+                        "checks",
+                        &pr.to_string(),
+                        "--json",
+                        "name,state,conclusion",
+                    ]);
                 } else {
-                    cmd.args(["run", "list", "--limit", "5", "--json", "name,status,conclusion,headBranch"]);
+                    cmd.args([
+                        "run",
+                        "list",
+                        "--limit",
+                        "5",
+                        "--json",
+                        "name,status,conclusion,headBranch",
+                    ]);
                 }
                 cmd.current_dir(cwd);
                 run_command(cmd)
@@ -339,7 +403,9 @@ fn run_command(mut cmd: std::process::Command) -> Result<String, String> {
                 Err(format!("command failed: {stderr}"))
             }
         }
-        Err(e) => Err(format!("failed to execute: {e}. Is the SCM CLI installed and authenticated?")),
+        Err(e) => Err(format!(
+            "failed to execute: {e}. Is the SCM CLI installed and authenticated?"
+        )),
     }
 }
 

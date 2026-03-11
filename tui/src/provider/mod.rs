@@ -261,14 +261,15 @@ impl ProviderRegistry {
             "ollama" | "lmstudio" | "llamacpp" | "custom" => {
                 let local_cfg = self.config.local_providers.get(provider_name);
 
-                let address = local_cfg
-                    .map(|c| c.address.clone())
-                    .unwrap_or_else(|| match provider_name {
-                        "ollama" => "http://localhost:11434".to_string(),
-                        "lmstudio" => "http://localhost:1234".to_string(),
-                        "llamacpp" => "http://localhost:8080".to_string(),
-                        _ => String::new(),
-                    });
+                let address =
+                    local_cfg
+                        .map(|c| c.address.clone())
+                        .unwrap_or_else(|| match provider_name {
+                            "ollama" => "http://localhost:11434".to_string(),
+                            "lmstudio" => "http://localhost:1234".to_string(),
+                            "llamacpp" => "http://localhost:8080".to_string(),
+                            _ => String::new(),
+                        });
 
                 if address.is_empty() {
                     bail!(

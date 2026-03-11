@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// Items discoverable from a Claude Code installation
 #[derive(Debug, Clone)]
@@ -27,16 +27,17 @@ pub fn scan_claude_code(config_dirs: &[PathBuf], project_dir: Option<&Path>) -> 
         if settings_file.exists() {
             result.settings_path = Some(settings_file.clone());
             if let Ok(contents) = std::fs::read_to_string(&settings_file)
-                && let Ok(json) = serde_json::from_str::<Value>(&contents) {
-                    if let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
-                        for (name, config) in servers {
-                            result.mcp_servers.push((name.clone(), config.clone()));
-                        }
-                    }
-                    if let Some(prompt) = json.get("systemPrompt").and_then(|v| v.as_str()) {
-                        result.system_prompt = Some(prompt.to_string());
+                && let Ok(json) = serde_json::from_str::<Value>(&contents)
+            {
+                if let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
+                    for (name, config) in servers {
+                        result.mcp_servers.push((name.clone(), config.clone()));
                     }
                 }
+                if let Some(prompt) = json.get("systemPrompt").and_then(|v| v.as_str()) {
+                    result.system_prompt = Some(prompt.to_string());
+                }
+            }
         }
     }
 

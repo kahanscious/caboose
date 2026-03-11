@@ -22,35 +22,36 @@ pub fn scan_open_code(config_dirs: &[PathBuf]) -> OpenCodeConfig {
         if config_file.exists() {
             result.config_path = Some(config_file.clone());
             if let Ok(text) = std::fs::read_to_string(&config_file)
-                && let Ok(parsed) = serde_json::from_str::<Value>(&text) {
-                    // Extract MCP servers
-                    if let Some(servers) = parsed.get("mcpServers").and_then(|v| v.as_object()) {
-                        for (name, cfg) in servers {
-                            result.mcp_servers.push((name.clone(), cfg.clone()));
-                        }
+                && let Ok(parsed) = serde_json::from_str::<Value>(&text)
+            {
+                // Extract MCP servers
+                if let Some(servers) = parsed.get("mcpServers").and_then(|v| v.as_object()) {
+                    for (name, cfg) in servers {
+                        result.mcp_servers.push((name.clone(), cfg.clone()));
                     }
-                    // Extract custom instructions / system prompt
-                    if let Some(instructions) =
-                        parsed.get("customInstructions").and_then(|v| v.as_str())
-                    {
-                        result.system_prompt = Some(instructions.to_string());
-                    }
-                    if result.system_prompt.is_none()
-                        && let Some(prompt) =
-                            parsed.get("systemPrompt").and_then(|v| v.as_str())
-                        {
-                            result.system_prompt = Some(prompt.to_string());
-                        }
                 }
+                // Extract custom instructions / system prompt
+                if let Some(instructions) =
+                    parsed.get("customInstructions").and_then(|v| v.as_str())
+                {
+                    result.system_prompt = Some(instructions.to_string());
+                }
+                if result.system_prompt.is_none()
+                    && let Some(prompt) = parsed.get("systemPrompt").and_then(|v| v.as_str())
+                {
+                    result.system_prompt = Some(prompt.to_string());
+                }
+            }
         }
 
         // Fall back to instructions.md if no inline prompt found
         if result.system_prompt.is_none() {
             let instructions_file = dir.join("instructions.md");
             if instructions_file.exists()
-                && let Ok(text) = std::fs::read_to_string(&instructions_file) {
-                    result.system_prompt = Some(text);
-                }
+                && let Ok(text) = std::fs::read_to_string(&instructions_file)
+            {
+                result.system_prompt = Some(text);
+            }
         }
     }
 

@@ -446,9 +446,10 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
-            state.roundhouse_session = Some(
-                crate::roundhouse::RoundhouseSession::new(primary_id, primary_model)
-            );
+            state.roundhouse_session = Some(crate::roundhouse::RoundhouseSession::new(
+                primary_id,
+                primary_model,
+            ));
 
             let picker = super::dialog::RoundhousePickerState {
                 secondaries: vec![],
@@ -478,9 +479,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Tools,
         keybind: None,
         slash: Some("watch"),
-        available: |state| {
-            state.scm_provider != crate::scm::detection::ScmProvider::Unknown
-        },
+        available: |state| state.scm_provider != crate::scm::detection::ScmProvider::Unknown,
         execute: |_state| Action::None, // Handled in app.rs
     });
 

@@ -252,7 +252,7 @@ pub fn render(
 
                 // Primary planner
                 let (primary_icon, primary_status_text, primary_color) =
-                    planner_status_parts(&rh.primary_status, &colors, tick);
+                    planner_status_parts(&rh.primary_status, &colors, tick, rh.primary_status_tick);
                 let primary_name = truncate_provider_name(&rh.primary_provider, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -264,31 +264,26 @@ pub fn render(
                         format!("{primary_name:<10} "),
                         Style::default().fg(colors.text_secondary),
                     ),
-                    Span::styled(
-                        primary_status_text,
-                        Style::default().fg(primary_color),
-                    ),
+                    Span::styled(primary_status_text, Style::default().fg(primary_color)),
                 ]));
 
                 // Secondary planners
                 for secondary in &rh.secondaries {
-                    let (icon, status_text, color) =
-                        planner_status_parts(&secondary.status, &colors, tick);
+                    let (icon, status_text, color) = planner_status_parts(
+                        &secondary.status,
+                        &colors,
+                        tick,
+                        secondary.status_tick,
+                    );
                     let name = truncate_provider_name(&secondary.provider_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(
-                            format!("{icon} "),
-                            Style::default().fg(color),
-                        ),
+                        Span::styled(format!("{icon} "), Style::default().fg(color)),
                         Span::styled(
                             format!("{name:<10} "),
                             Style::default().fg(colors.text_secondary),
                         ),
-                        Span::styled(
-                            status_text,
-                            Style::default().fg(color),
-                        ),
+                        Span::styled(status_text, Style::default().fg(color)),
                     ]));
                 }
 
@@ -462,23 +457,28 @@ fn planner_status_parts(
     status: &crate::roundhouse::PlannerStatus,
     colors: &Colors,
     tick: u64,
+    status_tick: u64,
 ) -> (&'static str, String, Color) {
     match status {
         crate::roundhouse::PlannerStatus::Pending => {
             ("\u{25CB}", "pending".to_string(), colors.text_dim)
         }
-        crate::roundhouse::PlannerStatus::Thinking => {
-            ("\u{25CF}", typewriter("thinking", tick), colors.roundhouse)
-        }
-        crate::roundhouse::PlannerStatus::Streaming => {
-            ("\u{25CF}", typewriter("streaming", tick), colors.roundhouse)
-        }
-        crate::roundhouse::PlannerStatus::UsingTool(name) => {
-            ("\u{25CF}", typewriter(name, tick), colors.warning)
-        }
-        crate::roundhouse::PlannerStatus::Done => {
-            ("\u{2713}", "done".to_string(), colors.success)
-        }
+        crate::roundhouse::PlannerStatus::Thinking => (
+            "\u{25CF}",
+            typewriter("thinking", tick, status_tick),
+            colors.roundhouse,
+        ),
+        crate::roundhouse::PlannerStatus::Streaming => (
+            "\u{25CF}",
+            typewriter("streaming", tick, status_tick),
+            colors.roundhouse,
+        ),
+        crate::roundhouse::PlannerStatus::UsingTool(name) => (
+            "\u{25CF}",
+            typewriter(name, tick, status_tick),
+            colors.warning,
+        ),
+        crate::roundhouse::PlannerStatus::Done => ("\u{2713}", "done".to_string(), colors.success),
         crate::roundhouse::PlannerStatus::Failed(_) => {
             ("\u{2717}", "failed".to_string(), colors.error)
         }
@@ -488,10 +488,19 @@ fn planner_status_parts(
     }
 }
 
-/// Typewriter effect: reveal `text` one character at a time.
-fn typewriter(text: &str, tick: u64) -> String {
+/// Looping typewriter effect: reveal `text` one character at a time, then
+/// pause briefly, then restart. Loops continuously until the status changes.
+fn typewriter(text: &str, tick: u64, status_tick: u64) -> String {
+    let elapsed = tick.saturating_sub(status_tick);
     let chars: Vec<char> = text.chars().collect();
-    let reveal = ((tick / 2) as usize).min(chars.len());
+    let len = chars.len();
+    if len == 0 {
+        return String::new();
+    }
+    // Each cycle: reveal chars one per 2 ticks, then hold for 6 ticks
+    let cycle_len = (len * 2 + 6) as u64;
+    let pos = elapsed % cycle_len;
+    let reveal = ((pos / 2) as usize).min(len);
     chars[..reveal].iter().collect()
 }
 

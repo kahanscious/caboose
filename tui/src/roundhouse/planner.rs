@@ -5,12 +5,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Tools allowed during the planning phase (read-only)
-const PLANNING_TOOLS: &[&str] = &[
-    "read_file",
-    "glob",
-    "grep",
-    "list_directory",
-];
+const PLANNING_TOOLS: &[&str] = &["read_file", "glob", "grep", "list_directory"];
 
 /// Maximum number of tool-use loops before forcing completion
 const MAX_TOOL_ROUNDS: usize = 20;
@@ -36,6 +31,10 @@ pub enum PlannerUpdate {
         planner_index: usize,
         input_tokens: u32,
         output_tokens: u32,
+    },
+    StreamingDelta {
+        planner_index: usize,
+        text: String,
     },
     PlanComplete {
         planner_index: usize,
@@ -140,8 +139,16 @@ async fn run_planner_inner(
             match event_result {
                 Ok(StreamEvent::TextDelta(text)) => {
                     text_content.push_str(&text);
+                    let _ = update_tx.send(PlannerUpdate::StreamingDelta {
+                        planner_index,
+                        text,
+                    });
                 }
-                Ok(StreamEvent::ToolCall { id, name, arguments }) => {
+                Ok(StreamEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => {
                     tool_calls.push((id, name, arguments));
                 }
                 Ok(StreamEvent::Done {
@@ -260,10 +267,7 @@ pub fn planning_system_prompt(user_prompt: &str) -> String {
 }
 
 /// Build the synthesis prompt given to the primary LLM
-pub fn synthesis_system_prompt(
-    user_prompt: &str,
-    plans: &[(&str, &str)],
-) -> String {
+pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> String {
     let mut prompt = format!(
         "You are the primary planner in a multi-LLM planning session. \
          Multiple LLMs have independently created plans for the following request. \
@@ -279,7 +283,7 @@ pub fn synthesis_system_prompt(
     }
     prompt.push_str(
         "Produce a single unified plan that combines the best approaches. \
-         Note where plans disagreed and explain your choices."
+         Note where plans disagreed and explain your choices.",
     );
     prompt
 }
@@ -327,10 +331,7 @@ mod tests {
 
     #[test]
     fn test_synthesis_prompt_includes_all_plans() {
-        let plans = vec![
-            ("openai", "Plan A content"),
-            ("gemini", "Plan B content"),
-        ];
+        let plans = vec![("openai", "Plan A content"), ("gemini", "Plan B content")];
         let prompt = synthesis_system_prompt("build a feature", &plans);
         assert!(prompt.contains("Plan A content"));
         assert!(prompt.contains("Plan B content"));

@@ -29,7 +29,7 @@ pub fn init_circuits_table(conn: &Connection) -> Result<()> {
             tokens_used INTEGER NOT NULL DEFAULT 0,
             success INTEGER NOT NULL DEFAULT 1,
             completed_at TEXT NOT NULL
-        );"
+        );",
     )?;
     Ok(())
 }
@@ -62,25 +62,27 @@ pub fn list_circuits(conn: &Connection, kind: Option<&CircuitKind>) -> Result<Ve
          FROM circuits ORDER BY created_at DESC"
     )?;
 
-    let circuits = stmt.query_map([], |row| {
-        let kind_str: String = row.get(6)?;
-        let status_str: String = row.get(7)?;
-        Ok(Circuit {
-            id: row.get(0)?,
-            prompt: row.get(1)?,
-            interval_secs: row.get(2)?,
-            provider: row.get(3)?,
-            model: row.get(4)?,
-            permission_mode: row.get(5)?,
-            kind: serde_json::from_str(&kind_str).unwrap_or(CircuitKind::InSession),
-            status: serde_json::from_str(&status_str).unwrap_or(CircuitStatus::Active),
-            last_run: row.get(8)?,
-            next_run: row.get(9)?,
-            total_cost: row.get(10)?,
-            run_count: row.get(11)?,
-            created_at: row.get(12)?,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
+    let circuits = stmt
+        .query_map([], |row| {
+            let kind_str: String = row.get(6)?;
+            let status_str: String = row.get(7)?;
+            Ok(Circuit {
+                id: row.get(0)?,
+                prompt: row.get(1)?,
+                interval_secs: row.get(2)?,
+                provider: row.get(3)?,
+                model: row.get(4)?,
+                permission_mode: row.get(5)?,
+                kind: serde_json::from_str(&kind_str).unwrap_or(CircuitKind::InSession),
+                status: serde_json::from_str(&status_str).unwrap_or(CircuitStatus::Active),
+                last_run: row.get(8)?,
+                next_run: row.get(9)?,
+                total_cost: row.get(10)?,
+                run_count: row.get(11)?,
+                created_at: row.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
     match kind {
         Some(k) => Ok(circuits.into_iter().filter(|c| &c.kind == k).collect()),

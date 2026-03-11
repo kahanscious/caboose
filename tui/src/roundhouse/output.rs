@@ -2,16 +2,18 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// Write the synthesized plan to a temporary markdown file
-pub fn write_plan_file(
-    cwd: &Path,
-    plan_content: &str,
-    prompt_summary: &str,
-) -> Result<PathBuf> {
+pub fn write_plan_file(cwd: &Path, plan_content: &str, prompt_summary: &str) -> Result<PathBuf> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let slug: String = prompt_summary
         .chars()
         .take(30)
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     let filename = format!("roundhouse-{timestamp}-{slug}.md");
     let path = cwd.join(&filename);

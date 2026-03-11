@@ -27,9 +27,9 @@ pub fn scan_codex(config_dirs: &[PathBuf]) -> CodexConfig {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text)
                         && let Some(instructions) =
                             parsed.get("instructions").and_then(|v| v.as_str())
-                        {
-                            result.instructions = Some(instructions.to_string());
-                        }
+                    {
+                        result.instructions = Some(instructions.to_string());
+                    }
                 }
                 break;
             }
@@ -38,17 +38,19 @@ pub fn scan_codex(config_dirs: &[PathBuf]) -> CodexConfig {
         // Check instructions.md
         let instructions_file = dir.join("instructions.md");
         if instructions_file.exists()
-            && let Ok(text) = std::fs::read_to_string(&instructions_file) {
-                result.instructions_md = Some(text);
-            }
+            && let Ok(text) = std::fs::read_to_string(&instructions_file)
+        {
+            result.instructions_md = Some(text);
+        }
 
         // Check AGENTS.md as a fallback for instructions_md
         if result.instructions_md.is_none() {
             let agents_file = dir.join("AGENTS.md");
             if agents_file.exists()
-                && let Ok(text) = std::fs::read_to_string(&agents_file) {
-                    result.instructions_md = Some(text);
-                }
+                && let Ok(text) = std::fs::read_to_string(&agents_file)
+            {
+                result.instructions_md = Some(text);
+            }
         }
     }
 
@@ -132,10 +134,7 @@ mod tests {
         std::fs::write(dir.path().join("AGENTS.md"), "From agents").unwrap();
 
         let config = scan_codex(&[dir.path().to_path_buf()]);
-        assert_eq!(
-            config.instructions_md.as_deref(),
-            Some("From instructions")
-        );
+        assert_eq!(config.instructions_md.as_deref(), Some("From instructions"));
     }
 
     #[test]

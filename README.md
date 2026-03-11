@@ -1,18 +1,10 @@
-```
-       ▄████████▄
-       █        █
-▄▄████████████████████▄▄
-  █    █        █    █
-  ████████████████████
-  ▀ ▄██▄        ▄██▄ ▀
-    ▀██▀        ▀██▀
+<p align="center">
+  <img src="media/caboose-transparent.svg" width="120" alt="Caboose">
+</p>
 
-▄▀▀▀ ▄▀▀▄ █▀▀▄ ▄▀▀▄ ▄▀▀▄ ▄▀▀▀ █▀▀▀
-█    █▀▀█ █▀▀▄ █  █ █  █ ▀▀▀█ █▀▀
- ▀▀▀ ▀  ▀ ▀▀▀   ▀▀   ▀▀  ▀▀▀  ▀▀▀▀
-```
+<h1 align="center">Caboose</h1>
 
-**A terminal-native AI coding agent built in Rust.**
+<p align="center"><strong>A terminal-native AI coding agent built in Rust.</strong></p>
 
 Caboose is a fast, single-binary AI coding agent for your terminal. It streams responses from multiple LLM providers, executes tools, manages persistent sessions, and supports an extensible skills system — all rendered in a rich TUI with syntax highlighting and an embedded terminal.
 

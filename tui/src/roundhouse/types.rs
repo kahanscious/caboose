@@ -17,6 +17,7 @@ pub struct SecondaryPlanner {
     pub provider_name: String,
     pub model_name: String,
     pub status: PlannerStatus,
+    pub status_tick: u64,
     pub plan: Option<String>,
     #[allow(dead_code)]
     pub token_count: u64,
@@ -41,7 +42,7 @@ pub enum RoundhousePhase {
 /// Roundhouse configuration limits
 #[derive(Debug, Clone)]
 pub struct RoundhouseConfig {
-    pub planning_timeout_secs: u64,      // default 120
+    pub planning_timeout_secs: u64, // default 120
     #[allow(dead_code)]
     pub per_llm_token_budget: Option<u64>,
 }

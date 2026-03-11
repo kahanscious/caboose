@@ -186,7 +186,10 @@ pub struct MigrationItem {
 }
 
 pub enum MigrationItemKind {
-    McpServer { name: String, config: serde_json::Value },
+    McpServer {
+        name: String,
+        config: serde_json::Value,
+    },
     SystemPrompt(String),
     ClaudeMd(std::path::PathBuf),
 }
@@ -200,19 +203,27 @@ pub enum MigrationPhase {
 }
 
 /// Build a migration checklist by scanning the given platform's config.
-pub fn build_migration_checklist(platform: crate::migrate::SourcePlatform) -> MigrationChecklistState {
+pub fn build_migration_checklist(
+    platform: crate::migrate::SourcePlatform,
+) -> MigrationChecklistState {
     let dirs = crate::migrate::detection::config_paths(&platform);
     let mut items = Vec::new();
 
     match &platform {
         crate::migrate::SourcePlatform::ClaudeCode => {
-            let config = crate::migrate::claude_code::scan_claude_code(&dirs, Some(std::path::Path::new(".")));
+            let config = crate::migrate::claude_code::scan_claude_code(
+                &dirs,
+                Some(std::path::Path::new(".")),
+            );
             for (name, server) in &config.mcp_servers {
                 items.push(MigrationItem {
                     label: format!("MCP: {name}"),
                     description: "Import MCP server config".to_string(),
                     toggled: true,
-                    kind: MigrationItemKind::McpServer { name: name.clone(), config: server.clone() },
+                    kind: MigrationItemKind::McpServer {
+                        name: name.clone(),
+                        config: server.clone(),
+                    },
                 });
             }
             if let Some(prompt) = &config.system_prompt {
@@ -241,7 +252,10 @@ pub fn build_migration_checklist(platform: crate::migrate::SourcePlatform) -> Mi
                     label: format!("MCP: {name}"),
                     description: "Import MCP server config".to_string(),
                     toggled: true,
-                    kind: MigrationItemKind::McpServer { name: name.clone(), config: server.clone() },
+                    kind: MigrationItemKind::McpServer {
+                        name: name.clone(),
+                        config: server.clone(),
+                    },
                 });
             }
             if let Some(prompt) = &config.system_prompt {
@@ -280,5 +294,10 @@ pub fn build_migration_checklist(platform: crate::migrate::SourcePlatform) -> Mi
         }
     }
 
-    MigrationChecklistState { platform, items, selected: 0, phase: MigrationPhase::Checklist }
+    MigrationChecklistState {
+        platform,
+        items,
+        selected: 0,
+        phase: MigrationPhase::Checklist,
+    }
 }

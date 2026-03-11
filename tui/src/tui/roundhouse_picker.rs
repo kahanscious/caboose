@@ -1,7 +1,7 @@
-use ratatui::prelude::*;
-use ratatui::widgets::*;
 use crate::app::State;
 use crate::roundhouse::types::RoundhousePhase;
+use ratatui::prelude::*;
+use ratatui::widgets::*;
 
 /// Render the Roundhouse provider selection dialog
 #[allow(dead_code)]
@@ -18,7 +18,10 @@ pub fn render_roundhouse_picker(f: &mut Frame, area: Rect, state: &State) {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            format!("Primary: {} / {}", session.primary_provider, session.primary_model),
+            format!(
+                "Primary: {} / {}",
+                session.primary_provider, session.primary_model
+            ),
             Style::default().fg(Color::Green),
         )),
         Line::from(""),

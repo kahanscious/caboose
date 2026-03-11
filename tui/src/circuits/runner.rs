@@ -1,6 +1,6 @@
 use crate::circuits::types::*;
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 
 /// Event emitted by a running circuit
