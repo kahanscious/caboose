@@ -398,6 +398,90 @@ pub fn save_local_provider(name: &str, config: &schema::LocalProviderConfig) {
     let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
 }
 
+/// Persist a workspace entry to the project config file.
+///
+/// Creates or replaces `[workspaces.<name>]` in `.caboose/config.toml`,
+/// leaving all other sections untouched.
+pub fn save_workspace(name: &str, config: &schema::WorkspaceConfig) {
+    save_workspace_at(std::path::Path::new("."), name, config);
+}
+
+/// Test-friendly variant: writes relative to `base` instead of cwd.
+/// `pub(crate)` (not cfg-gated) so the `#[cfg(test)]` test module can call it.
+pub(crate) fn save_workspace_at(base: &std::path::Path, name: &str, config: &schema::WorkspaceConfig) {
+    save_workspace_impl(base, name, config);
+}
+
+fn save_workspace_impl(base: &std::path::Path, name: &str, config: &schema::WorkspaceConfig) {
+    let path = base.join(".caboose/config.toml");
+
+    let mut doc: toml::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or(toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
+    let workspaces = table
+        .entry("workspaces")
+        .or_insert(toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .unwrap();
+
+    if let Ok(val) = toml::Value::try_from(config) {
+        workspaces.insert(name.to_string(), val);
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
+}
+
+/// Remove a workspace entry from the project config file.
+///
+/// If the workspace name doesn't exist or the file doesn't exist, does nothing.
+pub fn remove_workspace(name: &str) {
+    remove_workspace_at(std::path::Path::new("."), name);
+}
+
+/// Test-friendly variant: removes relative to `base` instead of cwd.
+/// `pub(crate)` (not cfg-gated) so the `#[cfg(test)]` test module can call it.
+pub(crate) fn remove_workspace_at(base: &std::path::Path, name: &str) {
+    remove_workspace_impl(base, name);
+}
+
+fn remove_workspace_impl(base: &std::path::Path, name: &str) {
+    let path = base.join(".caboose/config.toml");
+    if !path.exists() {
+        return;
+    }
+
+    let mut doc: toml::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
+
+    if let Some(workspaces) = table.get_mut("workspaces").and_then(|w| w.as_table_mut()) {
+        workspaces.remove(name);
+        // Remove the [workspaces] table entirely if now empty
+        if workspaces.is_empty() {
+            table.remove("workspaces");
+        }
+    }
+
+    let _ = std::fs::write(&path, toml::to_string_pretty(&doc).unwrap_or_default());
+}
+
 /// Remove a custom MCP server entry from project config.
 pub fn remove_mcp_server(name: &str) {
     let path = PathBuf::from(".caboose/config.toml");
@@ -974,6 +1058,54 @@ command = "echo started"
         let deploy_def = defs.iter().find(|d| d.name == "cli_deploy").unwrap();
         let props = deploy_def.input_schema.get("properties").unwrap();
         assert!(props.get("env").is_some());
+    }
+
+    #[test]
+    fn save_workspace_creates_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Proactive,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(content.contains("caboose-web"));
+        assert!(content.contains("proactive"));
+    }
+
+    #[test]
+    fn save_workspace_preserves_existing_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".caboose")).unwrap();
+        std::fs::write(dir.path().join(".caboose/config.toml"), "provider = \"anthropic\"\n").unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Explicit,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(content.contains("provider"));
+        assert!(content.contains("explicit"));
+    }
+
+    #[test]
+    fn remove_workspace_removes_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Proactive,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        remove_workspace_at(dir.path(), "caboose-web");
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(!content.contains("caboose-web"));
+    }
+
+    #[test]
+    fn remove_workspace_missing_name_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should not panic when file doesn't exist
+        remove_workspace_at(dir.path(), "nonexistent");
     }
 
     #[test]
