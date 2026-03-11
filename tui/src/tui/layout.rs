@@ -116,8 +116,11 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::MigrationChecklist(checklist) => {
                 render_migration_checklist(frame, checklist, &colors);
             }
-            DialogKind::WorkspaceList(_) | DialogKind::WorkspaceAdd(_) => {
-                // TODO: workspace dialog rendering
+            DialogKind::WorkspaceList(state) => {
+                crate::tui::workspace_list::render(frame, frame.area(), state);
+            }
+            DialogKind::WorkspaceAdd(state) => {
+                crate::tui::workspace_add::render(frame, frame.area(), state);
             }
         }
     }
