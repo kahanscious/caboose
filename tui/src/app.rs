@@ -1241,7 +1241,8 @@ impl App {
                 {
                     self.state.workspace_scan_last_query = query.clone();
                     // If the user typed a partial path, walk from its parent.
-                    // Otherwise scan all filesystem roots (all drives on Windows, / on Unix).
+                    // Otherwise prioritize the project neighbourhood first, then
+                    // all drive roots so nearby repos surface before timeout.
                     let roots = if query.contains('/') || query.contains('\\') {
                         let parent = std::path::Path::new(&query)
                             .parent()
@@ -1249,7 +1250,22 @@ impl App {
                             .unwrap_or_else(|| query.clone());
                         vec![parent]
                     } else {
-                        scan_roots()
+                        // Put the two ancestors of primary_root first so sibling
+                        // repos are found immediately, then fall back to full scan.
+                        let mut roots: Vec<String> = Vec::new();
+                        let pr = &self.state.primary_root;
+                        if let Some(p) = pr.parent() {
+                            roots.push(p.to_string_lossy().to_string());
+                            if let Some(gp) = p.parent() {
+                                roots.push(gp.to_string_lossy().to_string());
+                            }
+                        }
+                        for r in scan_roots() {
+                            if !roots.contains(&r) {
+                                roots.push(r);
+                            }
+                        }
+                        roots
                     };
                     self.state.workspace_scan_rx = Some(spawn_dir_scan(roots, query));
                 }
@@ -8474,10 +8490,32 @@ fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
     let query_lower = match_term.to_lowercase();
     let mut candidates: Vec<String> = Vec::new();
 
+    // BFS so shallow paths surface before deep ones — avoids hitting the 200
+    // cap with deeply-nested entries before reaching the user's target.
+    let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+        std::collections::VecDeque::new();
     for root in roots {
-        let base_path = std::path::Path::new(root);
-        if base_path.exists() {
-            walk_dir_recursive(base_path, 0, 5, &mut candidates);
+        let p = std::path::PathBuf::from(root);
+        if p.exists() {
+            queue.push_back((p, 0));
+        }
+    }
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth >= 5 || candidates.len() >= 200 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || is_ignored_dir(name) { continue; }
+            if let Some(s) = path.to_str() {
+                candidates.push(s.to_string());
+            }
+            if depth + 1 < 5 {
+                queue.push_back((path, depth + 1));
+            }
         }
     }
 
@@ -8535,34 +8573,6 @@ fn is_ignored_dir(name: &str) -> bool {
     )
 }
 
-fn walk_dir_recursive(
-    current: &std::path::Path,
-    depth: usize,
-    max_depth: usize,
-    out: &mut Vec<String>,
-) {
-    if depth >= max_depth || out.len() >= 200 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(current) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            // Skip hidden dirs (starting with .) and known noise dirs
-            if name.starts_with('.') || is_ignored_dir(name) {
-                continue;
-            }
-            if let Some(abs_str) = path.to_str() {
-                out.push(abs_str.to_string());
-            }
-            walk_dir_recursive(&path, depth + 1, max_depth, out);
-        }
-    }
-}
 
 fn build_workspace_list_state(config: &crate::config::Config) -> crate::tui::dialog::WorkspaceListState {
     use crate::tui::dialog::WorkspaceListState;
