@@ -8461,7 +8461,17 @@ fn spawn_dir_scan(
 
 /// Walk directories under `roots`, returning up to 100 fuzzy-matched **absolute** paths.
 fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
-    let query_lower = query.to_lowercase();
+    // When the query is a partial path like "a:/projects/cabo", match only on
+    // the last component ("cabo") so directory names score correctly.
+    let match_term = if query.contains('/') || query.contains('\\') {
+        std::path::Path::new(query)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(query)
+    } else {
+        query
+    };
+    let query_lower = match_term.to_lowercase();
     let mut candidates: Vec<String> = Vec::new();
 
     for root in roots {
@@ -8489,6 +8499,42 @@ fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
     scored.into_iter().map(|(_, p)| p).collect()
 }
 
+/// Directories to skip during workspace scanning.
+fn is_ignored_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules"
+            | ".git"
+            | ".svn"
+            | ".hg"
+            | "target"
+            | "dist"
+            | "build"
+            | "out"
+            | ".next"
+            | ".nuxt"
+            | ".cache"
+            | "cache"
+            | "__pycache__"
+            | ".tox"
+            | "venv"
+            | ".venv"
+            | "env"
+            | ".env"
+            | "vendor"
+            | ".idea"
+            | ".vscode"
+            | "Temp"
+            | "temp"
+            | "tmp"
+            | "$Recycle.Bin"
+            | "System Volume Information"
+            | "Windows"
+            | "Program Files"
+            | "Program Files (x86)"
+    )
+}
+
 fn walk_dir_recursive(
     current: &std::path::Path,
     depth: usize,
@@ -8502,6 +8548,14 @@ fn walk_dir_recursive(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            // Skip hidden dirs (starting with .) and known noise dirs
+            if name.starts_with('.') || is_ignored_dir(name) {
+                continue;
+            }
             if let Some(abs_str) = path.to_str() {
                 out.push(abs_str.to_string());
             }
