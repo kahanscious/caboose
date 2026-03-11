@@ -374,6 +374,9 @@ pub struct WorkspaceConfig {
     pub path: String,
     /// How the agent should treat this workspace.
     pub mode: WorkspaceMode,
+    /// What operations the agent may perform in this workspace.
+    #[serde(default)]
+    pub access: WorkspaceAccess,
 }
 
 /// Controls how the agent uses a secondary workspace.
@@ -386,6 +389,17 @@ pub enum WorkspaceMode {
     Explicit,
 }
 
+/// Controls what operations the agent may perform in a workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceAccess {
+    /// Agent can read and write files in this workspace.
+    #[default]
+    ReadWrite,
+    /// Agent can only read files in this workspace.
+    ReadOnly,
+}
+
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
@@ -395,11 +409,13 @@ mod workspace_tests {
         let cfg = WorkspaceConfig {
             path: "/home/alex/caboose-web".to_string(),
             mode: WorkspaceMode::Proactive,
+            access: WorkspaceAccess::ReadWrite,
         };
         let serialized = toml::to_string(&cfg).unwrap();
         let deserialized: WorkspaceConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.path, cfg.path);
         assert_eq!(deserialized.mode, WorkspaceMode::Proactive);
+        assert_eq!(deserialized.access, WorkspaceAccess::ReadWrite);
     }
 
     #[test]
@@ -407,10 +423,22 @@ mod workspace_tests {
         let cfg = WorkspaceConfig {
             path: "/tmp/docs".to_string(),
             mode: WorkspaceMode::Explicit,
+            access: WorkspaceAccess::ReadOnly,
         };
         let s = toml::to_string(&cfg).unwrap();
         let d: WorkspaceConfig = toml::from_str(&s).unwrap();
         assert_eq!(d.mode, WorkspaceMode::Explicit);
+        assert_eq!(d.access, WorkspaceAccess::ReadOnly);
+    }
+
+    #[test]
+    fn workspace_access_defaults_to_read_write() {
+        // Existing configs without an access field should default to ReadWrite
+        let toml_str = r#"path = "/tmp/x"
+mode = "proactive"
+"#;
+        let cfg: WorkspaceConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.access, WorkspaceAccess::ReadWrite);
     }
 
     #[test]

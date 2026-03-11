@@ -16,8 +16,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceAddState) {
     let popup = centered_rect(50, 14, area);
     f.render_widget(Clear, popup);
 
+    let title = if state.editing_name.is_some() { " edit workspace " } else { " add workspace " };
     let block = Block::default()
-        .title(" add workspace ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors.border_active))
         .title_style(Style::default().fg(colors.text).bold())
@@ -35,6 +36,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceAddState) {
         WorkspaceAddPhase::Path => render_path_phase(f, inner, state, &colors),
         WorkspaceAddPhase::Name => render_name_phase(f, inner, state, &colors),
         WorkspaceAddPhase::Mode => render_mode_phase(f, inner, state, &colors),
+        WorkspaceAddPhase::Permissions => render_permissions_phase(f, inner, state, &colors),
     }
 }
 
@@ -165,6 +167,59 @@ fn render_mode_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
     f.render_widget(
         Paragraph::new(" ↑↓ select · ↵ confirm · esc back")
             .style(Style::default().fg(colors.text_dim)),
+        chunks[3],
+    );
+}
+
+fn render_permissions_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, colors: &Colors) {
+    let options = [
+        ("read and write", "agent can read and modify files"),
+        ("read only",      "agent can only read files"),
+    ];
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // label
+            Constraint::Length(1), // spacer
+            Constraint::Min(1),    // list
+            Constraint::Length(1), // hints
+        ])
+        .split(area);
+
+    f.render_widget(
+        Paragraph::new("permissions").style(Style::default().fg(colors.text_dim)),
+        chunks[0],
+    );
+
+    let items: Vec<ListItem> = options
+        .iter()
+        .map(|(name, desc)| ListItem::new(Line::from(vec![
+            Span::styled(format!("  {name:<16} "), Style::default().fg(colors.text)),
+            Span::styled(*desc, Style::default().fg(colors.text_dim)),
+        ])))
+        .collect();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.permissions_selected));
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .fg(colors.brand)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+
+    f.render_stateful_widget(list, chunks[2], &mut list_state);
+
+    let hint = if state.editing_name.is_some() {
+        " ↑↓ select · ↵ save · esc back"
+    } else {
+        " ↑↓ select · ↵ confirm · esc back"
+    };
+    f.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(colors.text_dim)),
         chunks[3],
     );
 }
