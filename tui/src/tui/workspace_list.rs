@@ -3,21 +3,25 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    prelude::Stylize,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use crate::tui::dialog::WorkspaceListState;
+use crate::tui::theme::Colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
-    // Center a popup in the given area
+    let colors = Colors::active();
     let popup = centered_rect(50, 14, area);
     f.render_widget(Clear, popup);
 
     let block = Block::default()
         .title(" workspaces ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(colors.border_active))
+        .title_style(Style::default().fg(colors.text).bold())
+        .style(Style::default().bg(colors.bg_elevated));
 
     f.render_widget(block, popup);
 
@@ -29,7 +33,6 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
     };
 
     if state.workspaces.is_empty() {
-        // Empty state
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -43,21 +46,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
 
         f.render_widget(
             Paragraph::new("  no workspaces configured")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(colors.text_secondary)),
             chunks[1],
         );
         f.render_widget(
             Paragraph::new("  press a to add one")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(colors.text_dim)),
             chunks[2],
         );
         f.render_widget(
             Paragraph::new(" a add · esc close")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(colors.text_dim)),
             chunks[4],
         );
     } else {
-        // Non-empty state: list + hints
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -70,15 +72,22 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
             .workspaces
             .iter()
             .map(|(name, cfg, available)| {
-                let avail_marker = if *available { " " } else { "✗" };
+                let avail_style = if *available {
+                    Style::default().fg(colors.success)
+                } else {
+                    Style::default().fg(colors.error)
+                };
+                let avail_marker = if *available { "●" } else { "✗" };
                 let mode_str = match cfg.mode {
                     crate::config::schema::WorkspaceMode::Proactive => "proactive",
                     crate::config::schema::WorkspaceMode::Explicit => "explicit ",
                 };
-                // Truncate path for display: show last ~10 chars prefixed with …
                 let display_path = truncate_path(&cfg.path, 12);
                 let line = Line::from(vec![
-                    Span::raw(format!("  {name:<16} {mode_str} {avail_marker} {display_path}")),
+                    Span::raw(format!("  {name:<16} ")),
+                    Span::styled(format!("{mode_str} "), Style::default().fg(colors.text_dim)),
+                    Span::styled(format!("{avail_marker} "), avail_style),
+                    Span::styled(display_path, Style::default().fg(colors.text_secondary)),
                 ]);
                 ListItem::new(line)
             })
@@ -90,7 +99,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
         let list = List::new(items)
             .highlight_style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(colors.brand)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▸ ");
@@ -99,7 +108,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
 
         f.render_widget(
             Paragraph::new(" a add · d remove · esc close")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(colors.text_dim)),
             chunks[1],
         );
     }
@@ -110,7 +119,6 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     if char_count <= max_len {
         return path.to_string();
     }
-    // Use char_indices to find a safe byte boundary for slicing
     let skip = char_count - max_len;
     let byte_offset = path.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(0);
     format!("…{}", &path[byte_offset..])
@@ -164,8 +172,7 @@ mod tests {
     fn truncate_path_long_path_truncated() {
         let result = truncate_path("/home/alex/very/long/path/here", 12);
         assert!(result.starts_with('…'));
-        // Result is '…' (3 bytes UTF-8) + 12 chars; check char count not byte len
         let char_count = result.chars().count();
-        assert!(char_count <= 13); // '…' counts as 1 char + 12 more
+        assert!(char_count <= 13);
     }
 }
