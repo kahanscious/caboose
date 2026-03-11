@@ -54,6 +54,12 @@ pub fn filter_file_matches<'a>(prefix: &str, files: &[&'a str]) -> Vec<&'a str> 
         .collect()
 }
 
+/// Score a directory path against a query string for workspace dir scanning.
+/// Returns `Some(score)` if it matches (lower = better), `None` if no match.
+pub fn score_path_for_dir(path: &str, query: &str) -> Option<u32> {
+    fuzzy_score(query, path)
+}
+
 /// Fuzzy match score: checks if all characters of `query` appear in order
 /// (case-insensitive) in `candidate`. Returns a score where lower is better,
 /// or None if no match. Score prefers:
