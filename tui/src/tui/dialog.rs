@@ -135,8 +135,6 @@ pub struct WorkspaceAddState {
     pub mode_selected: usize,
     /// Inline validation error (cleared on new input).
     pub error: Option<String>,
-    /// Sender to cancel an in-flight dir scan by dropping it.
-    pub dir_scan_tx: Option<tokio::sync::mpsc::Sender<Vec<String>>>,
 }
 
 impl Default for WorkspaceAddState {
@@ -149,7 +147,6 @@ impl Default for WorkspaceAddState {
             name_input: String::new(),
             mode_selected: 0,
             error: None,
-            dir_scan_tx: None,
         }
     }
 }
