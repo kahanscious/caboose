@@ -82,22 +82,6 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             },
             env_vars_needed: &["GITLAB_TOKEN"],
         },
-        McpPreset {
-            id: "exa",
-            display_name: "Exa Search",
-            description: "Web search via Exa AI (free tier, no key required)",
-            config: McpServerConfig {
-                command: "npx".to_string(),
-                args: vec![
-                    "-y".to_string(),
-                    "exa-mcp-server".to_string(),
-                ],
-                env: std::collections::HashMap::new(),
-                disabled: true,
-                removed: false,
-            },
-            env_vars_needed: &[],
-        },
     ]
 }
 
@@ -146,7 +130,6 @@ mod tests {
         assert!(find_preset("fetch").is_some());
         assert!(find_preset("github").is_some());
         assert!(find_preset("gitlab").is_some());
-        assert!(find_preset("exa").is_some());
         assert!(find_preset("nonexistent").is_none());
     }
 
@@ -157,6 +140,5 @@ mod tests {
         assert!(ids.contains(&"fetch"));
         assert!(ids.contains(&"github"));
         assert!(ids.contains(&"gitlab"));
-        assert!(ids.contains(&"exa"));
     }
 }
