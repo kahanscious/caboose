@@ -1230,12 +1230,12 @@ impl App {
                 }
             }
 
-            // Trigger workspace dir scan when query changes and has 3+ chars
+            // Trigger workspace dir scan when query changes and has 2+ chars
             if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(add_state)) =
                 self.state.dialog_stack.top()
             {
                 let query = add_state.path_input.clone();
-                if query.len() >= 3
+                if query.len() >= 2
                     && query != self.state.workspace_scan_last_query
                     && self.state.workspace_scan_rx.is_none()
                 {
