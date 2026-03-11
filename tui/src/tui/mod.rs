@@ -26,6 +26,7 @@ pub mod sidebar;
 pub mod slash_auto;
 pub mod theme;
 pub mod tools;
+pub mod workspace_list;
 
 use anyhow::Result;
 use crossterm::{
