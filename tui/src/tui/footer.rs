@@ -128,7 +128,7 @@ pub fn render(
 
     let (right_text, right_spans) = if let Some(new_ver) = update_available {
         let base = format!("caboose v{version} ");
-        let update = format!("→ v{new_ver} available ");
+        let update = format!("→ v{new_ver} available · run `caboose update` ");
         let full = format!("{base}{update}");
         let spans = vec![
             Span::styled(base, status_style),
