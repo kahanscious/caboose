@@ -8638,48 +8638,47 @@ fn build_workspace_list_state(config: &crate::config::Config) -> crate::tui::dia
 fn workspace_system_prompt_block(
     workspaces: &std::collections::HashMap<String, crate::config::schema::WorkspaceConfig>,
 ) -> String {
-    use crate::config::schema::WorkspaceMode;
+    use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
 
     if workspaces.is_empty() {
         return String::new();
     }
 
-    let proactive: Vec<_> = workspaces
+    let available: Vec<_> = workspaces
         .iter()
-        .filter(|(_, cfg)| {
-            cfg.mode == WorkspaceMode::Proactive
-                && std::path::Path::new(&cfg.path).exists()
-        })
+        .filter(|(_, cfg)| std::path::Path::new(&cfg.path).exists())
         .collect();
 
-    let explicit: Vec<_> = workspaces
-        .iter()
-        .filter(|(_, cfg)| {
-            cfg.mode == WorkspaceMode::Explicit
-                && std::path::Path::new(&cfg.path).exists()
-        })
-        .collect();
-
-    if proactive.is_empty() && explicit.is_empty() {
+    if available.is_empty() {
         return String::new();
     }
 
+    let proactive: Vec<_> = available.iter().filter(|(_, c)| c.mode == WorkspaceMode::Proactive).collect();
+    let explicit: Vec<_> = available.iter().filter(|(_, c)| c.mode == WorkspaceMode::Explicit).collect();
+
     let mut block = String::new();
+    block.push_str("\n\n<workspaces>\n");
+    block.push_str("The following additional repositories are registered. Use your file tools (read, glob, grep) to access them by their absolute paths.\n\n");
 
     if !proactive.is_empty() {
-        block.push_str("\nAdditional workspaces (search alongside primary repo):\n");
+        block.push_str("Proactive — search these automatically when relevant:\n");
         for (name, cfg) in &proactive {
-            block.push_str(&format!("- {name}: {}\n", cfg.path));
+            let access = if cfg.access == WorkspaceAccess::ReadOnly { "read-only" } else { "read-write" };
+            block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
         }
+        block.push('\n');
     }
 
     if !explicit.is_empty() {
-        block.push_str("\nAdditional workspaces (reference explicitly by name):\n");
+        block.push_str("Explicit — only use when the user directly references by name:\n");
         for (name, cfg) in &explicit {
-            block.push_str(&format!("- {name}: {}\n", cfg.path));
+            let access = if cfg.access == WorkspaceAccess::ReadOnly { "read-only" } else { "read-write" };
+            block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
         }
+        block.push('\n');
     }
 
+    block.push_str("</workspaces>");
     block
 }
 
@@ -8985,7 +8984,7 @@ mod workspace_prompt_tests {
         let block = build_workspace_block(&ws);
         assert!(block.contains("caboose-web"));
         assert!(block.contains(&path_str));
-        assert!(block.contains("search alongside primary repo"));
+        assert!(block.contains("Proactive"));
     }
 
     #[test]
@@ -9000,7 +8999,7 @@ mod workspace_prompt_tests {
         });
         let block = build_workspace_block(&ws);
         assert!(block.contains("docs"));
-        assert!(block.contains("reference explicitly by name"));
+        assert!(block.contains("Explicit"));
     }
 
     #[test]
