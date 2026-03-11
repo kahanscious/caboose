@@ -232,6 +232,10 @@ impl DialogStack {
     pub fn depth(&self) -> usize {
         self.overlays.len()
     }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut DialogKind> {
+        self.overlays.iter_mut()
+    }
 }
 
 // ── Migration checklist types ──────────────────────────────────────────

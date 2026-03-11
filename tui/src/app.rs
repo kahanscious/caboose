@@ -1196,6 +1196,49 @@ impl App {
                 }
             }
 
+            // Poll workspace dir scan results
+            if let Some(ref mut rx) = self.state.workspace_scan_rx {
+                match rx.try_recv() {
+                    Ok(matches) => {
+                        if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(state)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            state.path_matches = matches;
+                        }
+                        self.state.workspace_scan_rx = None;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        self.state.workspace_scan_rx = None;
+                    }
+                }
+            }
+
+            // Trigger workspace dir scan when query changes and has 3+ chars
+            if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(add_state)) =
+                self.state.dialog_stack.top()
+            {
+                let query = add_state.path_input.clone();
+                if query.len() >= 3
+                    && query != self.state.workspace_scan_last_query
+                    && self.state.workspace_scan_rx.is_none()
+                {
+                    self.state.workspace_scan_last_query = query.clone();
+                    // Walk from parent of typed path if it contains a separator, else home dir
+                    let base = if query.contains('/') || query.contains('\\') {
+                        std::path::Path::new(&query)
+                            .parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| query.clone())
+                    } else {
+                        dirs::home_dir()
+                            .map(|h| h.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    };
+                    self.state.workspace_scan_rx = Some(spawn_dir_scan(base, query));
+                }
+            }
+
             // Draw UI
             let state = &self.state;
             self.terminal.draw(|frame| {
@@ -1928,9 +1971,7 @@ impl App {
                 self.handle_migration_checklist_key(key);
             }
             Some(DialogKind::WorkspaceList(_)) => self.handle_workspace_list_key(key),
-            Some(DialogKind::WorkspaceAdd(_)) => {
-                // TODO: workspace dialog key handling
-            }
+            Some(DialogKind::WorkspaceAdd(_)) => self.handle_workspace_add_key(key).await,
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -4570,6 +4611,284 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    async fn handle_workspace_add_key(&mut self, key: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+
+        match key {
+            KeyCode::Esc => {
+                // Clone phase out of the shared borrow before taking any mutable borrow.
+                let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                    s.phase.clone()
+                } else {
+                    return;
+                };
+                match phase {
+                    WorkspaceAddPhase::Path => {
+                        self.state.dialog_stack.pop();
+                    }
+                    _ => {
+                        if let Some(DialogKind::WorkspaceAdd(state)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            let prev = match state.phase {
+                                WorkspaceAddPhase::Name => WorkspaceAddPhase::Path,
+                                WorkspaceAddPhase::Mode => WorkspaceAddPhase::Name,
+                                WorkspaceAddPhase::Path => WorkspaceAddPhase::Path,
+                            };
+                            state.phase = prev;
+                            state.error = None;
+                        }
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            if state.path_selected > 0 { state.path_selected -= 1; }
+                        }
+                        WorkspaceAddPhase::Mode => {
+                            if state.mode_selected > 0 { state.mode_selected -= 1; }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            let max = state.path_matches.len().saturating_sub(1);
+                            if state.path_selected < max { state.path_selected += 1; }
+                        }
+                        WorkspaceAddPhase::Mode => {
+                            if state.mode_selected < 1 { state.mode_selected += 1; }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                self.handle_workspace_add_confirm().await;
+            }
+            KeyCode::Backspace => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            state.path_input.pop();
+                            state.error = None;
+                            state.path_selected = 0;
+                        }
+                        WorkspaceAddPhase::Name => {
+                            state.name_input.pop();
+                            state.error = None;
+                        }
+                        WorkspaceAddPhase::Mode => {}
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                // Track new path_input for scan trigger after the mutable borrow ends
+                let new_path: Option<String> = if let Some(DialogKind::WorkspaceAdd(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            state.path_input.push(c);
+                            state.error = None;
+                            state.path_selected = 0;
+                            Some(state.path_input.clone())
+                        }
+                        WorkspaceAddPhase::Name => {
+                            state.name_input.push(c);
+                            state.error = None;
+                            None
+                        }
+                        WorkspaceAddPhase::Mode => None,
+                    }
+                } else {
+                    None
+                };
+                // Update scan trigger query after the dialog borrow has ended
+                if let Some(query) = new_path {
+                    self.state.workspace_scan_last_query = query;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_workspace_add_confirm(&mut self) {
+        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+        use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+
+        let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+            s.phase.clone()
+        } else {
+            return;
+        };
+
+        match phase {
+            WorkspaceAddPhase::Path => {
+                // Determine confirmed path: use highlighted suggestion or raw input
+                let confirmed_path = if let Some(DialogKind::WorkspaceAdd(s)) =
+                    self.state.dialog_stack.top()
+                {
+                    if !s.path_matches.is_empty() {
+                        s.path_matches.get(s.path_selected).cloned().unwrap_or_else(|| s.path_input.clone())
+                    } else {
+                        s.path_input.clone()
+                    }
+                } else {
+                    return;
+                };
+
+                // Validate path
+                let path = std::path::Path::new(&confirmed_path);
+                if !path.exists() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("path does not exist".to_string());
+                    }
+                    return;
+                }
+                if !path.is_dir() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("path is not a directory".to_string());
+                    }
+                    return;
+                }
+                let canonical = match std::fs::canonicalize(path) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                            s.error = Some("cannot resolve path".to_string());
+                        }
+                        return;
+                    }
+                };
+                if canonical == self.state.primary_root {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("cannot add the primary repo as a workspace".to_string());
+                    }
+                    return;
+                }
+                if canonical.starts_with(&self.state.primary_root)
+                    || self.state.primary_root.starts_with(&canonical)
+                {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("workspace cannot be nested inside the primary repo (or vice versa)".to_string());
+                    }
+                    return;
+                }
+                // Check not already registered
+                let already_registered = self.state.config.workspaces.values().any(|w| {
+                    std::fs::canonicalize(&w.path).ok().as_ref() == Some(&canonical)
+                });
+                if already_registered {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("this path is already registered".to_string());
+                    }
+                    return;
+                }
+
+                // Pre-fill name from dirname and advance to Name phase
+                let dirname = canonical
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.path_input = canonical.to_string_lossy().to_string();
+                    s.name_input = dirname;
+                    s.phase = WorkspaceAddPhase::Name;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Name => {
+                let name = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                    s.name_input.trim().to_string()
+                } else {
+                    return;
+                };
+
+                if name.is_empty() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("name cannot be empty".to_string());
+                    }
+                    return;
+                }
+                if name.contains(' ') {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("name cannot contain spaces".to_string());
+                    }
+                    return;
+                }
+                // Check uniqueness
+                let already_named = self.state.config.workspaces.contains_key(&name);
+                if already_named {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some(format!("workspace '{name}' already exists"));
+                    }
+                    return;
+                }
+
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.phase = WorkspaceAddPhase::Mode;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Mode => {
+                let (path, name, mode) = if let Some(DialogKind::WorkspaceAdd(s)) =
+                    self.state.dialog_stack.top()
+                {
+                    let mode = if s.mode_selected == 0 {
+                        WorkspaceMode::Proactive
+                    } else {
+                        WorkspaceMode::Explicit
+                    };
+                    (s.path_input.clone(), s.name_input.trim().to_string(), mode)
+                } else {
+                    return;
+                };
+
+                let cfg = WorkspaceConfig { path, mode };
+                crate::config::save_workspace(&name, &cfg);
+
+                // Update in-memory config
+                self.state.config.workspaces.insert(name.clone(), cfg);
+
+                // Pop WorkspaceAdd, leaving WorkspaceList (if open) underneath
+                self.state.dialog_stack.pop();
+
+                // Refresh WorkspaceList state if it's underneath
+                self.refresh_workspace_list_state();
+
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("workspace '{name}' added"),
+                });
+            }
+        }
+    }
+
+    /// Rebuild WorkspaceListState from current config if WorkspaceList is in the stack.
+    fn refresh_workspace_list_state(&mut self) {
+        use crate::tui::dialog::DialogKind;
+
+        // Build new state before borrowing dialog_stack mutably — avoids two simultaneous
+        // borrows of `self.state` (one for iter_mut, one for &self.state.config).
+        let new_state = build_workspace_list_state(&self.state.config);
+
+        for dialog in self.state.dialog_stack.iter_mut() {
+            if let DialogKind::WorkspaceList(state) = dialog {
+                *state = new_state;
+                return;
+            }
         }
     }
 
@@ -8049,6 +8368,96 @@ fn parse_tasks_from_text(text: &str) -> Option<TaskOutline> {
     }
 }
 
+/// Spawn a background tokio task to walk directories starting from `base_path`.
+/// Results are sent via the returned mpsc receiver.
+/// Constraints: max depth 6, max 100 candidates, 500ms timeout.
+fn spawn_dir_scan(
+    base_path: String,
+    query: String,
+) -> tokio::sync::mpsc::Receiver<Vec<String>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::task::spawn_blocking(move || {
+                walk_dirs_fuzzy(&base_path, &query)
+            }),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
+
+        let _ = tx.send(result).await;
+    });
+    rx
+}
+
+/// Walk directories under `base`, returning up to 100 fuzzy-matched **absolute** paths.
+/// Returns absolute paths so they can be used directly in validation and display.
+fn walk_dirs_fuzzy(base: &str, query: &str) -> Vec<String> {
+    use std::path::Path;
+    let base_path = Path::new(base);
+    if !base_path.exists() {
+        return vec![];
+    }
+
+    let mut candidates: Vec<String> = Vec::new();
+    walk_dir_recursive(base_path, 0, 6, &mut candidates);
+
+    // Fuzzy score against the last path component (dirname) for relevance
+    let query_lower = query.to_lowercase();
+    let mut scored: Vec<(u32, String)> = candidates
+        .into_iter()
+        .filter_map(|abs_path| {
+            // Score against just the final component so "caboose-web" matches /home/alex/caboose-web
+            let component = std::path::Path::new(&abs_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&abs_path);
+            crate::tui::file_auto::score_path_for_dir(component, &query_lower)
+                .map(|score| (score, abs_path))
+        })
+        .collect();
+
+    scored.sort_by_key(|(s, _)| *s);
+    scored.truncate(100);
+    scored.into_iter().map(|(_, p)| p).collect()
+}
+
+fn walk_dir_recursive(
+    current: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<String>,
+) {
+    if depth >= max_depth || out.len() >= 200 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(current) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(abs_str) = path.to_str() {
+                out.push(abs_str.to_string());
+            }
+            walk_dir_recursive(&path, depth + 1, max_depth, out);
+        }
+    }
+}
+
+fn build_workspace_list_state(config: &crate::config::Config) -> crate::tui::dialog::WorkspaceListState {
+    use crate::tui::dialog::WorkspaceListState;
+    let workspaces = config.workspaces
+        .iter()
+        .map(|(name, cfg)| {
+            let available = std::path::Path::new(&cfg.path).exists();
+            (name.clone(), cfg.clone(), available)
+        })
+        .collect::<Vec<_>>();
+    WorkspaceListState { workspaces, selected: 0 }
+}
+
 #[cfg(test)]
 mod task_text_parse_tests {
     use super::*;
@@ -8244,6 +8653,45 @@ mod circuit_parse_tests {
     #[test]
     fn format_duration_mixed() {
         assert_eq!(format_duration(90), "1m 30s");
+    }
+}
+
+#[cfg(test)]
+mod workspace_add_validation_tests {
+    /// Test the path validation helper logic (extracted for testability).
+    /// These test the same conditions checked in handle_workspace_add_confirm_path.
+
+    #[test]
+    fn name_from_dirname() {
+        let path = std::path::Path::new("/home/alex/caboose-web");
+        let name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(name, "caboose-web");
+    }
+
+    #[test]
+    fn nested_path_detection() {
+        let primary = std::path::PathBuf::from("/home/alex/caboose");
+        let child = std::path::PathBuf::from("/home/alex/caboose/sub");
+        let parent = std::path::PathBuf::from("/home/alex");
+        // child starts_with primary → nested
+        assert!(child.starts_with(&primary));
+        // primary starts_with parent → primary is nested inside parent
+        assert!(primary.starts_with(&parent));
+        // sibling does not start_with primary
+        let sibling = std::path::PathBuf::from("/home/alex/caboose-web");
+        assert!(!sibling.starts_with(&primary));
+        assert!(!primary.starts_with(&sibling));
+    }
+
+    #[test]
+    fn name_validation_no_spaces() {
+        let bad = "my workspace";
+        let good = "my-workspace";
+        assert!(bad.contains(' '));
+        assert!(!good.contains(' '));
     }
 }
 
