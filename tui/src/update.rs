@@ -23,13 +23,13 @@ fn find_checksum_for_artifact(checksums_content: &str, artifact_name: &str) -> O
 
 fn artifact_name() -> &'static str {
     if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-        "caboose-aarch64-apple-darwin.tar.gz"
+        "caboose-aarch64-apple-darwin.tar.xz"
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
-        "caboose-x86_64-apple-darwin.tar.gz"
+        "caboose-x86_64-apple-darwin.tar.xz"
     } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
         "caboose-x86_64-pc-windows-msvc.zip"
     } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
-        "caboose-x86_64-unknown-linux-musl.tar.gz"
+        "caboose-x86_64-unknown-linux-musl.tar.xz"
     } else {
         "caboose-unknown-target"
     }
@@ -56,8 +56,8 @@ fn replace_binary(archive_bytes: &[u8], exe_path: &std::path::Path) -> Result<()
         file.read_to_end(&mut buf)?;
         buf
     } else {
-        // .tar.gz archive — extract the caboose binary
-        let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(archive_bytes));
+        // .tar.xz archive — extract the caboose binary
+        let decoder = xz2::read::XzDecoder::new(std::io::Cursor::new(archive_bytes));
         let mut archive = tar::Archive::new(decoder);
         let mut binary = Vec::new();
         for entry in archive.entries()? {
@@ -343,6 +343,6 @@ mod tests {
     fn artifact_name_is_valid() {
         let name = artifact_name();
         assert!(name.starts_with("caboose-"));
-        assert!(name.ends_with(".tar.gz") || name.ends_with(".zip"));
+        assert!(name.ends_with(".tar.xz") || name.ends_with(".zip"));
     }
 }

@@ -2,7 +2,7 @@ name: Publish Release
 
 on:
   release:
-    types: [published]
+    types: [published, created]
   workflow_dispatch:
     inputs:
       version:
@@ -11,18 +11,28 @@ on:
 
 jobs:
   upload-r2:
-    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p artifacts
-          gh release download "${{ github.event.release.tag_name }}" \
+          gh release download "${{ steps.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --dir artifacts
 
@@ -39,7 +49,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ steps.version.outputs.tag }}"
           # Upload versioned artifacts
           for file in artifacts/*; do
             aws s3 cp "$file" "s3://caboose/${VERSION}/$(basename $file)"
@@ -56,7 +66,7 @@ jobs:
         run: |
           aws s3 cp install/install.sh "s3://caboose/install.sh" --content-type "text/plain"
           aws s3 cp install/install.ps1 "s3://caboose/install.ps1" --content-type "text/plain"
-          aws s3 cp media/caboose-icon-256.png "s3://caboose/caboose-icon.png" --content-type "image/png"
+          aws s3 cp media/caboose-icon-512.png "s3://caboose/caboose-icon.png" --content-type "image/png"
 
   publish-chocolatey:
     runs-on: windows-latest
@@ -66,12 +76,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ needs.upload-r2.outputs.tag || github.sha }}
 
       - name: Set version
         shell: pwsh
         run: |
-          $version = "${{ github.event.release.tag_name || inputs.version }}".TrimStart('v')
+          $version = "${{ needs.upload-r2.outputs.tag || inputs.version }}".TrimStart('v')
           echo "PKG_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Update nuspec version
