@@ -4737,10 +4737,7 @@ impl App {
                 } else {
                     None
                 };
-                // Update scan trigger query after the dialog borrow has ended
-                if let Some(query) = new_path {
-                    self.state.workspace_scan_last_query = query;
-                }
+                let _ = new_path; // scan trigger in event loop tick detects input change
             }
             _ => {}
         }
