@@ -1240,15 +1240,19 @@ impl App {
                     && self.state.workspace_scan_rx.is_none()
                 {
                     self.state.workspace_scan_last_query = query.clone();
-                    // Walk from parent of typed path if it contains a separator, else home dir
+                    // Walk from parent of typed path if it contains a separator;
+                    // otherwise scan siblings of the primary repo (most common use case).
+                    // Fall back to home dir only if primary_root has no parent.
                     let base = if query.contains('/') || query.contains('\\') {
                         std::path::Path::new(&query)
                             .parent()
                             .map(|p| p.to_string_lossy().to_string())
                             .unwrap_or_else(|| query.clone())
                     } else {
-                        dirs::home_dir()
-                            .map(|h| h.to_string_lossy().to_string())
+                        self.state.primary_root
+                            .parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .or_else(|| dirs::home_dir().map(|h| h.to_string_lossy().to_string()))
                             .unwrap_or_default()
                     };
                     self.state.workspace_scan_rx = Some(spawn_dir_scan(base, query));
