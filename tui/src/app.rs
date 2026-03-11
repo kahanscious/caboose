@@ -1822,12 +1822,13 @@ impl App {
             }
         }
 
-        // Ctrl+C dismisses any overlay before entering quit flow
+        // Ctrl+C dismisses any overlay and starts quit timer
         if key == KeyCode::Char('c')
             && modifiers.contains(KeyModifiers::CONTROL)
             && self.state.dialog_stack.has_overlay()
         {
             self.state.dialog_stack.pop();
+            self.request_quit();
             return;
         }
 
@@ -2327,6 +2328,7 @@ impl App {
                 self.cancel_all_operations();
             } else if !matches!(self.state.agent.state, AgentState::Idle) {
                 self.cancel_all_operations();
+                self.request_quit();
             } else {
                 self.request_quit();
             }
@@ -3195,6 +3197,7 @@ impl App {
             KeyCode::Esc => {
                 self.state.slash_auto = None;
                 self.state.input.clear();
+                self.state.roundhouse_model_add = false;
             }
             KeyCode::Up => {
                 if let Some(auto) = self.state.slash_auto.as_mut() {
@@ -3988,6 +3991,18 @@ impl App {
     }
 
     async fn handle_roundhouse_picker_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // If the model dropdown is open (from pressing 'a'), route keys there first
+        if self
+            .state
+            .slash_auto
+            .as_ref()
+            .map(|a| a.is_picker())
+            .unwrap_or(false)
+        {
+            self.handle_picker_key(key).await;
+            return;
+        }
+
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;

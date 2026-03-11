@@ -256,14 +256,16 @@ pub fn render(
                 let primary_name = truncate_provider_name(&rh.primary_provider, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled("\u{25CF} ", Style::default().fg(colors.brand)),
+                    Span::styled(
+                        format!("{primary_icon} "),
+                        Style::default().fg(primary_color),
+                    ),
                     Span::styled(
                         format!("{primary_name:<10} "),
                         Style::default().fg(colors.text_secondary),
                     ),
-                    Span::styled(primary_icon, Style::default().fg(primary_color)),
                     Span::styled(
-                        format!(" {primary_status_text}"),
+                        primary_status_text,
                         Style::default().fg(primary_color),
                     ),
                 ]));
@@ -275,14 +277,16 @@ pub fn render(
                     let name = truncate_provider_name(&secondary.provider_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled("\u{25CF} ", Style::default().fg(colors.text_dim)),
+                        Span::styled(
+                            format!("{icon} "),
+                            Style::default().fg(color),
+                        ),
                         Span::styled(
                             format!("{name:<10} "),
                             Style::default().fg(colors.text_secondary),
                         ),
-                        Span::styled(icon, Style::default().fg(color)),
                         Span::styled(
-                            format!(" {status_text}"),
+                            status_text,
                             Style::default().fg(color),
                         ),
                     ]));
@@ -453,26 +457,24 @@ fn render_tasks(frame: &mut Frame, area: Rect, outline: &TaskOutline, tick: u64,
 
 /// Return (icon, status_text, color) for a PlannerStatus.
 ///
-/// `tick` drives the blinking dot for active planners.
+/// Active statuses use a typewriter reveal effect driven by `tick`.
 fn planner_status_parts(
     status: &crate::roundhouse::PlannerStatus,
     colors: &Colors,
     tick: u64,
 ) -> (&'static str, String, Color) {
-    // Blink the dot for active statuses
-    let active_dot = if tick % 4 < 2 { "  " } else { "\u{25CF} " };
     match status {
         crate::roundhouse::PlannerStatus::Pending => {
-            ("\u{25CC}", "pending".to_string(), colors.text_dim)
+            ("\u{25CB}", "pending".to_string(), colors.text_dim)
         }
         crate::roundhouse::PlannerStatus::Thinking => {
-            (active_dot, "thinking".to_string(), colors.roundhouse)
+            ("\u{25CF}", typewriter("thinking", tick), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::Streaming => {
-            (active_dot, "streaming".to_string(), colors.roundhouse)
+            ("\u{25CF}", typewriter("streaming", tick), colors.roundhouse)
         }
         crate::roundhouse::PlannerStatus::UsingTool(name) => {
-            ("\u{25CC}", name.clone(), colors.warning)
+            ("\u{25CF}", typewriter(name, tick), colors.warning)
         }
         crate::roundhouse::PlannerStatus::Done => {
             ("\u{2713}", "done".to_string(), colors.success)
@@ -484,6 +486,13 @@ fn planner_status_parts(
             ("\u{2717}", "timed out".to_string(), colors.error)
         }
     }
+}
+
+/// Typewriter effect: reveal `text` one character at a time.
+fn typewriter(text: &str, tick: u64) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let reveal = ((tick / 2) as usize).min(chars.len());
+    chars[..reveal].iter().collect()
 }
 
 /// Truncate or pad a provider name to at most `max` characters.

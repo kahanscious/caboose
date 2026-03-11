@@ -1028,9 +1028,10 @@ fn render_roundhouse_picker(
         )));
     } else {
         for (i, sec) in picker.secondaries.iter().enumerate() {
-            let label = format!("{}. {}/{}", i + 1, sec.display_name, sec.model);
+            let prefix = if i == picker.selected { "▸ " } else { "  " };
+            let label = format!("{prefix}{}. {}/{}", i + 1, sec.display_name, sec.model);
             let style = if i == picker.selected {
-                Style::default().fg(colors.text).bg(colors.bg_hover)
+                Style::default().fg(colors.brand).bg(colors.bg_hover)
             } else {
                 Style::default().fg(colors.text)
             };
