@@ -1219,7 +1219,17 @@ impl App {
                         if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(state)) =
                             self.state.dialog_stack.top_mut()
                         {
-                            state.path_matches = matches;
+                            // Filter out the current primary repo from suggestions
+                            let primary = self.state.primary_root.to_string_lossy().to_string();
+                            let primary_canon = std::fs::canonicalize(&self.state.primary_root)
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or(primary.clone());
+                            state.path_matches = matches.into_iter().filter(|p| {
+                                let canon = std::fs::canonicalize(p)
+                                    .map(|c| c.to_string_lossy().to_string())
+                                    .unwrap_or_else(|_| p.clone());
+                                canon != primary_canon
+                            }).collect();
                         }
                         self.state.workspace_scan_rx = None;
                     }
@@ -4631,6 +4641,31 @@ impl App {
             KeyCode::Char('a') => {
                 self.state.dialog_stack.push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
             }
+            KeyCode::Char('e') | KeyCode::Enter => {
+                // Edit the selected workspace (mode + permissions only)
+                let edit_state = if let Some(DialogKind::WorkspaceList(state)) =
+                    self.state.dialog_stack.top()
+                {
+                    state.workspaces.get(state.selected).map(|(name, cfg, _)| {
+                        use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+                        let mode_selected = if cfg.mode == WorkspaceMode::Proactive { 0 } else { 1 };
+                        let permissions_selected = if cfg.access == WorkspaceAccess::ReadWrite { 0 } else { 1 };
+                        WorkspaceAddState::for_edit(
+                            name.clone(),
+                            cfg.path.clone(),
+                            mode_selected,
+                            permissions_selected,
+                        )
+                    })
+                } else {
+                    None
+                };
+                if let Some(s) = edit_state {
+                    if !s.path_input.is_empty() {
+                        self.state.dialog_stack.push(DialogKind::WorkspaceAdd(s));
+                    }
+                }
+            }
             KeyCode::Char('d') => {
                 let name_to_remove = if let Some(DialogKind::WorkspaceList(state)) =
                     self.state.dialog_stack.top_mut()
@@ -4676,7 +4711,15 @@ impl App {
                         {
                             let prev = match state.phase {
                                 WorkspaceAddPhase::Name => WorkspaceAddPhase::Path,
-                                WorkspaceAddPhase::Mode => WorkspaceAddPhase::Name,
+                                WorkspaceAddPhase::Mode => {
+                                    if state.editing_name.is_some() {
+                                        // In edit mode, Esc on Mode cancels entirely
+                                        self.state.dialog_stack.pop();
+                                        return;
+                                    }
+                                    WorkspaceAddPhase::Name
+                                }
+                                WorkspaceAddPhase::Permissions => WorkspaceAddPhase::Mode,
                                 WorkspaceAddPhase::Path => WorkspaceAddPhase::Path,
                             };
                             state.phase = prev;
@@ -4694,6 +4737,9 @@ impl App {
                         WorkspaceAddPhase::Mode => {
                             if state.mode_selected > 0 { state.mode_selected -= 1; }
                         }
+                        WorkspaceAddPhase::Permissions => {
+                            if state.permissions_selected > 0 { state.permissions_selected -= 1; }
+                        }
                         _ => {}
                     }
                 }
@@ -4707,6 +4753,9 @@ impl App {
                         }
                         WorkspaceAddPhase::Mode => {
                             if state.mode_selected < 1 { state.mode_selected += 1; }
+                        }
+                        WorkspaceAddPhase::Permissions => {
+                            if state.permissions_selected < 1 { state.permissions_selected += 1; }
                         }
                         _ => {}
                     }
@@ -4727,7 +4776,7 @@ impl App {
                             state.name_input.pop();
                             state.error = None;
                         }
-                        WorkspaceAddPhase::Mode => {}
+                        WorkspaceAddPhase::Mode | WorkspaceAddPhase::Permissions => {}
                     }
                 }
             }
@@ -4748,7 +4797,7 @@ impl App {
                             state.error = None;
                             None
                         }
-                        WorkspaceAddPhase::Mode => None,
+                        WorkspaceAddPhase::Mode | WorkspaceAddPhase::Permissions => None,
                     }
                 } else {
                     None
@@ -4761,7 +4810,7 @@ impl App {
 
     async fn handle_workspace_add_confirm(&mut self) {
         use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
-        use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+        use crate::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
 
         let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
             s.phase.clone()
@@ -4881,7 +4930,15 @@ impl App {
             }
 
             WorkspaceAddPhase::Mode => {
-                let (path, name, mode) = if let Some(DialogKind::WorkspaceAdd(s)) =
+                // Advance to Permissions phase
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.phase = WorkspaceAddPhase::Permissions;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Permissions => {
+                let (path, name, mode, access, editing_name) = if let Some(DialogKind::WorkspaceAdd(s)) =
                     self.state.dialog_stack.top()
                 {
                     let mode = if s.mode_selected == 0 {
@@ -4889,25 +4946,25 @@ impl App {
                     } else {
                         WorkspaceMode::Explicit
                     };
-                    (s.path_input.clone(), s.name_input.trim().to_string(), mode)
+                    let access = if s.permissions_selected == 0 {
+                        WorkspaceAccess::ReadWrite
+                    } else {
+                        WorkspaceAccess::ReadOnly
+                    };
+                    (s.path_input.clone(), s.name_input.trim().to_string(), mode, access, s.editing_name.clone())
                 } else {
                     return;
                 };
 
-                let cfg = WorkspaceConfig { path, mode };
+                let cfg = WorkspaceConfig { path, mode, access };
                 crate::config::save_workspace(&name, &cfg);
-
-                // Update in-memory config
                 self.state.config.workspaces.insert(name.clone(), cfg);
-
-                // Pop WorkspaceAdd, leaving WorkspaceList (if open) underneath
                 self.state.dialog_stack.pop();
-
-                // Refresh WorkspaceList state if it's underneath
                 self.refresh_workspace_list_state();
 
+                let verb = if editing_name.is_some() { "updated" } else { "added" };
                 self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("workspace '{name}' added"),
+                    content: format!("workspace '{name}' {verb}"),
                 });
             }
         }
@@ -5216,7 +5273,7 @@ impl App {
     }
 
     fn handle_workspace_command(&mut self, slash: &str) {
-        use crate::tui::dialog::{DialogKind, WorkspaceAddState};
+        use crate::tui::dialog::DialogKind;
 
         let args: Vec<&str> = slash.split_whitespace().collect();
 
@@ -8873,7 +8930,7 @@ mod workspace_list_handler_tests {
             workspaces: (0..n)
                 .map(|i| (
                     format!("ws-{i}"),
-                    WorkspaceConfig { path: format!("/tmp/ws{i}"), mode: WorkspaceMode::Proactive },
+                    WorkspaceConfig { path: format!("/tmp/ws{i}"), mode: WorkspaceMode::Proactive, access: crate::config::schema::WorkspaceAccess::ReadWrite },
                     true,
                 ))
                 .collect(),
@@ -8923,6 +8980,7 @@ mod workspace_prompt_tests {
         ws.insert("caboose-web".to_string(), WorkspaceConfig {
             path: path_str.clone(),
             mode: WorkspaceMode::Proactive,
+            access: crate::config::schema::WorkspaceAccess::ReadWrite,
         });
         let block = build_workspace_block(&ws);
         assert!(block.contains("caboose-web"));
@@ -8938,6 +8996,7 @@ mod workspace_prompt_tests {
         ws.insert("docs".to_string(), WorkspaceConfig {
             path: path_str.clone(),
             mode: WorkspaceMode::Explicit,
+            access: crate::config::schema::WorkspaceAccess::ReadWrite,
         });
         let block = build_workspace_block(&ws);
         assert!(block.contains("docs"));
@@ -8950,6 +9009,7 @@ mod workspace_prompt_tests {
         ws.insert("gone".to_string(), WorkspaceConfig {
             path: "/nonexistent/path/xyz123".to_string(),
             mode: WorkspaceMode::Proactive,
+            access: crate::config::schema::WorkspaceAccess::ReadWrite,
         });
         let block = build_workspace_block(&ws);
         // Path doesn't exist — should be omitted

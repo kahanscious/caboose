@@ -1120,6 +1120,7 @@ mod workspace_persist_tests {
         let cfg = schema::WorkspaceConfig {
             path: "/home/alex/caboose-web".to_string(),
             mode: schema::WorkspaceMode::Proactive,
+            access: schema::WorkspaceAccess::ReadWrite,
         };
         save_workspace_at(dir.path(), "caboose-web", &cfg);
         let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
@@ -1135,6 +1136,7 @@ mod workspace_persist_tests {
         let cfg = schema::WorkspaceConfig {
             path: "/home/alex/caboose-web".to_string(),
             mode: schema::WorkspaceMode::Explicit,
+            access: schema::WorkspaceAccess::ReadOnly,
         };
         save_workspace_at(dir.path(), "caboose-web", &cfg);
         let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
@@ -1148,6 +1150,7 @@ mod workspace_persist_tests {
         let cfg = schema::WorkspaceConfig {
             path: "/home/alex/caboose-web".to_string(),
             mode: schema::WorkspaceMode::Proactive,
+            access: schema::WorkspaceAccess::ReadWrite,
         };
         save_workspace_at(dir.path(), "caboose-web", &cfg);
         remove_workspace_at(dir.path(), "caboose-web");

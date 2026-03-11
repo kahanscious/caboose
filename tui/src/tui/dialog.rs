@@ -111,15 +111,16 @@ pub struct CircuitsListState {
     pub selected: usize,
 }
 
-/// Phase of the workspace-add flow.
+/// Phase of the workspace-add / workspace-edit flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkspaceAddPhase {
     Path,
     Name,
     Mode,
+    Permissions,
 }
 
-/// State for the workspace-add multi-step dialog.
+/// State for the workspace-add multi-step dialog (also used for editing).
 #[derive(Debug, Clone)]
 pub struct WorkspaceAddState {
     pub phase: WorkspaceAddPhase,
@@ -133,6 +134,10 @@ pub struct WorkspaceAddState {
     pub name_input: String,
     /// Mode selection: 0 = Proactive, 1 = Explicit.
     pub mode_selected: usize,
+    /// Access selection: 0 = ReadWrite, 1 = ReadOnly.
+    pub permissions_selected: usize,
+    /// When editing an existing workspace, the name being edited.
+    pub editing_name: Option<String>,
     /// Inline validation error (cleared on new input).
     pub error: Option<String>,
 }
@@ -146,7 +151,29 @@ impl Default for WorkspaceAddState {
             path_selected: 0,
             name_input: String::new(),
             mode_selected: 0,
+            permissions_selected: 0,
+            editing_name: None,
             error: None,
+        }
+    }
+}
+
+impl WorkspaceAddState {
+    /// Create state pre-loaded for editing an existing workspace (starts at Mode phase).
+    pub fn for_edit(
+        name: String,
+        path: String,
+        mode_selected: usize,
+        permissions_selected: usize,
+    ) -> Self {
+        Self {
+            phase: WorkspaceAddPhase::Mode,
+            path_input: path,
+            name_input: name.clone(),
+            editing_name: Some(name),
+            mode_selected,
+            permissions_selected,
+            ..Default::default()
         }
     }
 }
@@ -402,8 +429,8 @@ mod workspace_dialog_tests {
         use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
         let mut state = WorkspaceListState {
             workspaces: vec![
-                ("a".to_string(), WorkspaceConfig { path: "/tmp/a".to_string(), mode: WorkspaceMode::Proactive }, true),
-                ("b".to_string(), WorkspaceConfig { path: "/tmp/b".to_string(), mode: WorkspaceMode::Explicit }, false),
+                ("a".to_string(), WorkspaceConfig { path: "/tmp/a".to_string(), mode: WorkspaceMode::Proactive, access: crate::config::schema::WorkspaceAccess::ReadWrite }, true),
+                ("b".to_string(), WorkspaceConfig { path: "/tmp/b".to_string(), mode: WorkspaceMode::Explicit, access: crate::config::schema::WorkspaceAccess::ReadOnly }, false),
             ],
             selected: 10,
         };

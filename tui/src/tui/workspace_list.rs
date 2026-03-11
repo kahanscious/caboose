@@ -82,10 +82,15 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
                     crate::config::schema::WorkspaceMode::Proactive => "proactive",
                     crate::config::schema::WorkspaceMode::Explicit => "explicit ",
                 };
+                let access_str = match cfg.access {
+                    crate::config::schema::WorkspaceAccess::ReadWrite => "rw",
+                    crate::config::schema::WorkspaceAccess::ReadOnly  => "ro",
+                };
                 let display_path = truncate_path(&cfg.path, 12);
                 let line = Line::from(vec![
                     Span::raw(format!("  {name:<16} ")),
                     Span::styled(format!("{mode_str} "), Style::default().fg(colors.text_dim)),
+                    Span::styled(format!("{access_str} "), Style::default().fg(colors.text_secondary)),
                     Span::styled(format!("{avail_marker} "), avail_style),
                     Span::styled(display_path, Style::default().fg(colors.text_secondary)),
                 ]);
@@ -107,7 +112,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
         f.render_stateful_widget(list, chunks[0], &mut list_state);
 
         f.render_widget(
-            Paragraph::new(" a add · d remove · esc close")
+            Paragraph::new(" a add · e edit · d remove · esc close")
                 .style(Style::default().fg(colors.text_dim)),
             chunks[1],
         );
@@ -152,10 +157,12 @@ mod tests {
                 ("caboose-web".to_string(), WorkspaceConfig {
                     path: "/home/alex/caboose-web".to_string(),
                     mode: WorkspaceMode::Proactive,
+                    access: crate::config::schema::WorkspaceAccess::ReadWrite,
                 }, true),
                 ("caboose-docs".to_string(), WorkspaceConfig {
                     path: "/home/alex/caboose-docs".to_string(),
                     mode: WorkspaceMode::Explicit,
+                    access: crate::config::schema::WorkspaceAccess::ReadOnly,
                 }, false),
             ],
             selected: 0,
