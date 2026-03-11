@@ -1061,54 +1061,6 @@ command = "echo started"
     }
 
     #[test]
-    fn save_workspace_creates_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = schema::WorkspaceConfig {
-            path: "/home/alex/caboose-web".to_string(),
-            mode: schema::WorkspaceMode::Proactive,
-        };
-        save_workspace_at(dir.path(), "caboose-web", &cfg);
-        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
-        assert!(content.contains("caboose-web"));
-        assert!(content.contains("proactive"));
-    }
-
-    #[test]
-    fn save_workspace_preserves_existing_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".caboose")).unwrap();
-        std::fs::write(dir.path().join(".caboose/config.toml"), "provider = \"anthropic\"\n").unwrap();
-        let cfg = schema::WorkspaceConfig {
-            path: "/home/alex/caboose-web".to_string(),
-            mode: schema::WorkspaceMode::Explicit,
-        };
-        save_workspace_at(dir.path(), "caboose-web", &cfg);
-        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
-        assert!(content.contains("provider"));
-        assert!(content.contains("explicit"));
-    }
-
-    #[test]
-    fn remove_workspace_removes_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = schema::WorkspaceConfig {
-            path: "/home/alex/caboose-web".to_string(),
-            mode: schema::WorkspaceMode::Proactive,
-        };
-        save_workspace_at(dir.path(), "caboose-web", &cfg);
-        remove_workspace_at(dir.path(), "caboose-web");
-        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
-        assert!(!content.contains("caboose-web"));
-    }
-
-    #[test]
-    fn remove_workspace_missing_name_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        // Should not panic when file doesn't exist
-        remove_workspace_at(dir.path(), "nonexistent");
-    }
-
-    #[test]
     fn merge_executable_tools_per_tool() {
         let mut global = Config::default();
         global.tools = Some(schema::ToolsConfig {
@@ -1155,5 +1107,58 @@ command = "echo started"
         assert_eq!(exec.len(), 2);
         assert!(exec.contains_key("lint"));
         assert!(exec.contains_key("test"));
+    }
+}
+
+#[cfg(test)]
+mod workspace_persist_tests {
+    use super::*;
+
+    #[test]
+    fn save_workspace_creates_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Proactive,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(content.contains("caboose-web"));
+        assert!(content.contains("proactive"));
+    }
+
+    #[test]
+    fn save_workspace_preserves_existing_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".caboose")).unwrap();
+        std::fs::write(dir.path().join(".caboose/config.toml"), "provider = \"anthropic\"\n").unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Explicit,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(content.contains("provider"));
+        assert!(content.contains("explicit"));
+    }
+
+    #[test]
+    fn remove_workspace_removes_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = schema::WorkspaceConfig {
+            path: "/home/alex/caboose-web".to_string(),
+            mode: schema::WorkspaceMode::Proactive,
+        };
+        save_workspace_at(dir.path(), "caboose-web", &cfg);
+        remove_workspace_at(dir.path(), "caboose-web");
+        let content = std::fs::read_to_string(dir.path().join(".caboose/config.toml")).unwrap();
+        assert!(!content.contains("caboose-web"));
+    }
+
+    #[test]
+    fn remove_workspace_missing_name_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should not panic when file doesn't exist
+        remove_workspace_at(dir.path(), "nonexistent");
     }
 }
