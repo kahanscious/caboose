@@ -2187,6 +2187,10 @@ impl App {
                             self.handle_mcp_command(slash).await;
                             return;
                         }
+                        if slash == "workspace" || slash.starts_with("workspace ") {
+                            self.handle_workspace_command(slash);
+                            return;
+                        }
                         // /model needs async model loading — handle specially
                         if slash == "model" {
                             self.open_model_dropdown().await;
@@ -2950,6 +2954,10 @@ impl App {
                         }
                         if slash.starts_with("mcp ") {
                             self.handle_mcp_command(slash).await;
+                            return;
+                        }
+                        if slash == "workspace" || slash.starts_with("workspace ") {
+                            self.handle_workspace_command(slash);
                             return;
                         }
                         // /model needs async model loading — handle specially
@@ -5185,6 +5193,27 @@ impl App {
                     content: format!(
                         "Unknown /mcp subcommand: {sub}. Use: list, connect, disconnect, restart"
                     ),
+                });
+            }
+        }
+    }
+
+    fn handle_workspace_command(&mut self, slash: &str) {
+        use crate::tui::dialog::{DialogKind, WorkspaceAddState};
+
+        let args: Vec<&str> = slash.split_whitespace().collect();
+
+        match args.get(1).copied() {
+            None | Some("list") => {
+                let state = build_workspace_list_state(&self.state.config);
+                self.state.dialog_stack.push(DialogKind::WorkspaceList(state));
+            }
+            Some("add") => {
+                self.state.dialog_stack.push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /workspace [list|add]".to_string(),
                 });
             }
         }
