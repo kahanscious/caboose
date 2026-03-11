@@ -246,6 +246,18 @@ pub fn render(
                     Style::default().fg(colors.warning),
                 )));
             }
+            crate::roundhouse::RoundhousePhase::Complete => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Plan executed",
+                    Style::default().fg(colors.success),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  /roundhouse clear",
+                    Style::default().fg(colors.text_dim),
+                )));
+            }
             _ => {
                 // Show per-LLM status rows
                 lines.push(Line::from(""));
@@ -506,10 +518,12 @@ fn typewriter(text: &str, tick: u64, status_tick: u64) -> String {
 
 /// Truncate or pad a provider name to at most `max` characters.
 fn truncate_provider_name(name: &str, max: usize) -> String {
-    if name.len() <= max {
+    let char_count = name.chars().count();
+    if char_count <= max {
         name.to_string()
     } else {
-        format!("{}…", &name[..max.saturating_sub(1)])
+        let truncated: String = name.chars().take(max.saturating_sub(1)).collect();
+        format!("{truncated}…")
     }
 }
 

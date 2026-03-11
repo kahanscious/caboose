@@ -50,11 +50,16 @@ Once inside, use slash commands:
 ## Highlights
 
 - **Multi-provider** — Anthropic, OpenAI, Gemini, OpenRouter, DeepSeek, Groq, Mistral
+- **Local LLMs** — Ollama, LM Studio, llama.cpp with auto-discovery and one-click connect
+- **Roundhouse** — Multi-LLM planning: multiple models plan independently, then synthesize into one unified plan
+- **Circuits** — Scheduled recurring tasks (in-session or persistent via daemon)
+- **SCM integration** — GitHub and GitLab tools (issues, PRs/MRs, file contents) with MCP presets
+- **Settings migration** — Import MCP servers, system prompts, and project files from Claude Code, Open Code, and Codex
 - **Permission modes** — Plan, Create, AutoEdit, Chug. Cycle with `Tab`
 - **Persistent sessions** — SQLite-backed. Resume any session with `Ctrl+O`
 - **Skills** — Built-in slash commands (`/brainstorm`, `/debug`, `/tdd`, `/review`, `/plan`) plus user-defined
 - **Memory** — Cross-session fact extraction
-- **MCP** — Extend tools via Model Context Protocol servers
+- **MCP** — Extend tools via Model Context Protocol servers, with built-in presets
 - **Embedded terminal** — Full PTY shell inside the TUI (`Ctrl+=`)
 - **Bring your own keys** — No subscription. Per-turn pricing with optional session budgets
 

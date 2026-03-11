@@ -42,7 +42,7 @@ impl ThemeVariant {
     #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Caboose => "Railroad amber-red (default)",
+            Self::Caboose => "Classic caboose maroon (default)",
             Self::Firebox => "Blazing orange, intense heat",
             Self::SteamDome => "Cool steel blue, ethereal",
             Self::Smokebox => "Warm ash, industrial soot",
@@ -158,7 +158,7 @@ impl Colors {
         }
     }
 
-    /// Caboose — railroad amber-red (default).
+    /// Caboose — classic caboose maroon (default).
     fn caboose() -> Self {
         Self {
             // Backgrounds
@@ -168,8 +168,8 @@ impl Colors {
             bg_hover: Color::Rgb(30, 30, 30),     // #1e1e1e
 
             // Borders
-            border: Color::Rgb(42, 42, 42),         // #2a2a2a
-            border_active: Color::Rgb(212, 87, 42), // #d4572a — brand accent
+            border: Color::Rgb(42, 42, 42),          // #2a2a2a
+            border_active: Color::Rgb(155, 35, 53),  // #9b2335 — brand accent
 
             // Text hierarchy
             text: Color::Rgb(238, 238, 238),           // #eeeeee
@@ -180,7 +180,7 @@ impl Colors {
             // Chat roles
             user_msg: Color::Rgb(238, 238, 238),      // #eeeeee
             assistant_msg: Color::Rgb(200, 200, 200), // #c8c8c8
-            tool_msg: Color::Rgb(212, 87, 42),        // #d4572a — brand
+            tool_msg: Color::Rgb(155, 35, 53),        // #9b2335 — brand
             system_msg: Color::Rgb(96, 96, 96),       // #606060
 
             // Semantic
@@ -190,8 +190,8 @@ impl Colors {
             info: Color::Rgb(91, 155, 213),    // #5b9bd5
 
             // Brand
-            brand: Color::Rgb(212, 87, 42), // #d4572a — railroad amber-red
-            brand_muted: Color::Rgb(128, 128, 128), // #808080
+            brand: Color::Rgb(155, 35, 53),          // #9b2335 — classic caboose maroon
+            brand_muted: Color::Rgb(128, 128, 128),  // #808080
 
             roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 
@@ -201,7 +201,7 @@ impl Colors {
             code_text: Color::Rgb(212, 212, 212), // #d4d4d4
 
             // Markdown elements
-            header_h1: Color::Rgb(212, 87, 42),  // #d4572a — brand
+            header_h1: Color::Rgb(155, 35, 53),  // #9b2335 — brand
             header_h2: Color::Rgb(212, 160, 42), // #d4a02a — warm amber
             header_h3: Color::Rgb(160, 160, 160), // #a0a0a0 — text_secondary
             blockquote_border: Color::Rgb(64, 64, 64), // #404040 — text_muted

@@ -76,8 +76,7 @@ impl CircuitManager {
                         let _ = event_tx.send(CircuitEvent::TickStarted {
                             circuit_id: circuit_id.clone(),
                         });
-                        // Actual LLM execution will be wired up in integration task
-                        // For now, emit a placeholder tick
+                        // LLM execution handled by app.rs TickStarted handler
                     }
                 }
             }

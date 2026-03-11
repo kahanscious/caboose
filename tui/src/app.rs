@@ -1559,6 +1559,7 @@ impl App {
             // Poll roundhouse planner updates (non-blocking)
             if let Some(ref mut rx) = self.state.roundhouse_update_rx {
                 let mut all_done = false;
+                let mut cancelled = false;
                 while let Ok(update) = rx.try_recv() {
                     match update {
                         crate::roundhouse::PlannerUpdate::StatusChanged {
@@ -1648,7 +1649,9 @@ impl App {
                                             ),
                                         });
                                         self.state.roundhouse_session = None;
-                                        continue;
+                                        self.state.roundhouse_model_add = false;
+                                        cancelled = true;
+                                        break;
                                     }
                                 }
 
@@ -1667,7 +1670,10 @@ impl App {
                         }
                     }
                 }
-                if all_done {
+                if cancelled {
+                    self.state.roundhouse_update_rx = None;
+                    self.state.roundhouse_synthesis_rx = None;
+                } else if all_done {
                     self.state.roundhouse_update_rx = None;
                     self.start_roundhouse_synthesis();
                 }
@@ -1741,6 +1747,23 @@ impl App {
 
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
+
+            // Roundhouse: transition Executing → Complete when agent goes idle
+            // and there are no queued messages waiting to be sent
+            if matches!(self.state.agent.state, AgentState::Idle)
+                && self.state.message_queue.is_empty()
+                && self
+                    .state
+                    .roundhouse_session
+                    .as_ref()
+                    .is_some_and(|rh| {
+                        rh.phase == crate::roundhouse::RoundhousePhase::Executing
+                    })
+            {
+                if let Some(ref mut rh) = self.state.roundhouse_session {
+                    rh.phase = crate::roundhouse::RoundhousePhase::Complete;
+                }
+            }
 
             if self.state.should_quit {
                 break;
@@ -4040,6 +4063,7 @@ impl App {
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;
+                self.state.roundhouse_model_add = false;
                 self.state.dialog_stack.pop();
             }
             KeyCode::Up if modifiers == KeyModifiers::NONE => {
@@ -7036,7 +7060,9 @@ impl App {
                 if let Some(ref session) = self.state.roundhouse_session {
                     if session.phase == crate::roundhouse::RoundhousePhase::Reviewing {
                         let plan = session.synthesized_plan.clone().unwrap_or_default();
-                        let msg = format!("Execute the following implementation plan:\n\n{plan}");
+                        let msg = format!(
+                            "Execute the following implementation plan now. Start implementing immediately — read the relevant files, make the code changes, and run any commands specified. Do not just describe what you would do; actually do it step by step using your tools.\n\n{plan}"
+                        );
                         self.state.roundhouse_session.as_mut().unwrap().phase =
                             crate::roundhouse::RoundhousePhase::Executing;
                         // Queue the plan for the agent to execute
@@ -7060,6 +7086,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse cancelled.".to_string(),
                     });
@@ -7074,6 +7101,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse session cleared.".to_string(),
                     });
@@ -7724,7 +7752,14 @@ impl App {
         interval_secs: u64,
         kind: crate::circuits::CircuitKind,
     ) -> Option<String> {
-        let id = format!("c-{}", chrono::Utc::now().timestamp_millis() % 100_000);
+        let ts = chrono::Utc::now().timestamp_millis() as u64;
+        let mut id = format!("c-{:x}", ts % 0x1000000);
+        // Ensure uniqueness against existing circuits
+        let mut counter = 1u64;
+        while self.state.circuit_manager.circuits.iter().any(|h| h.circuit.id == id) {
+            id = format!("c-{:x}", (ts + counter) % 0x1000000);
+            counter += 1;
+        }
         let circuit = crate::circuits::Circuit {
             id: id.clone(),
             prompt: prompt.to_string(),

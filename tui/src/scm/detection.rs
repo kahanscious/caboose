@@ -57,7 +57,12 @@ mod tests {
     fn test_detect_provider_in_current_repo() {
         let cwd = env::current_dir().unwrap();
         let provider = detect_provider(&cwd);
-        assert_eq!(provider, ScmProvider::GitHub);
+        // Accept GitHub or GitLab depending on which remote this repo is cloned from
+        assert!(
+            matches!(provider, ScmProvider::GitHub | ScmProvider::GitLab),
+            "Expected GitHub or GitLab, got {:?}",
+            provider
+        );
     }
 
     #[test]

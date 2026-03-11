@@ -208,7 +208,7 @@ impl Config {
             self.scm = other.scm;
         }
         for (name, local) in other.local_providers {
-            self.local_providers.entry(name).or_insert(local);
+            self.local_providers.insert(name, local);
         }
         self.keys.merge(other.keys);
         for (name, other_cfg) in other.providers {
@@ -252,7 +252,9 @@ pub fn save_skills_disabled(disabled: &[String], project_config_exists: bool) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = config.as_table_mut().unwrap();
+    let Some(table) = config.as_table_mut() else {
+        return;
+    };
     let skills = table
         .entry("skills")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -287,7 +289,9 @@ pub fn save_mcp_server_toggle(name: &str, config: &schema::McpServerConfig) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = doc.as_table_mut().unwrap();
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
     let mcp = table
         .entry("mcp")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -326,7 +330,9 @@ pub fn save_behavior_max_session_cost(max_cost: Option<f64>) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = config.as_table_mut().unwrap();
+    let Some(table) = config.as_table_mut() else {
+        return;
+    };
     let behavior = table
         .entry("behavior")
         .or_insert(toml::Value::Table(toml::map::Map::new()))
@@ -367,7 +373,9 @@ pub fn save_local_provider(name: &str, config: &schema::LocalProviderConfig) {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let table = doc.as_table_mut().unwrap();
+    let Some(table) = doc.as_table_mut() else {
+        return;
+    };
     let local_providers = table
         .entry("local_providers")
         .or_insert(toml::Value::Table(toml::map::Map::new()))

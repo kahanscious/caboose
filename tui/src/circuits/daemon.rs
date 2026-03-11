@@ -32,14 +32,50 @@ pub fn is_daemon_running() -> bool {
         Ok(contents) => {
             // Format: "PID:PORT"
             if let Some(pid_str) = contents.split(':').next()
-                && let Ok(_pid) = pid_str.parse::<u32>()
+                && let Ok(pid) = pid_str.parse::<u32>()
             {
-                // TODO: check if PID is alive (platform-specific)
-                return true;
+                if is_pid_alive(pid) {
+                    return true;
+                }
+                // Stale lockfile — clean it up
+                let _ = std::fs::remove_file(&path);
+                return false;
             }
             false
         }
         Err(_) => false,
+    }
+}
+
+/// Check whether a process with the given PID is still alive.
+fn is_pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| {
+                let out = String::from_utf8_lossy(&o.stdout);
+                out.contains(&pid.to_string())
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        true // can't check, assume alive
     }
 }
 
