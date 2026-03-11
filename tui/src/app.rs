@@ -1054,6 +1054,11 @@ impl App {
     /// Main event loop.
     pub async fn run(&mut self) -> Result<()> {
         self.terminal.enter()?;
+        // Set terminal tab title
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::SetTitle("caboose")
+        );
         // Enable bracketed paste for API key input
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
 
