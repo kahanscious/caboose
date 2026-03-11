@@ -582,6 +582,18 @@ impl App {
             system_prompt
         };
 
+        // Inject workspace context
+        let system_prompt = {
+            let ws_block = workspace_system_prompt_block(&config.workspaces);
+            if !ws_block.is_empty() {
+                let mut prompt = system_prompt;
+                prompt.push_str(&ws_block);
+                prompt
+            } else {
+                system_prompt
+            }
+        };
+
         let mut agent = AgentLoop::new(system_prompt, permission_mode);
 
         // Wire tools config (allow/deny commands, additional secrets) into agent
@@ -8458,6 +8470,57 @@ fn build_workspace_list_state(config: &crate::config::Config) -> crate::tui::dia
     WorkspaceListState { workspaces, selected: 0 }
 }
 
+/// Build the workspace context block for injection into the system prompt.
+/// Omits workspaces whose path no longer exists.
+/// Returns an empty string if no workspaces are configured or available.
+fn workspace_system_prompt_block(
+    workspaces: &std::collections::HashMap<String, crate::config::schema::WorkspaceConfig>,
+) -> String {
+    use crate::config::schema::WorkspaceMode;
+
+    if workspaces.is_empty() {
+        return String::new();
+    }
+
+    let proactive: Vec<_> = workspaces
+        .iter()
+        .filter(|(_, cfg)| {
+            cfg.mode == WorkspaceMode::Proactive
+                && std::path::Path::new(&cfg.path).exists()
+        })
+        .collect();
+
+    let explicit: Vec<_> = workspaces
+        .iter()
+        .filter(|(_, cfg)| {
+            cfg.mode == WorkspaceMode::Explicit
+                && std::path::Path::new(&cfg.path).exists()
+        })
+        .collect();
+
+    if proactive.is_empty() && explicit.is_empty() {
+        return String::new();
+    }
+
+    let mut block = String::new();
+
+    if !proactive.is_empty() {
+        block.push_str("\nAdditional workspaces (search alongside primary repo):\n");
+        for (name, cfg) in &proactive {
+            block.push_str(&format!("- {name}: {}\n", cfg.path));
+        }
+    }
+
+    if !explicit.is_empty() {
+        block.push_str("\nAdditional workspaces (reference explicitly by name):\n");
+        for (name, cfg) in &explicit {
+            block.push_str(&format!("- {name}: {}\n", cfg.path));
+        }
+    }
+
+    block
+}
+
 #[cfg(test)]
 mod task_text_parse_tests {
     use super::*;
@@ -8729,5 +8792,62 @@ mod workspace_list_handler_tests {
         state.workspaces.remove(2);
         state.clamp_selected();
         assert_eq!(state.selected, 1);
+    }
+}
+
+#[cfg(test)]
+mod workspace_prompt_tests {
+    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use std::collections::HashMap;
+
+    fn build_workspace_block(workspaces: &HashMap<String, WorkspaceConfig>) -> String {
+        super::workspace_system_prompt_block(workspaces)
+    }
+
+    #[test]
+    fn empty_workspaces_returns_empty_string() {
+        let ws: HashMap<String, WorkspaceConfig> = HashMap::new();
+        assert_eq!(build_workspace_block(&ws), "");
+    }
+
+    #[test]
+    fn proactive_workspace_in_prompt() {
+        let path = std::env::temp_dir();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut ws = HashMap::new();
+        ws.insert("caboose-web".to_string(), WorkspaceConfig {
+            path: path_str.clone(),
+            mode: WorkspaceMode::Proactive,
+        });
+        let block = build_workspace_block(&ws);
+        assert!(block.contains("caboose-web"));
+        assert!(block.contains(&path_str));
+        assert!(block.contains("search alongside primary repo"));
+    }
+
+    #[test]
+    fn explicit_workspace_in_prompt() {
+        let path = std::env::temp_dir();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut ws = HashMap::new();
+        ws.insert("docs".to_string(), WorkspaceConfig {
+            path: path_str.clone(),
+            mode: WorkspaceMode::Explicit,
+        });
+        let block = build_workspace_block(&ws);
+        assert!(block.contains("docs"));
+        assert!(block.contains("reference explicitly by name"));
+    }
+
+    #[test]
+    fn unavailable_workspace_omitted() {
+        let mut ws = HashMap::new();
+        ws.insert("gone".to_string(), WorkspaceConfig {
+            path: "/nonexistent/path/xyz123".to_string(),
+            mode: WorkspaceMode::Proactive,
+        });
+        let block = build_workspace_block(&ws);
+        // Path doesn't exist — should be omitted
+        assert!(block.is_empty());
     }
 }
