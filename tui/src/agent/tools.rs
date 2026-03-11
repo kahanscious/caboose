@@ -112,16 +112,7 @@ pub async fn execute_tool(
             }
         }
         "web_search" => {
-            // Build a fallback chain of (provider, key) candidates.
-            // If the config specifies a provider explicitly, it goes first.
-            // Then we auto-discover any other known providers via env vars.
-            // The first candidate that succeeds wins; others are tried on failure.
-            let known: &[(&str, &str)] = &[
-                ("tavily", "TAVILY_API_KEY"),
-                ("brave", "BRAVE_API_KEY"),
-            ];
-
-            let explicit: Option<(&str, &str)> = services
+            let (provider, api_key_env) = services
                 .and_then(|s| s.services.get("web_search"))
                 .filter(|sc| sc.enabled)
                 .map(|sc| {
@@ -129,46 +120,29 @@ pub async fn execute_tool(
                         sc.provider.as_str(),
                         sc.api_key_env.as_deref().unwrap_or("TAVILY_API_KEY"),
                     )
-                });
+                })
+                .unwrap_or(("tavily", "TAVILY_API_KEY"));
 
-            // Collect candidates: explicit first (if key present), then remaining known providers
-            let mut candidates: Vec<(String, String)> = Vec::new();
-            if let Some((prov, key_env)) = explicit {
-                if let Ok(key) = std::env::var(key_env) {
-                    if !key.is_empty() {
-                        candidates.push((prov.to_string(), key));
-                    }
+            match std::env::var(api_key_env) {
+                Ok(key) if !key.is_empty() => {
+                    crate::tools::web_search::execute(input, provider, &key).await?
                 }
-            }
-            for (prov, key_env) in known {
-                // Skip if already added as explicit
-                if candidates.iter().any(|(p, _)| p == prov) {
-                    continue;
-                }
-                if let Ok(key) = std::env::var(key_env) {
-                    if !key.is_empty() {
-                        candidates.push((prov.to_string(), key));
-                    }
-                }
-            }
-
-            if candidates.is_empty() {
-                ToolResult {
+                _ => ToolResult {
                     tool_use_id: String::new(),
-                    output: "Web search requires an API key. Set TAVILY_API_KEY or BRAVE_API_KEY, \
-                             or configure [services.web_search] in config.toml."
-                        .to_string(),
+                    output: format!(
+                        "Web search requires an API key. Set the {api_key_env} environment variable, \
+                         or configure [services.web_search] in config.toml:\n\n\
+                         [services.web_search]\n\
+                         provider = \"tavily\"\n\
+                         api_key_env = \"TAVILY_API_KEY\""
+                    ),
                     is_error: true,
                     tool_name: None,
                     file_path: None,
                     files_modified: vec![],
                     lines_added: 0,
                     lines_removed: 0,
-                }
-            } else {
-                let refs: Vec<(&str, &str)> =
-                    candidates.iter().map(|(p, k)| (p.as_str(), k.as_str())).collect();
-                crate::tools::web_search::execute_with_fallback(input, &refs).await?
+                },
             }
         }
         name if name.starts_with("cli_") => {
