@@ -1915,6 +1915,9 @@ impl App {
             Some(DialogKind::MigrationChecklist(_)) => {
                 self.handle_migration_checklist_key(key);
             }
+            Some(DialogKind::WorkspaceList(_)) | Some(DialogKind::WorkspaceAdd(_)) => {
+                // TODO: workspace dialog key handling
+            }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,

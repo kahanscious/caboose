@@ -26,6 +26,8 @@ pub enum DialogKind {
     RoundhouseProviderPicker(RoundhousePickerState),
     CircuitsList(CircuitsListState),
     MigrationChecklist(MigrationChecklistState),
+    WorkspaceList(WorkspaceListState),
+    WorkspaceAdd(WorkspaceAddState),
 }
 
 // Debug impl needed for Action derive
@@ -47,6 +49,8 @@ impl std::fmt::Debug for DialogKind {
             Self::RoundhouseProviderPicker(_) => write!(f, "RoundhouseProviderPicker(...)"),
             Self::CircuitsList(_) => write!(f, "CircuitsList(...)"),
             Self::MigrationChecklist(_) => write!(f, "MigrationChecklist(...)"),
+            Self::WorkspaceList(_) => write!(f, "WorkspaceList(...)"),
+            Self::WorkspaceAdd(_) => write!(f, "WorkspaceAdd(...)"),
         }
     }
 }
@@ -105,6 +109,67 @@ pub struct RoundhouseSecondary {
 /// State for the circuits list dialog.
 pub struct CircuitsListState {
     pub selected: usize,
+}
+
+/// Phase of the workspace-add flow.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkspaceAddPhase {
+    Path,
+    Name,
+    Mode,
+}
+
+/// State for the workspace-add multi-step dialog.
+#[derive(Debug, Clone)]
+pub struct WorkspaceAddState {
+    pub phase: WorkspaceAddPhase,
+    /// Raw path string as the user types it.
+    pub path_input: String,
+    /// Fuzzy directory suggestions (populated async).
+    pub path_matches: Vec<String>,
+    /// Currently highlighted suggestion index.
+    pub path_selected: usize,
+    /// Workspace name (pre-filled from dirname after path is confirmed).
+    pub name_input: String,
+    /// Mode selection: 0 = Proactive, 1 = Explicit.
+    pub mode_selected: usize,
+    /// Inline validation error (cleared on new input).
+    pub error: Option<String>,
+    /// Sender to cancel an in-flight dir scan by dropping it.
+    pub dir_scan_tx: Option<tokio::sync::mpsc::Sender<Vec<String>>>,
+}
+
+impl Default for WorkspaceAddState {
+    fn default() -> Self {
+        Self {
+            phase: WorkspaceAddPhase::Path,
+            path_input: String::new(),
+            path_matches: Vec::new(),
+            path_selected: 0,
+            name_input: String::new(),
+            mode_selected: 0,
+            error: None,
+            dir_scan_tx: None,
+        }
+    }
+}
+
+/// State for the workspace-list dialog.
+#[derive(Debug, Clone)]
+pub struct WorkspaceListState {
+    /// (name, config, is_available) — is_available checked at open time.
+    pub workspaces: Vec<(String, crate::config::schema::WorkspaceConfig, bool)>,
+    pub selected: usize,
+}
+
+impl WorkspaceListState {
+    /// Clamp `selected` to valid index range (saturating to last entry).
+    pub fn clamp_selected(&mut self) {
+        let max = self.workspaces.len().saturating_sub(1);
+        if self.selected > max {
+            self.selected = max;
+        }
+    }
 }
 
 /// The dialog stack — a base screen plus zero or more overlays.
@@ -299,5 +364,49 @@ pub fn build_migration_checklist(
         items,
         selected: 0,
         phase: MigrationPhase::Checklist,
+    }
+}
+
+#[cfg(test)]
+mod workspace_dialog_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_add_state_default_phase_is_path() {
+        let state = WorkspaceAddState::default();
+        assert!(matches!(state.phase, WorkspaceAddPhase::Path));
+    }
+
+    #[test]
+    fn workspace_add_state_default_inputs_are_empty() {
+        let state = WorkspaceAddState::default();
+        assert!(state.path_input.is_empty());
+        assert!(state.name_input.is_empty());
+        assert!(state.path_matches.is_empty());
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn workspace_list_state_selected_clamps() {
+        let mut state = WorkspaceListState {
+            workspaces: vec![],
+            selected: 5,
+        };
+        state.clamp_selected();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn workspace_list_state_with_entries_clamps() {
+        use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+        let mut state = WorkspaceListState {
+            workspaces: vec![
+                ("a".to_string(), WorkspaceConfig { path: "/tmp/a".to_string(), mode: WorkspaceMode::Proactive }, true),
+                ("b".to_string(), WorkspaceConfig { path: "/tmp/b".to_string(), mode: WorkspaceMode::Explicit }, false),
+            ],
+            selected: 10,
+        };
+        state.clamp_selected();
+        assert_eq!(state.selected, 1);
     }
 }
