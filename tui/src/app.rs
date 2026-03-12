@@ -297,6 +297,10 @@ pub struct ToolMessage {
     pub expanded: bool,
     pub file_path: Option<String>,
     pub diff_preview: Option<Vec<String>>,  // pre-computed diff lines for pending state
+    /// Per-message diff expand/collapse state for post-execution diffs.
+    /// For pending messages this is unused — pending diff state lives in State.diff_expanded.
+    /// For post-execution edit_file / apply_patch, true = diff shown (default), false = collapsed.
+    pub diff_expanded: bool,
 }
 
 /// A message in the chat display.
@@ -5678,6 +5682,7 @@ impl App {
                             expanded: false,
                             file_path: None,
                             diff_preview,
+                            diff_expanded: false,
                         }));
                 }
             }
@@ -6446,6 +6451,7 @@ impl App {
                         expanded: false,
                         file_path: None,
                         diff_preview: None,
+                        diff_expanded: true,
                     }));
             }
         }
