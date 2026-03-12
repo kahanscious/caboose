@@ -137,6 +137,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::WorkspaceAdd(state) => {
                 crate::tui::workspace_add::render(frame, frame.area(), state);
             }
+            DialogKind::AgentStreamOverlay(_) => {
+                // Placeholder — full overlay rendering implemented in a future task.
+            }
         }
     }
 }
@@ -276,6 +279,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             app.tick,
             app.roundhouse_session.as_ref(),
             &app.active_watchers,
+            &app.sub_agents,
         );
     }
 

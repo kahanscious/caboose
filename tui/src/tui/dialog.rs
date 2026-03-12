@@ -28,6 +28,8 @@ pub enum DialogKind {
     MigrationChecklist(MigrationChecklistState),
     WorkspaceList(WorkspaceListState),
     WorkspaceAdd(WorkspaceAddState),
+    #[allow(dead_code)]
+    AgentStreamOverlay(AgentStreamOverlayState),
 }
 
 // Debug impl needed for Action derive
@@ -51,7 +53,27 @@ impl std::fmt::Debug for DialogKind {
             Self::MigrationChecklist(_) => write!(f, "MigrationChecklist(...)"),
             Self::WorkspaceList(_) => write!(f, "WorkspaceList(...)"),
             Self::WorkspaceAdd(_) => write!(f, "WorkspaceAdd(...)"),
+            Self::AgentStreamOverlay(_) => write!(f, "AgentStreamOverlay(...)"),
         }
+    }
+}
+
+/// State for the agent stream overlay dialog.
+pub struct AgentStreamOverlayState {
+    /// Scroll offset for the stream log.
+    #[allow(dead_code)]
+    pub scroll: usize,
+}
+
+impl AgentStreamOverlayState {
+    pub fn new() -> Self {
+        Self { scroll: 0 }
+    }
+}
+
+impl Default for AgentStreamOverlayState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
