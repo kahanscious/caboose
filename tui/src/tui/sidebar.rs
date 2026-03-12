@@ -43,13 +43,16 @@ pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
 }
 
 /// Render the agents section into `lines`.
+/// Returns the line offset of the dismiss button within `lines` (if shown).
 pub fn render_agents_section(
     lines: &mut Vec<Line<'static>>,
     agents: &[SubAgent],
     sidebar_width: u16,
     colors: &Colors,
-) {
+    tick: u64,
+) -> Option<usize> {
     let counts = agent_counts(agents);
+    let mut dismiss_line_offset: Option<usize> = None;
 
     // Header: "  agents" + pills
     let mut header_spans: Vec<Span<'static>> = vec![Span::styled(
@@ -77,13 +80,14 @@ pub fn render_agents_section(
             Style::default().fg(colors.error),
         ));
     }
-    // Dismiss hint when all agents are in terminal state
+    // Clickable dismiss when all agents are in terminal state
     if counts.running == 0 && counts.pending == 0 && !agents.is_empty() {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
-            "D dismiss",
-            Style::default().fg(colors.text_dim),
+            "\u{25B8} clear",
+            Style::default().fg(colors.text_muted),
         ));
+        dismiss_line_offset = Some(lines.len());
     }
     lines.push(Line::from(header_spans));
     lines.push(Line::from(""));
@@ -91,14 +95,19 @@ pub fn render_agents_section(
     // Per-agent rows
     // Layout: "  {dot} {task_name}  {right_status}"
     // Total width available minus: 2 indent + 1 dot + 1 space + 2 trailing spaces + right_status
-    let total_cost: f64 = agents.iter().map(|a| a.cost_usd).sum();
-
     for agent in agents {
-        let (dot, color_key) = agent_status_display(&agent.state);
+        let (dot_char, color_key) = agent_status_display(&agent.state);
+        // Blink running/waiting dots in sync (● ↔ ○ every ~10 ticks)
+        let dot: &str = if matches!(color_key, "run" | "warn") {
+            if (tick / 10).is_multiple_of(2) { "\u{25CF}" } else { "\u{25CB}" }
+        } else {
+            dot_char
+        };
         let dot_color = match color_key {
             "run" => colors.info,
             "done" => colors.success,
             "fail" => colors.error,
+            "warn" => colors.warning,
             _ => colors.text_dim,
         };
 
@@ -132,19 +141,13 @@ pub fn render_agents_section(
         ]));
     }
 
-    // Cost footer (only if meaningful)
-    if total_cost > 0.001 {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("  ${total_cost:.3} total"),
-            Style::default().fg(colors.text_dim),
-        )));
-    }
-
     lines.push(Line::from(""));
+
+    dismiss_line_offset
 }
 
 /// Render the sidebar panel.
+/// Returns the absolute screen row of the agents dismiss button, if one is shown.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
@@ -163,7 +166,7 @@ pub fn render(
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
     active_watchers: &[crate::scm::watcher::Watcher],
     sub_agents: &[SubAgent],
-) {
+) -> Option<u16> {
     let colors = Colors::default();
 
     // Sidebar block with left border only
@@ -467,6 +470,7 @@ pub fn render(
     }
 
     // --- Agents section (only when agents exist) ---
+    let mut dismiss_row: Option<u16> = None;
     if !sub_agents.is_empty() {
         // Separator before agents section
         lines.push(Line::from(""));
@@ -478,7 +482,9 @@ pub fn render(
             Style::default().fg(colors.border),
         )));
         lines.push(Line::from(""));
-        render_agents_section(&mut lines, sub_agents, inner.width, &colors);
+        if let Some(offset) = render_agents_section(&mut lines, sub_agents, inner.width, &colors, tick) {
+            dismiss_row = Some(inner.y + offset as u16);
+        }
     }
 
     // Render fixed sections
@@ -507,6 +513,8 @@ pub fn render(
             render_tasks(frame, tasks_area, outline, tick, &colors);
         }
     }
+
+    dismiss_row
 }
 
 /// Render the tasks section with auto-scroll.

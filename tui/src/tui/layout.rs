@@ -80,8 +80,9 @@ fn apply_turn_margin(line: &mut Line, accent_style: Style) {
     }
 }
 
-const SIDEBAR_WIDTH: u16 = 35;
 const SIDEBAR_MIN_TERMINAL_WIDTH: u16 = 120;
+pub const SIDEBAR_MIN_WIDTH: u16 = 20;
+pub const SIDEBAR_MAX_WIDTH: u16 = 80;
 
 /// Render the full application layout.
 pub fn render(frame: &mut Frame, app: &State) {
@@ -186,7 +187,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
 
     // Horizontal split: [chat area | sidebar] (sidebar optional)
     let h_constraints = if show_sidebar {
-        vec![Constraint::Min(1), Constraint::Length(SIDEBAR_WIDTH)]
+        vec![Constraint::Min(1), Constraint::Length(app.sidebar_width)]
     } else {
         vec![Constraint::Min(1)]
     };
@@ -210,7 +211,9 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
     } else {
         app.message_queue.len() as u16 + 2
     };
-    let approval_height = if matches!(app.agent.state, AgentState::PendingApproval { .. }) {
+    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. })
+        || app.sub_agent_approval_showing.is_some();
+    let approval_height = if has_approval {
         crate::tui::approval::APPROVAL_BAR_HEIGHT
     } else {
         0u16
@@ -263,7 +266,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             }
         });
 
-        crate::tui::sidebar::render(
+        let dismiss_row = crate::tui::sidebar::render(
             frame,
             h_chunks[1],
             app.agent.last_input_tokens,
@@ -281,6 +284,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             &app.active_watchers,
             &app.sub_agents,
         );
+        app.agents_dismiss_row.set(dismiss_row);
     }
 
     // --- Footer ---

@@ -15,6 +15,10 @@ pub struct SubAgentInput {
     pub system_prompt: String,
     pub permission_mode: PermissionMode,
     pub approval_rx: tokio::sync::mpsc::UnboundedReceiver<bool>,
+    /// Per-million-token input price (from PricingRegistry). 0.0 if model has no pricing.
+    pub input_per_m: f64,
+    /// Per-million-token output price (from PricingRegistry). 0.0 if model has no pricing.
+    pub output_per_m: f64,
 }
 
 /// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
@@ -66,9 +70,8 @@ pub async fn run_subagent(
 
     let mut total_cost = 0.0f64;
     let mut last_text = String::new();
-    // Sonnet 4.5 pricing: $3.00/M input, $15.00/M output
-    const INPUT_PRICE_PER_TOKEN: f64 = 3.0 / 1_000_000.0;
-    const OUTPUT_PRICE_PER_TOKEN: f64 = 15.0 / 1_000_000.0;
+    let input_price_per_token = input.input_per_m / 1_000_000.0;
+    let output_price_per_token = input.output_per_m / 1_000_000.0;
 
     // Poll loop — drive the agent to completion
     loop {
@@ -98,8 +101,8 @@ pub async fn run_subagent(
                     });
                 }
                 AgentEvent::TurnComplete { input_tokens, output_tokens } => {
-                    let turn_cost = (*input_tokens as f64 * INPUT_PRICE_PER_TOKEN)
-                        + (*output_tokens as f64 * OUTPUT_PRICE_PER_TOKEN);
+                    let turn_cost = (*input_tokens as f64 * input_price_per_token)
+                        + (*output_tokens as f64 * output_price_per_token);
                     total_cost += turn_cost;
                     let _ = tx.send(SubAgentEvent::CostUpdate {
                         id: input.id,
@@ -253,6 +256,8 @@ mod tests {
             system_prompt: "You are a helpful coding agent.".to_string(),
             permission_mode: PermissionMode::Default,
             approval_rx: rx,
+            input_per_m: 0.0,
+            output_per_m: 0.0,
         };
         assert_eq!(input.task, "implement auth");
         assert_eq!(input.id, id);
