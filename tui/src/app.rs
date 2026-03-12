@@ -181,10 +181,9 @@ pub struct State {
     /// Receiver for subagent pipeline events, polled each frame.
     pub sub_agent_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sub_agent::SubAgentEvent>>,
     /// Index into sub_agents for the stream overlay. None = closed.
-    #[allow(dead_code)]
+    // TODO: consumed by overlay renderer
     pub agent_stream_overlay: Option<usize>,
     /// Selected agent row in sidebar agents section.
-    #[allow(dead_code)]
     pub sidebar_agent_selected: usize,
     /// In-session circuit manager.
     #[allow(dead_code)]
