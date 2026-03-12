@@ -123,6 +123,8 @@ pub struct State {
     pub workspace_scan_last_query: String,
     /// Screen y → message index for clickable truncation indicators.
     pub truncation_click_zones: RefCell<Vec<(u16, usize)>>,
+    /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
+    pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
     pub text_selection: Option<TextSelection>,
     /// The Rect of the chat area, set each frame for mouse hit-testing.
@@ -724,6 +726,7 @@ impl App {
                 workspace_scan_rx: None,
                 workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
+                tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
                 rendered_chat_text: RefCell::new(Vec::new()),
@@ -1396,6 +1399,29 @@ impl App {
                                         self.state.terminal_focused = true;
                                     } else {
                                         self.state.terminal_focused = false;
+
+                                        // Diff toggle click zone logic — runs BEFORE truncation zones.
+                                        // Extract the hit message index first (drops borrow before mutating chat_messages).
+                                        let toggle_hit = {
+                                            let rects = self.state.tool_toggle_rects.borrow();
+                                            rects.iter().find(|&&(y, _)| y == mouse.row).copied()
+                                        };
+                                        if let Some((_, msg_idx)) = toggle_hit {
+                                            // Determine if this is the active pending message
+                                            let is_pending = matches!(
+                                                self.state.chat_messages.get(msg_idx),
+                                                Some(ChatMessage::Tool(t)) if t.status == ToolStatus::Pending
+                                            );
+                                            if is_pending {
+                                                // Pending diff state lives on State, not ToolMessage
+                                                self.state.diff_expanded = !self.state.diff_expanded;
+                                            } else if let Some(ChatMessage::Tool(tool_msg)) =
+                                                self.state.chat_messages.get_mut(msg_idx)
+                                            {
+                                                tool_msg.diff_expanded = !tool_msg.diff_expanded;
+                                            }
+                                            continue;
+                                        }
 
                                         // Truncation click zone logic
                                         let zones = self.state.truncation_click_zones.borrow();
