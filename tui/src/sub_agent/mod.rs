@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod executor;
 pub mod pipeline;
 pub mod worktree;
@@ -8,12 +6,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SubAgentStreamLine {
     pub kind: StreamLineKind,
     pub text: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum StreamLineKind {
     Thinking,
@@ -23,6 +23,7 @@ pub enum StreamLineKind {
     Error,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentState {
     Pending,
@@ -32,7 +33,8 @@ pub enum SubAgentState {
     Conflict { report: String },
 }
 
-#[derive(Debug)]
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct SubAgent {
     pub id: Uuid,
     pub task: String,
@@ -44,6 +46,7 @@ pub struct SubAgent {
     pub stream: Vec<SubAgentStreamLine>,
 }
 
+#[allow(dead_code)]
 impl SubAgent {
     pub fn new(task: String, branch: String, worktree_path: PathBuf) -> Self {
         Self {
@@ -64,6 +67,7 @@ impl SubAgent {
 }
 
 /// Format elapsed seconds. Under 1h: "XmYYs". At or over 1h: "XhYYm".
+#[allow(dead_code)]
 pub fn format_elapsed(secs: u64) -> String {
     if secs < 3600 {
         let m = secs / 60;
@@ -77,7 +81,8 @@ pub fn format_elapsed(secs: u64) -> String {
 }
 
 /// Events sent from the pipeline driver tokio task to the main thread.
-#[derive(Debug)]
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum SubAgentEvent {
     StreamLine { id: Uuid, line: SubAgentStreamLine },
     StateChange { id: Uuid, state: SubAgentState },
@@ -89,11 +94,13 @@ pub enum SubAgentEvent {
     PipelineHalted { message: String },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskPipeline {
     pub stages: Vec<TaskStage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskStage {
     pub tasks: Vec<String>,
