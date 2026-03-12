@@ -13,12 +13,25 @@ impl ToolRenderer for WriteRenderer {
         &["write_file", "edit_file", "apply_patch"]
     }
 
-    fn render(&self, tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'static>> {
-        render(tool, colors, tick)
+    fn render(
+        &self,
+        tool: &ToolMessage,
+        colors: &Colors,
+        tick: u64,
+        diff_expanded: bool,
+        diff_scroll: usize,
+    ) -> Vec<Line<'static>> {
+        render(tool, colors, tick, diff_expanded, diff_scroll)
     }
 }
 
-pub fn render(tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'static>> {
+pub fn render(
+    tool: &ToolMessage,
+    colors: &Colors,
+    tick: u64,
+    diff_expanded: bool,
+    diff_scroll: usize,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let icon = super::status_icon(&tool.status, colors, tick);
     let label = match tool.name.as_str() {
@@ -27,13 +40,105 @@ pub fn render(tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'stati
         _ => "Write",
     };
 
-    // For apply_patch, extract file paths from the diff content
     let detail = if tool.name == "apply_patch" {
         extract_patch_files(&tool.args)
     } else {
         tool.file_path.clone().unwrap_or_else(|| "?".to_string())
     };
 
+    // Pending state: show collapsed/expanded diff preview
+    if tool.status == ToolStatus::Pending {
+        if let Some(ref diff_lines) = tool.diff_preview {
+            // First diff_lines entry may be "(new file)" marker — detect and show it
+            let (is_new_file, diff_body) = if diff_lines
+                .first()
+                .map(|l| l == "(new file)")
+                .unwrap_or(false)
+            {
+                (true, &diff_lines[1..])
+            } else {
+                (false, diff_lines.as_slice())
+            };
+
+            let added = diff_body.iter().filter(|l| l.starts_with("+ ")).count();
+            let removed = diff_body.iter().filter(|l| l.starts_with("- ")).count();
+
+            let counts = if is_new_file {
+                format!("(new file)  +{added}")
+            } else if added == 0 && removed == 0 {
+                "(no changes)".to_string()
+            } else {
+                format!("+{added} -{removed}")
+            };
+
+            let toggle_hint = if diff_expanded {
+                "[d] collapse"
+            } else {
+                "[d] expand"
+            };
+
+            lines.push(Line::from(vec![
+                icon,
+                Span::styled(label, Style::default().fg(colors.text)),
+                Span::styled(
+                    format!("  {detail}"),
+                    Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
+                ),
+                Span::raw("  "),
+                Span::styled(counts, Style::default().fg(colors.text_dim)),
+                Span::raw("  "),
+                Span::styled(toggle_hint, Style::default().fg(colors.info)),
+            ]));
+
+            if diff_expanded {
+                const MAX_VISIBLE: usize = 20;
+                let start = diff_scroll.min(diff_body.len().saturating_sub(1));
+                let visible = &diff_body[start..];
+                let show_count = visible.len().min(MAX_VISIBLE);
+
+                for line in &visible[..show_count] {
+                    let style = if line.starts_with("+ ") {
+                        Style::default().fg(colors.success)
+                    } else if line.starts_with("- ") {
+                        Style::default().fg(colors.error)
+                    } else if line.starts_with("@@") {
+                        Style::default().fg(colors.info)
+                    } else {
+                        Style::default().fg(colors.text_dim)
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("    {line}"),
+                        style,
+                    )));
+                }
+
+                let remaining = diff_body.len().saturating_sub(start + show_count);
+                if remaining > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("    ... {remaining} more lines (j/k to scroll)"),
+                        Style::default().fg(colors.text_dim),
+                    )));
+                }
+            }
+
+            lines.push(Line::from(""));
+            return lines;
+        }
+
+        // Pending but no diff preview (binary, read error, non-write tool)
+        lines.push(Line::from(vec![
+            icon,
+            Span::styled(label, Style::default().fg(colors.text)),
+            Span::styled(
+                format!("  {detail}"),
+                Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        return lines;
+    }
+
+    // Non-pending: existing rendering (Success/Running/Failed)
     lines.push(Line::from(vec![
         icon,
         Span::styled(label, Style::default().fg(colors.text)),

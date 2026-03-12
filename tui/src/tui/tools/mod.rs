@@ -45,7 +45,14 @@ pub trait ToolRenderer: Send + Sync {
     }
 
     /// Render the tool message into styled lines (compact + optional expanded).
-    fn render(&self, tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'static>>;
+    fn render(
+        &self,
+        tool: &ToolMessage,
+        colors: &Colors,
+        tick: u64,
+        diff_expanded: bool,
+        diff_scroll: usize,
+    ) -> Vec<Line<'static>>;
 }
 
 /// Registry of tool renderers with generic fallback.
@@ -79,12 +86,14 @@ impl ToolRendererRegistry {
         colors: &Colors,
         focused: bool,
         tick: u64,
+        diff_expanded: bool,
+        diff_scroll: usize,
     ) -> Vec<Line<'static>> {
         let mut lines = self
             .renderers
             .iter()
             .find(|r| r.matches(&tool.name))
-            .map(|r| r.render(tool, colors, tick))
+            .map(|r| r.render(tool, colors, tick, diff_expanded, diff_scroll))
             .unwrap_or_else(|| generic::render(tool, colors, tick));
 
         if focused && let Some(first) = lines.first_mut() {
@@ -121,7 +130,7 @@ mod tests {
         let reg = ToolRendererRegistry::new();
         let tool = make_tool("run_command");
         let colors = Colors::default();
-        let lines = reg.render(&tool, &colors, false, 0);
+        let lines = reg.render(&tool, &colors, false, 0, false, 0);
         assert!(!lines.is_empty());
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Bash"), "Expected 'Bash' in: {text}");
@@ -132,7 +141,7 @@ mod tests {
         let reg = ToolRendererRegistry::new();
         let tool = make_tool("server:some_tool");
         let colors = Colors::default();
-        let lines = reg.render(&tool, &colors, false, 0);
+        let lines = reg.render(&tool, &colors, false, 0, false, 0);
         assert!(!lines.is_empty());
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("MCP"), "Expected 'MCP' in: {text}");
@@ -143,7 +152,7 @@ mod tests {
         let reg = ToolRendererRegistry::new();
         let tool = make_tool("unknown_tool_xyz");
         let colors = Colors::default();
-        let lines = reg.render(&tool, &colors, false, 0);
+        let lines = reg.render(&tool, &colors, false, 0, false, 0);
         assert!(!lines.is_empty());
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
@@ -157,7 +166,7 @@ mod tests {
         let reg = ToolRendererRegistry::new();
         let tool = make_tool("run_command");
         let colors = Colors::default();
-        let lines = reg.render(&tool, &colors, true, 0);
+        let lines = reg.render(&tool, &colors, true, 0, false, 0);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text.contains("\u{25b8}"),
