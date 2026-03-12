@@ -66,8 +66,12 @@ pub struct State {
     pub tool_counts: std::collections::HashMap<String, u32>,
     pub commands: crate::tui::command::CommandRegistry,
     pub sidebar_visible: bool,
+    /// Current sidebar width in columns (user-resizable via drag).
+    pub sidebar_width: u16,
     /// Whether keyboard focus is in the sidebar (agents section navigation).
     pub sidebar_focused: bool,
+    /// Active sidebar resize drag (column where drag started).
+    pub sidebar_drag: Option<u16>,
     /// Index of the focused tool message in chat_messages (for expand/collapse navigation).
     pub focused_tool: Option<usize>,
     /// Inline slash autocomplete state — active when input starts with `/`.
@@ -202,6 +206,8 @@ pub struct State {
     pub agent_stream_overlay: Option<usize>,
     /// Selected agent row in sidebar agents section.
     pub sidebar_agent_selected: usize,
+    /// Absolute screen row of the clickable agents dismiss button (set each frame).
+    pub agents_dismiss_row: Cell<Option<u16>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -737,7 +743,9 @@ impl App {
                 tool_counts: std::collections::HashMap::new(),
                 commands: crate::tui::command::build_default_registry(),
                 sidebar_visible: prefs.sidebar_visible,
+                sidebar_width: 35,
                 sidebar_focused: false,
+                sidebar_drag: None,
                 focused_tool: None,
                 slash_auto: None,
                 file_auto: None,
@@ -804,6 +812,7 @@ impl App {
                 spawn_agent_handles: Vec::new(),
                 agent_stream_overlay: None,
                 sidebar_agent_selected: 0,
+                agents_dismiss_row: Cell::new(None),
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1439,6 +1448,17 @@ impl App {
                                 }
                                 MouseEventKind::Down(_) => {
                                     self.state.text_selection = None;
+                                    // Sidebar border drag to resize
+                                    if self.state.sidebar_visible {
+                                        let (tw, _) = crossterm::terminal::size().unwrap_or((80, 24));
+                                        let border_col = tw.saturating_sub(self.state.sidebar_width);
+                                        if mouse.column >= border_col.saturating_sub(1)
+                                            && mouse.column <= border_col + 1
+                                        {
+                                            self.state.sidebar_drag = Some(mouse.column);
+                                            continue;
+                                        }
+                                    }
                                     if in_terminal {
                                         // Check for [x] close button click (header row, last 5 cols)
                                         if let Some(area) = self.state.terminal_area.get()
@@ -1454,6 +1474,29 @@ impl App {
                                         self.state.terminal_focused = true;
                                     } else {
                                         self.state.terminal_focused = false;
+
+                                        // Agents dismiss click
+                                        if let Some(dismiss_y) = self.state.agents_dismiss_row.get()
+                                            && mouse.row == dismiss_y
+                                        {
+                                            self.state.sub_agents.retain(|a| {
+                                                !matches!(
+                                                    a.state,
+                                                    crate::sub_agent::SubAgentState::Done
+                                                        | crate::sub_agent::SubAgentState::Failed { .. }
+                                                        | crate::sub_agent::SubAgentState::Conflict { .. }
+                                                )
+                                            });
+                                            if !self.state.sub_agents.is_empty() {
+                                                let max = self.state.sub_agents.len().saturating_sub(1);
+                                                if self.state.sidebar_agent_selected > max {
+                                                    self.state.sidebar_agent_selected = max;
+                                                }
+                                            } else {
+                                                self.state.sidebar_focused = false;
+                                            }
+                                            continue;
+                                        }
 
                                         // Diff toggle click zone logic — runs BEFORE truncation zones.
                                         // Extract the hit message index first (drops borrow before mutating chat_messages).
@@ -1504,6 +1547,15 @@ impl App {
                                     }
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
+                                    if self.state.sidebar_drag.is_some() {
+                                        let (tw, _) = crossterm::terminal::size().unwrap_or((80, 24));
+                                        let new_width = tw.saturating_sub(mouse.column);
+                                        self.state.sidebar_width = new_width.clamp(
+                                            crate::tui::layout::SIDEBAR_MIN_WIDTH,
+                                            crate::tui::layout::SIDEBAR_MAX_WIDTH,
+                                        );
+                                        continue;
+                                    }
                                     if let Some(ref mut sel) = self.state.text_selection {
                                         sel.end_row = mouse.row;
                                         sel.end_col = mouse.column;
@@ -1542,6 +1594,9 @@ impl App {
                                             }
                                         }
                                     }
+                                }
+                                MouseEventKind::Up(_) => {
+                                    self.state.sidebar_drag = None;
                                 }
                                 MouseEventKind::Moved => {
                                     // Mouse hover selects items in command palette
@@ -1995,11 +2050,18 @@ impl App {
                         }
                         SubAgentEvent::ApprovalRequest { id, tool_name, arguments } => {
                             if let Some(agent) = self.state.sub_agents.iter_mut().find(|a| a.id == id) {
-                                agent.state = crate::sub_agent::SubAgentState::WaitingApproval {
-                                    tool_name: tool_name.clone(),
-                                };
+                                if agent.auto_approve {
+                                    // Auto-approve: send true immediately, stay Running
+                                    if let Some(ref tx) = agent.approval_tx {
+                                        let _ = tx.send(true);
+                                    }
+                                } else {
+                                    agent.state = crate::sub_agent::SubAgentState::WaitingApproval {
+                                        tool_name: tool_name.clone(),
+                                    };
+                                    self.state.sub_agent_pending_approvals.push_back((id, tool_name, arguments));
+                                }
                             }
-                            self.state.sub_agent_pending_approvals.push_back((id, tool_name, arguments));
                         }
                     }
                 }
@@ -2019,6 +2081,11 @@ impl App {
                             agent.stream.push(line);
                         }
                         if let Some(cost) = cost_opt {
+                            // Add the delta to session cost
+                            let delta = cost - agent.cost_usd;
+                            if delta > 0.0 {
+                                self.state.session_cost += delta;
+                            }
                             agent.cost_usd = cost;
                         }
                     }
@@ -2149,20 +2216,23 @@ impl App {
             return;
         }
 
-        // Subagent approval bar — intercept y/n before main agent approval
+        // Subagent approval bar — intercept y/n/a before main agent approval
         if self.state.sub_agent_approval_showing.is_some() {
             match key {
-                KeyCode::Char('y') | KeyCode::Char('n') => {
+                KeyCode::Char('y') | KeyCode::Char('n') | KeyCode::Char('a') => {
                     if let Some((agent_id, _tool_name, _args)) =
                         self.state.sub_agent_approval_showing.take()
                     {
-                        let approved = matches!(key, KeyCode::Char('y'));
+                        let approved = matches!(key, KeyCode::Char('y') | KeyCode::Char('a'));
                         if let Some(agent) = self
                             .state
                             .sub_agents
                             .iter_mut()
                             .find(|a| a.id == agent_id)
                         {
+                            if matches!(key, KeyCode::Char('a')) {
+                                agent.auto_approve = true;
+                            }
                             if let Some(ref tx) = agent.approval_tx {
                                 let _ = tx.send(approved);
                             }
@@ -6061,6 +6131,10 @@ impl App {
                                 });
                             }
                             Err(err_msg) => {
+                                tracing::warn!("spawn_agent setup failed: {err_msg}");
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: format!("spawn_agent failed: {err_msg}"),
+                                });
                                 self.state.agent.conversation.push(
                                     crate::agent::conversation::Message {
                                         role: crate::agent::conversation::Role::User,
@@ -7031,6 +7105,21 @@ impl App {
             )
         });
 
+        // Clean up any stale branch/worktree from a previous run
+        let branch_cleanup = branch.clone();
+        let path_cleanup = worktree_path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            // Try removing stale worktree first (ignores errors)
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", &path_cleanup.to_string_lossy()])
+                .output();
+            // Try deleting stale branch (ignores errors)
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-D", &branch_cleanup])
+                .output();
+        })
+        .await;
+
         // Create worktree
         let path_clone = worktree_path.clone();
         let branch_clone = branch.clone();
@@ -7061,6 +7150,7 @@ impl App {
             cost_usd: 0.0,
             stream: Vec::new(),
             approval_tx: Some(approval_tx),
+            auto_approve: false,
         });
 
         // Clamp permission mode
@@ -7072,6 +7162,7 @@ impl App {
         };
 
         let system_prompt = self.state.agent.conversation.system_prompt.clone();
+        let pricing = self.state.pricing.get(&self.state.active_model_name);
         let input = crate::sub_agent::executor::SubAgentInput {
             id: agent_id,
             task: task.clone(),
@@ -7079,6 +7170,8 @@ impl App {
             system_prompt,
             permission_mode: subagent_mode,
             approval_rx,
+            input_per_m: pricing.map(|p| p.input_per_m).unwrap_or(0.0),
+            output_per_m: pricing.map(|p| p.output_per_m).unwrap_or(0.0),
         };
 
         // Get provider
@@ -9242,15 +9335,18 @@ async fn run_spawn_agent_task(
                 },
             }
         }
-        Err(message) => SpawnAgentResult {
-            agent_id,
-            tool_use_id,
-            result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
-            is_error: true,
-            task,
-            final_state: SubAgentState::Failed { message },
-            cost_usd: 0.0,
-        },
+        Err(message) => {
+            tracing::error!("spawn_agent executor failed for '{task}': {message}");
+            SpawnAgentResult {
+                agent_id,
+                tool_use_id,
+                result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
+                is_error: true,
+                task,
+                final_state: SubAgentState::Failed { message },
+                cost_usd: 0.0,
+            }
+        }
     }
 }
 

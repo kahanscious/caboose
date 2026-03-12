@@ -48,6 +48,8 @@ pub struct SubAgent {
     /// Present while subagent is running. Used to route approval responses back.
     /// Set to None when the agent reaches a terminal state.
     pub approval_tx: Option<tokio::sync::mpsc::UnboundedSender<bool>>,
+    /// When true, automatically approve all tool calls for this agent.
+    pub auto_approve: bool,
 }
 
 #[allow(dead_code)]
@@ -63,6 +65,7 @@ impl SubAgent {
             cost_usd: 0.0,
             stream: Vec::new(),
             approval_tx: None,
+            auto_approve: false,
         }
     }
 
