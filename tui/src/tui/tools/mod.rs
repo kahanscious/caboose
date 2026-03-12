@@ -112,6 +112,7 @@ mod tests {
             status: ToolStatus::Success,
             expanded: false,
             file_path: None,
+            diff_preview: None,
         }
     }
 
