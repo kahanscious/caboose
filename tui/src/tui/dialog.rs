@@ -59,15 +59,21 @@ impl std::fmt::Debug for DialogKind {
 }
 
 /// State for the agent stream overlay dialog.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AgentStreamOverlayState {
     /// Scroll offset for the stream log.
-    #[allow(dead_code)]
-    pub scroll: usize,
+    pub scroll_offset: usize,
+    /// Whether the view should follow new output automatically.
+    pub follow: bool,
 }
 
 impl AgentStreamOverlayState {
     pub fn new() -> Self {
-        Self { scroll: 0 }
+        Self {
+            scroll_offset: 0,
+            follow: true,
+        }
     }
 }
 
