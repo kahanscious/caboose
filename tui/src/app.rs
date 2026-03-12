@@ -292,6 +292,7 @@ pub struct ToolMessage {
     pub status: ToolStatus,
     pub expanded: bool,
     pub file_path: Option<String>,
+    pub diff_preview: Option<Vec<String>>,  // pre-computed diff lines for pending state
 }
 
 /// A message in the chat display.
@@ -600,6 +601,7 @@ impl App {
         let primary_root = std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
             .unwrap_or_default();
         agent.primary_root = primary_root.clone();
+        agent.workspace_paths = config.workspaces.values().map(|c| c.path.clone()).collect();
 
         // Wire tools config (allow/deny commands, additional secrets) into agent
         if let Some(ref tools_cfg) = config.tools {
@@ -5632,6 +5634,7 @@ impl App {
                             status: ToolStatus::Pending,
                             expanded: false,
                             file_path: None,
+                            diff_preview: None,
                         }));
                 }
             }
@@ -6343,6 +6346,7 @@ impl App {
                         status: ToolStatus::Running,
                         expanded: false,
                         file_path: None,
+                        diff_preview: None,
                     }));
             }
         }
@@ -6720,6 +6724,13 @@ impl App {
         }
 
         // Permission check (sync — runs before spawning)
+        let workspace_paths: Vec<&str> = self
+            .state
+            .config
+            .workspaces
+            .values()
+            .map(|cfg| cfg.path.as_str())
+            .collect();
         let decision = crate::agent::permission::check_permission(
             &self.state.agent.permission_mode,
             &tc.name,
@@ -6729,6 +6740,7 @@ impl App {
             &self.state.agent.session_allows,
             tool_permission,
             Some(&self.state.primary_root),
+            &workspace_paths,
         );
 
         if let crate::agent::permission::ToolDecision::Blocked(reason) = decision {
@@ -8535,12 +8547,16 @@ fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
     };
     let query_lower = match_term.to_lowercase();
     let mut candidates: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
     // BFS so shallow paths surface before deep ones — avoids hitting the 200
     // cap with deeply-nested entries before reaching the user's target.
     let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
         std::collections::VecDeque::new();
     for root in roots {
+        // Strip Windows extended-length path prefix (\\?\) that canonicalize() adds —
+        // it bleeds into display strings and causes false duplicates.
+        let root = root.strip_prefix(r"\\?\").unwrap_or(root);
         let p = std::path::PathBuf::from(root);
         if p.exists() {
             queue.push_back((p, 0));
@@ -8556,6 +8572,7 @@ fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
             if !path.is_dir() { continue; }
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') || is_ignored_dir(name) { continue; }
+            if !seen.insert(path.clone()) { continue; }
             if let Some(s) = path.to_str() {
                 candidates.push(s.to_string());
             }
