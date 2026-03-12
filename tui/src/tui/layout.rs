@@ -942,7 +942,20 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
     if let Some(a_area) = approval_area
         && let Some((name, args)) = app.agent.current_approval_prompt()
     {
-        crate::tui::approval::render(frame, a_area, name, args);
+        let has_diff = app
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let ChatMessage::Tool(t) = m {
+                    if t.status == ToolStatus::Pending {
+                        return Some(t.diff_preview.is_some());
+                    }
+                }
+                None
+            })
+            .unwrap_or(false);
+        crate::tui::approval::render(frame, a_area, name, args, has_diff);
     }
 
     // Render attachment chips
