@@ -5624,17 +5624,26 @@ impl App {
             AgentState::PendingApproval { .. } => {
                 // Push Pending placeholders so diff preview shows before approval
                 self.state.tool_exec_running_start = self.state.chat_messages.len();
-                for tc in &self.state.agent.pending_tool_calls {
+                // Collect tool calls first to avoid borrow conflict
+                let pending: Vec<_> = self
+                    .state
+                    .agent
+                    .pending_tool_calls
+                    .iter()
+                    .map(|tc| (tc.name.clone(), tc.arguments.clone()))
+                    .collect();
+                for (name, args) in pending {
+                    let diff_preview = App::compute_pending_diff(&name, &args).await;
                     self.state
                         .chat_messages
                         .push(ChatMessage::Tool(ToolMessage {
-                            name: tc.name.clone(),
-                            args: tc.arguments.clone(),
+                            name,
+                            args,
                             output: None,
                             status: ToolStatus::Pending,
                             expanded: false,
                             file_path: None,
-                            diff_preview: None,
+                            diff_preview,
                         }));
                 }
             }
@@ -5809,6 +5818,62 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Compute diff preview lines for a pending tool call. Returns None if not
+    /// a write/edit/patch tool, or if preview is unavailable.
+    async fn compute_pending_diff(
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Vec<String>> {
+        use crate::tools::write::compute_diff_lines;
+        match name {
+            "edit_file" => {
+                let old = args.get("old_string")?.as_str()?;
+                let new = args.get("new_string")?.as_str()?;
+                Some(compute_diff_lines(old, new))
+            }
+            "write_file" => {
+                let path = args
+                    .get("path")
+                    .or_else(|| args.get("file_path"))
+                    .and_then(|v| v.as_str())?;
+                let new = args.get("content")?.as_str()?;
+                let old = tokio::fs::read_to_string(path).await.ok();
+                match old {
+                    None => {
+                        // New file or binary/unreadable — mark as new file, all lines added
+                        let mut lines: Vec<String> =
+                            new.lines().map(|l| format!("+ {l}")).collect();
+                        lines.insert(0, "(new file)".to_string());
+                        Some(lines)
+                    }
+                    Some(ref old_content) => {
+                        let lines = compute_diff_lines(old_content, new);
+                        if lines.is_empty() {
+                            None // identical content — no diff to show
+                        } else {
+                            Some(lines)
+                        }
+                    }
+                }
+            }
+            "apply_patch" => {
+                // The diff input IS the diff — collect its content lines
+                let diff_text = args.get("diff")?.as_str()?;
+                let lines: Vec<String> = diff_text
+                    .lines()
+                    .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
+                    .map(|l| l.to_string())
+                    .collect();
+                if lines.is_empty() {
+                    None
+                } else {
+                    Some(lines)
+                }
+            }
+            _ => None,
         }
     }
 
