@@ -57,6 +57,8 @@ pub struct State {
     pub tool_counts: std::collections::HashMap<String, u32>,
     pub commands: crate::tui::command::CommandRegistry,
     pub sidebar_visible: bool,
+    /// Whether keyboard focus is in the sidebar (agents section navigation).
+    pub sidebar_focused: bool,
     /// Index of the focused tool message in chat_messages (for expand/collapse navigation).
     pub focused_tool: Option<usize>,
     /// Inline slash autocomplete state — active when input starts with `/`.
@@ -701,6 +703,7 @@ impl App {
                 tool_counts: std::collections::HashMap::new(),
                 commands: crate::tui::command::build_default_registry(),
                 sidebar_visible: prefs.sidebar_visible,
+                sidebar_focused: false,
                 focused_tool: None,
                 slash_auto: None,
                 file_auto: None,
@@ -2182,6 +2185,13 @@ impl App {
             }
             Some(DialogKind::WorkspaceList(_)) => self.handle_workspace_list_key(key),
             Some(DialogKind::WorkspaceAdd(_)) => self.handle_workspace_add_key(key).await,
+            Some(DialogKind::AgentStreamOverlay(_)) => {
+                // Escape closes the overlay
+                if key == KeyCode::Esc {
+                    self.state.agent_stream_overlay = None;
+                    self.state.dialog_stack.pop();
+                }
+            }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -2662,6 +2672,46 @@ impl App {
                 self.request_quit();
             }
             return;
+        }
+
+        // Sidebar agent navigation (when agents exist and sidebar is focused)
+        if !self.state.sub_agents.is_empty() && self.state.sidebar_visible {
+            // Alt+A toggles sidebar focus
+            if key == KeyCode::Char('a') && modifiers.contains(KeyModifiers::ALT) {
+                self.state.sidebar_focused = !self.state.sidebar_focused;
+                return;
+            }
+            if self.state.sidebar_focused {
+                match key {
+                    KeyCode::Up => {
+                        self.state.sidebar_agent_selected =
+                            self.state.sidebar_agent_selected.saturating_sub(1);
+                        return;
+                    }
+                    KeyCode::Down => {
+                        let max = self.state.sub_agents.len().saturating_sub(1);
+                        if self.state.sidebar_agent_selected < max {
+                            self.state.sidebar_agent_selected += 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        let idx = self.state.sidebar_agent_selected;
+                        self.state.agent_stream_overlay = Some(idx);
+                        self.state.dialog_stack.push(
+                            crate::tui::dialog::DialogKind::AgentStreamOverlay(
+                                crate::tui::dialog::AgentStreamOverlayState::new(),
+                            ),
+                        );
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        self.state.sidebar_focused = false;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Picker mode has its own key handling

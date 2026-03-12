@@ -5,7 +5,134 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{FileStats, TaskOutline, TaskStatus};
 use crate::mcp::ServerStatus;
+use crate::sub_agent::{SubAgent, SubAgentState, format_elapsed};
 use crate::tui::theme::Colors;
+
+/// Per-state counts for the agents section header pills.
+pub struct AgentCounts {
+    pub running: usize,
+    pub pending: usize,
+    pub failed: usize,
+}
+
+/// Return the status dot character and a color key for a subagent state.
+/// Color keys: "run" = info (blue), "done" = success (green), "fail" = error (red), "dim" = dim
+pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static str) {
+    match state {
+        SubAgentState::Running => ("\u{25CF}", "run"),   // ●
+        SubAgentState::Pending => ("\u{25CB}", "dim"),   // ○
+        SubAgentState::Done => ("\u{2713}", "done"),     // ✓
+        SubAgentState::Failed { .. } => ("\u{2717}", "fail"),   // ✗
+        SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
+    }
+}
+
+/// Count running, pending, and failed agents.
+pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
+    AgentCounts {
+        running: agents.iter().filter(|a| matches!(a.state, SubAgentState::Running)).count(),
+        pending: agents.iter().filter(|a| matches!(a.state, SubAgentState::Pending)).count(),
+        failed: agents
+            .iter()
+            .filter(|a| {
+                matches!(a.state, SubAgentState::Failed { .. } | SubAgentState::Conflict { .. })
+            })
+            .count(),
+    }
+}
+
+/// Render the agents section into `lines`.
+pub fn render_agents_section(
+    lines: &mut Vec<Line<'static>>,
+    agents: &[SubAgent],
+    sidebar_width: u16,
+    colors: &Colors,
+) {
+    let counts = agent_counts(agents);
+
+    // Header: "  agents" + pills
+    let mut header_spans: Vec<Span<'static>> = vec![Span::styled(
+        "  agents",
+        Style::default().fg(colors.text_secondary).bold(),
+    )];
+    if counts.running > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CF} {} running", counts.running),
+            Style::default().fg(colors.info),
+        ));
+    }
+    if counts.pending > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CB} {} pending", counts.pending),
+            Style::default().fg(colors.text_dim),
+        ));
+    }
+    if counts.failed > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{2717} {} failed", counts.failed),
+            Style::default().fg(colors.error),
+        ));
+    }
+    lines.push(Line::from(header_spans));
+    lines.push(Line::from(""));
+
+    // Per-agent rows
+    // Layout: "  {dot} {task_name}  {right_status}"
+    // Total width available minus: 2 indent + 1 dot + 1 space + 2 trailing spaces + right_status
+    let total_cost: f64 = agents.iter().map(|a| a.cost_usd).sum();
+
+    for agent in agents {
+        let (dot, color_key) = agent_status_display(&agent.state);
+        let dot_color = match color_key {
+            "run" => colors.info,
+            "done" => colors.success,
+            "fail" => colors.error,
+            _ => colors.text_dim,
+        };
+
+        let right_status: String = match &agent.state {
+            SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
+            SubAgentState::Pending => "pending".to_string(),
+            SubAgentState::Done => "done".to_string(),
+            SubAgentState::Failed { .. } => "failed".to_string(),
+            SubAgentState::Conflict { .. } => "conflict".to_string(),
+        };
+
+        // Compute max task name width: width - 2 indent - 1 dot - 1 space - 2 gap - right_status
+        let fixed = 2 + 1 + 1 + 2 + right_status.chars().count();
+        let max_task = (sidebar_width as usize).saturating_sub(fixed);
+        let task_chars: usize = agent.task.chars().count();
+        let display_task: String = if task_chars > max_task && max_task > 1 {
+            let truncated: String = agent.task.chars().take(max_task.saturating_sub(1)).collect();
+            format!("{truncated}\u{2026}")
+        } else {
+            agent.task.clone()
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(dot, Style::default().fg(dot_color)),
+            Span::raw(" "),
+            Span::styled(display_task, Style::default().fg(colors.text)),
+            Span::raw("  "),
+            Span::styled(right_status, Style::default().fg(colors.text_muted)),
+        ]));
+    }
+
+    // Cost footer (only if meaningful)
+    if total_cost > 0.001 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ${total_cost:.3} total"),
+            Style::default().fg(colors.text_dim),
+        )));
+    }
+
+    lines.push(Line::from(""));
+}
 
 /// Render the sidebar panel.
 #[allow(clippy::too_many_arguments)]
@@ -25,6 +152,7 @@ pub fn render(
     tick: u64,
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
     active_watchers: &[crate::scm::watcher::Watcher],
+    sub_agents: &[SubAgent],
 ) {
     let colors = Colors::default();
 
@@ -328,6 +456,21 @@ pub fn render(
         }
     }
 
+    // --- Agents section (only when agents exist) ---
+    if !sub_agents.is_empty() {
+        // Separator before agents section
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                "\u{2500}".repeat(inner.width.saturating_sub(4) as usize)
+            ),
+            Style::default().fg(colors.border),
+        )));
+        lines.push(Line::from(""));
+        render_agents_section(&mut lines, sub_agents, inner.width, &colors);
+    }
+
     // Render fixed sections
     let fixed_height = lines.len() as u16;
     let fixed_area = Rect {
@@ -622,6 +765,66 @@ fn shorten_path(path: &str, max_width: usize) -> String {
 
     // Truncate filename
     format!("{}…", &filename[..max_width.saturating_sub(1)])
+}
+
+#[cfg(test)]
+mod agents_section_tests {
+    use super::*;
+    use crate::sub_agent::{SubAgent, SubAgentState, format_elapsed};
+
+    #[test]
+    fn agent_status_dot_running() {
+        let (dot, _color_key) = agent_status_display(&SubAgentState::Running);
+        assert_eq!(dot, "●");
+    }
+
+    #[test]
+    fn agent_status_dot_pending() {
+        let (dot, _) = agent_status_display(&SubAgentState::Pending);
+        assert_eq!(dot, "○");
+    }
+
+    #[test]
+    fn agent_status_dot_done() {
+        let (dot, _) = agent_status_display(&SubAgentState::Done);
+        assert_eq!(dot, "✓");
+    }
+
+    #[test]
+    fn agent_status_dot_failed() {
+        let (dot, _) = agent_status_display(&SubAgentState::Failed { message: "oops".into() });
+        assert_eq!(dot, "✗");
+    }
+
+    #[test]
+    fn agent_status_dot_conflict() {
+        let (dot, _) = agent_status_display(&SubAgentState::Conflict { report: "conflict".into() });
+        assert_eq!(dot, "✗");
+    }
+
+    #[test]
+    fn agents_section_counts() {
+        let agents = vec![
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Pending),
+            make_agent(SubAgentState::Done),
+        ];
+        let counts = agent_counts(&agents);
+        assert_eq!(counts.running, 2);
+        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.failed, 0);
+    }
+
+    fn make_agent(state: SubAgentState) -> SubAgent {
+        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        a.state = state;
+        a
+    }
+
+    // Suppress unused import warning when format_elapsed is not directly called in tests
+    #[allow(dead_code)]
+    fn _use_format_elapsed() -> String { format_elapsed(0) }
 }
 
 #[cfg(test)]
