@@ -18,6 +18,7 @@ mod memory;
 mod migrate;
 mod provider;
 mod roundhouse;
+mod sub_agent;
 mod safety;
 mod scm;
 mod session;
