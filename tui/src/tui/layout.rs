@@ -908,7 +908,8 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         0
     };
 
-    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. });
+    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. })
+        || app.sub_agent_approval_showing.is_some();
     let approval_height = if has_approval {
         crate::tui::approval::APPROVAL_BAR_HEIGHT
     } else {
@@ -1007,6 +1008,19 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             })
             .unwrap_or(false);
         crate::tui::approval::render(frame, a_area, name, args, has_diff);
+    } else if let Some(a_area) = approval_area
+        && let Some((agent_id, ref tool_name, ref arguments)) = app.sub_agent_approval_showing
+    {
+        let task_label = app
+            .sub_agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .map(|a| a.task.as_str())
+            .unwrap_or("subagent");
+        let header = format!("agent '{task_label}' requests: {tool_name}");
+        let args_val = serde_json::from_str::<serde_json::Value>(arguments)
+            .unwrap_or(serde_json::Value::String(arguments.clone()));
+        crate::tui::approval::render(frame, a_area, &header, &args_val, false);
     }
 
     // Render attachment chips

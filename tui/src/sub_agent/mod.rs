@@ -28,6 +28,7 @@ pub enum StreamLineKind {
 pub enum SubAgentState {
     Pending,
     Running,
+    WaitingApproval { tool_name: String },
     Done,
     Failed { message: String },
     Conflict { report: String },
@@ -44,6 +45,9 @@ pub struct SubAgent {
     pub started_at: Option<Instant>,
     pub cost_usd: f64,
     pub stream: Vec<SubAgentStreamLine>,
+    /// Present while subagent is running. Used to route approval responses back.
+    /// Set to None when the agent reaches a terminal state.
+    pub approval_tx: Option<tokio::sync::mpsc::UnboundedSender<bool>>,
 }
 
 #[allow(dead_code)]
@@ -58,6 +62,7 @@ impl SubAgent {
             started_at: None,
             cost_usd: 0.0,
             stream: Vec::new(),
+            approval_tx: None,
         }
     }
 
@@ -80,20 +85,33 @@ pub fn format_elapsed(secs: u64) -> String {
     }
 }
 
-/// Events sent from the pipeline driver tokio task to the main thread.
+/// Events sent from subagent executor tasks to the main thread.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentEvent {
-    /// Sent once when the pipeline starts, with all pre-allocated agents (all Pending).
-    AgentsRegistered { agents: Vec<SubAgent> },
     StreamLine { id: Uuid, line: SubAgentStreamLine },
     StateChange { id: Uuid, state: SubAgentState },
     CostUpdate { id: Uuid, cost_usd: f64 },
     AgentMerged { id: Uuid, task: String, elapsed_secs: u64, cost_usd: f64 },
     AgentFailed { id: Uuid, task: String, message: String },
     AgentConflict { id: Uuid, task: String, worktree_path: PathBuf },
-    PipelineDone,
-    PipelineHalted { message: String },
+    /// Subagent needs user approval to proceed.
+    /// `id` is the SubAgent's UUID — use it to find the correct `approval_tx`
+    /// in `State::sub_agents`.
+    ApprovalRequest { id: Uuid, tool_name: String, arguments: String },
+}
+
+/// Result from a completed spawn_agent background task.
+/// Returned via JoinHandle to the main event loop.
+#[allow(dead_code)]
+pub struct SpawnAgentResult {
+    pub agent_id: Uuid,
+    pub tool_use_id: String,
+    pub task: String,
+    pub result_text: String,
+    pub is_error: bool,
+    pub final_state: SubAgentState,
+    pub cost_usd: f64,
 }
 
 #[allow(dead_code)]
@@ -145,6 +163,33 @@ mod tests {
         assert_eq!(format_elapsed(3600), "1h00m");
         assert_eq!(format_elapsed(3661), "1h01m");
         assert_eq!(format_elapsed(7200), "2h00m");
+    }
+
+    #[test]
+    fn waiting_approval_variant() {
+        let state = SubAgentState::WaitingApproval { tool_name: "write_file".to_string() };
+        assert!(matches!(state, SubAgentState::WaitingApproval { .. }));
+    }
+
+    #[test]
+    fn approval_request_event_fields() {
+        let id = Uuid::new_v4();
+        let ev = SubAgentEvent::ApprovalRequest {
+            id,
+            tool_name: "write_file".to_string(),
+            arguments: "{}".to_string(),
+        };
+        assert!(matches!(ev, SubAgentEvent::ApprovalRequest { .. }));
+    }
+
+    #[test]
+    fn sub_agent_approval_tx_initially_none() {
+        let agent = SubAgent::new(
+            "task".to_string(),
+            "agent/task".to_string(),
+            std::path::PathBuf::from(".worktrees/agent-task"),
+        );
+        assert!(agent.approval_tx.is_none());
     }
 
     #[test]
