@@ -184,6 +184,10 @@ pub struct State {
     pub scm_provider: crate::scm::detection::ScmProvider,
     /// Active SCM watchers (each backed by a circuit).
     pub active_watchers: Vec<crate::scm::watcher::Watcher>,
+    /// Whether the pending diff preview is expanded (true) or collapsed (false).
+    pub diff_expanded: bool,
+    /// Scroll offset for the expanded pending diff.
+    pub diff_scroll: usize,
 }
 
 /// Status of a tool execution.
@@ -743,6 +747,8 @@ impl App {
                 local_discovery_rx: None,
                 scm_provider,
                 active_watchers: Vec::new(),
+                diff_expanded: false,
+                diff_scroll: 0,
             },
             terminal,
             provider,
@@ -3279,6 +3285,8 @@ impl App {
     }
 
     async fn handle_approval_key(&mut self, key: KeyCode) {
+        self.state.diff_expanded = false;
+        self.state.diff_scroll = 0;
         match key {
             KeyCode::Char('y') => {
                 let should_execute = self.state.agent.approve_current();

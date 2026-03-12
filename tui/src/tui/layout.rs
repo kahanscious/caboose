@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Paragraph, Wrap};
 
 use crate::agent::AgentState;
 use crate::agent::permission::Mode;
-use crate::app::{ChatMessage, State};
+use crate::app::{ChatMessage, State, ToolStatus};
 use crate::tui::dialog::{DialogKind, Screen};
 use crate::tui::theme;
 
@@ -327,6 +327,15 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     // Track message boundaries for connector grouping: 0=other, 1=tool, 2=assistant
     let mut msg_boundaries: Vec<(usize, u8)> = Vec::new();
 
+    // Index of the last Pending tool message — receives live diff state.
+    let last_pending_idx = app.chat_messages.iter().rposition(|m| {
+        if let ChatMessage::Tool(t) = m {
+            t.status == ToolStatus::Pending
+        } else {
+            false
+        }
+    });
+
     for (i, msg) in app.chat_messages.iter().enumerate() {
         let start_idx = lines.len();
         let kind = match msg {
@@ -349,8 +358,15 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
             ChatMessage::Tool(tool_msg) => {
                 let focused = app.focused_tool == Some(i);
+                let (de, ds) = if tool_msg.status == ToolStatus::Pending
+                    && Some(i) == last_pending_idx
+                {
+                    (app.diff_expanded, app.diff_scroll)
+                } else {
+                    (false, 0)
+                };
                 app.tool_renderers
-                    .render(tool_msg, colors, focused, app.tick, false, 0)
+                    .render(tool_msg, colors, focused, app.tick, de, ds)
             }
             ChatMessage::System { content } => {
                 crate::tui::chat::render_system_message(content, colors)
