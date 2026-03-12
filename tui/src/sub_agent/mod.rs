@@ -84,6 +84,8 @@ pub fn format_elapsed(secs: u64) -> String {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentEvent {
+    /// Sent once when the pipeline starts, with all pre-allocated agents (all Pending).
+    AgentsRegistered { agents: Vec<SubAgent> },
     StreamLine { id: Uuid, line: SubAgentStreamLine },
     StateChange { id: Uuid, state: SubAgentState },
     CostUpdate { id: Uuid, cost_usd: f64 },

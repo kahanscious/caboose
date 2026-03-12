@@ -364,7 +364,10 @@ async fn drive_pipeline(
                         elapsed_secs: elapsed,
                         cost_usd: cost,
                     });
-                    let _ = worktree::remove_worktree(path, branch);
+                    let (path_rm, branch_rm) = (path.clone(), branch.clone());
+                    let _ = tokio::task::spawn_blocking(move || {
+                        worktree::remove_worktree(&path_rm, &branch_rm)
+                    }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(SubAgentEvent::StateChange {
