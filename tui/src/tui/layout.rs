@@ -137,8 +137,8 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::WorkspaceAdd(state) => {
                 crate::tui::workspace_add::render(frame, frame.area(), state);
             }
-            DialogKind::AgentStreamOverlay(_) => {
-                // Placeholder — full overlay rendering implemented in a future task.
+            DialogKind::AgentStreamOverlay(overlay_state) => {
+                render_agent_stream_overlay(frame, frame.area(), overlay_state, app, &colors);
             }
         }
     }
@@ -1586,4 +1586,116 @@ fn render_migration_checklist(
             // Brief spinner-like state (instant for now)
         }
     }
+}
+
+fn render_agent_stream_overlay(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    overlay_state: &crate::tui::dialog::AgentStreamOverlayState,
+    state: &State,
+    colors: &theme::Colors,
+) {
+    use ratatui::style::Modifier;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Paragraph};
+
+    // Semi-transparent backdrop
+    let backdrop = Block::default().style(Style::default().bg(ratatui::style::Color::Rgb(0, 0, 0)));
+    frame.render_widget(backdrop, area);
+
+    // Window: centered, 88% width
+    let win_width = (area.width as f32 * 0.88) as u16;
+    let win_height = area.height.saturating_sub(4);
+    let x = (area.width.saturating_sub(win_width)) / 2;
+    let y = (area.height.saturating_sub(win_height)) / 2;
+    let win_area = ratatui::layout::Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: win_width,
+        height: win_height,
+    };
+
+    let Some(idx) = state.agent_stream_overlay else {
+        return;
+    };
+    let Some(agent) = state.sub_agents.get(idx) else {
+        return;
+    };
+    let agent_count = state.sub_agents.len();
+
+    // Title
+    let (dot, _) = crate::tui::sidebar::agent_status_display(&agent.state);
+    let elapsed = crate::sub_agent::format_elapsed(agent.elapsed_secs());
+    let title = format!(" {dot} {}   {} · {}", agent.task, elapsed, agent.branch);
+    let nav_hint = if agent_count > 1 {
+        "  \u{2191}\u{2193} scroll  tab next  esc close "
+    } else {
+        "  \u{2191}\u{2193} scroll  esc close "
+    };
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(colors.border))
+        .title(Span::styled(title, Style::default().fg(colors.text)))
+        .title_bottom(Span::styled(nav_hint, Style::default().fg(colors.text_dim)));
+    frame.render_widget(block.clone(), win_area);
+    let inner = block.inner(win_area);
+
+    // Body area and footer area
+    let body_height = inner.height.saturating_sub(1);
+    let body_area = ratatui::layout::Rect { height: body_height, ..inner };
+    let footer_area = ratatui::layout::Rect {
+        y: inner.y + inner.height.saturating_sub(1),
+        height: 1,
+        ..inner
+    };
+
+    // Stream lines
+    let stream_lines: Vec<Line> = agent
+        .stream
+        .iter()
+        .map(|line| {
+            let (style, prefix) = match line.kind {
+                crate::sub_agent::StreamLineKind::Thinking => (
+                    Style::default()
+                        .fg(colors.text_dim)
+                        .add_modifier(Modifier::ITALIC),
+                    "",
+                ),
+                crate::sub_agent::StreamLineKind::ToolCall => {
+                    (Style::default().fg(colors.info), "")
+                }
+                crate::sub_agent::StreamLineKind::ToolResult => {
+                    (Style::default().fg(colors.success), "\u{2192} ")
+                }
+                crate::sub_agent::StreamLineKind::Text => {
+                    (Style::default().fg(colors.text), "")
+                }
+                crate::sub_agent::StreamLineKind::Error => {
+                    (Style::default().fg(colors.error), "")
+                }
+            };
+            Line::from(Span::styled(format!("{prefix}{}", line.text), style))
+        })
+        .collect();
+
+    let scroll = if overlay_state.follow {
+        stream_lines.len().saturating_sub(body_height as usize) as u16
+    } else {
+        overlay_state.scroll_offset as u16
+    };
+
+    let body = Paragraph::new(stream_lines).scroll((scroll, 0));
+    frame.render_widget(body, body_area);
+
+    // Footer
+    let footer_text = format!(
+        " worktree: {}    ${:.3}",
+        agent.worktree_path.display(),
+        agent.cost_usd
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(footer_text, Style::default().fg(colors.text_dim))),
+        footer_area,
+    );
 }

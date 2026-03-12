@@ -2185,11 +2185,7 @@ impl App {
             Some(DialogKind::WorkspaceList(_)) => self.handle_workspace_list_key(key),
             Some(DialogKind::WorkspaceAdd(_)) => self.handle_workspace_add_key(key).await,
             Some(DialogKind::AgentStreamOverlay(_)) => {
-                // Escape closes the overlay
-                if key == KeyCode::Esc {
-                    self.state.agent_stream_overlay = None;
-                    self.state.dialog_stack.pop();
-                }
+                self.handle_agent_stream_overlay_key(key, modifiers);
             }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
@@ -4838,6 +4834,72 @@ impl App {
             KeyCode::Char(c) => {
                 if let Some(DialogKind::McpServerInput(state)) = self.state.dialog_stack.top_mut() {
                     state.focused_input_mut().push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_agent_stream_overlay_key(
+        &mut self,
+        key: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::tui::dialog::{AgentStreamOverlayState, DialogKind};
+
+        match key {
+            KeyCode::Esc => {
+                self.state.agent_stream_overlay = None;
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Tab => {
+                let agent_count = self.state.sub_agents.len();
+                if agent_count > 1 {
+                    if modifiers.contains(KeyModifiers::SHIFT) {
+                        // Shift+Tab: cycle to previous agent
+                        let idx = self.state.agent_stream_overlay.unwrap_or(0);
+                        let prev = if idx == 0 { agent_count - 1 } else { idx - 1 };
+                        self.state.agent_stream_overlay = Some(prev);
+                    } else {
+                        // Tab: cycle to next agent
+                        let idx = self.state.agent_stream_overlay.unwrap_or(0);
+                        let next = (idx + 1) % agent_count;
+                        self.state.agent_stream_overlay = Some(next);
+                    }
+                    // Reset scroll state
+                    if let Some(DialogKind::AgentStreamOverlay(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        *state = AgentStreamOverlayState::new();
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::AgentStreamOverlay(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    state.follow = false;
+                    state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(idx) = self.state.agent_stream_overlay
+                    && let Some(agent) = self.state.sub_agents.get(idx)
+                {
+                    let stream_len = agent.stream.len();
+                    if let Some(DialogKind::AgentStreamOverlay(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        let new_offset = state.scroll_offset + 1;
+                        // If we've scrolled to the bottom, re-enable follow
+                        if new_offset >= stream_len {
+                            state.scroll_offset = stream_len.saturating_sub(1);
+                            state.follow = true;
+                        } else {
+                            state.scroll_offset = new_offset;
+                        }
+                    }
                 }
             }
             _ => {}
