@@ -28,7 +28,6 @@ pub enum DialogKind {
     MigrationChecklist(MigrationChecklistState),
     WorkspaceList(WorkspaceListState),
     WorkspaceAdd(WorkspaceAddState),
-    #[allow(dead_code)]
     AgentStreamOverlay(AgentStreamOverlayState),
 }
 
@@ -420,6 +419,18 @@ pub fn build_migration_checklist(
         items,
         selected: 0,
         phase: MigrationPhase::Checklist,
+    }
+}
+
+#[cfg(test)]
+mod stream_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn agent_stream_overlay_state_default() {
+        let state = AgentStreamOverlayState { scroll_offset: 0, follow: true };
+        assert!(state.follow);
+        assert_eq!(state.scroll_offset, 0);
     }
 }
 
