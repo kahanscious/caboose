@@ -5993,7 +5993,14 @@ impl App {
 
         match &self.state.agent.state {
             AgentState::ExecutingTools => {
+                // If spawn_agent background tasks are still running, don't re-enter
+                // tool dispatch — poll_spawn_agent_handles will finalize when done.
+                if !self.state.spawn_agent_handles.is_empty() {
+                    // Don't process — subagents still running
+                }
                 // Intercept spawn_agent calls before normal tool dispatch
+                else {
+
                 let spawn_calls: Vec<crate::agent::PendingToolCall> = self
                     .state
                     .agent
@@ -6092,6 +6099,7 @@ impl App {
                     }
                 } else {
                     self.start_tool_execution();
+                }
                 }
             }
             AgentState::PendingApproval { .. } => {
@@ -7199,6 +7207,15 @@ impl App {
                     content: format!("agent done: {}", result.task),
                 });
             }
+        }
+
+        // When all spawn handles are done and no other tools are pending, finalize
+        if self.state.spawn_agent_handles.is_empty()
+            && self.state.tool_exec_queue.is_empty()
+            && self.state.tool_exec_pending_rx.is_none()
+            && matches!(self.state.agent.state, AgentState::ExecutingTools)
+        {
+            self.finalize_tool_execution();
         }
     }
 
