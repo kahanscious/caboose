@@ -122,6 +122,7 @@ mod tests {
             expanded: false,
             file_path: None,
             diff_preview: None,
+            diff_expanded: true,
         }
     }
 
