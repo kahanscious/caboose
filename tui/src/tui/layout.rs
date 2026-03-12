@@ -947,10 +947,10 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             .iter()
             .rev()
             .find_map(|m| {
-                if let ChatMessage::Tool(t) = m {
-                    if t.status == ToolStatus::Pending {
-                        return Some(t.diff_preview.is_some());
-                    }
+                if let ChatMessage::Tool(t) = m
+                    && t.status == ToolStatus::Pending
+                {
+                    return Some(t.diff_preview.is_some());
                 }
                 None
             })

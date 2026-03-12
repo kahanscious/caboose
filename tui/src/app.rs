@@ -1869,10 +1869,9 @@ impl App {
                     .is_some_and(|rh| {
                         rh.phase == crate::roundhouse::RoundhousePhase::Executing
                     })
+                && let Some(ref mut rh) = self.state.roundhouse_session
             {
-                if let Some(ref mut rh) = self.state.roundhouse_session {
-                    rh.phase = crate::roundhouse::RoundhousePhase::Complete;
-                }
+                rh.phase = crate::roundhouse::RoundhousePhase::Complete;
             }
 
             if self.state.should_quit {
@@ -4661,10 +4660,10 @@ impl App {
                 self.state.dialog_stack.pop();
             }
             KeyCode::Up => {
-                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
-                    if state.selected > 0 {
-                        state.selected -= 1;
-                    }
+                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut()
+                    && state.selected > 0
+                {
+                    state.selected -= 1;
                 }
             }
             KeyCode::Down => {
@@ -4697,10 +4696,10 @@ impl App {
                 } else {
                     None
                 };
-                if let Some(s) = edit_state {
-                    if !s.path_input.is_empty() {
-                        self.state.dialog_stack.push(DialogKind::WorkspaceAdd(s));
-                    }
+                if let Some(s) = edit_state
+                    && !s.path_input.is_empty()
+                {
+                    self.state.dialog_stack.push(DialogKind::WorkspaceAdd(s));
                 }
             }
             KeyCode::Char('d') => {
