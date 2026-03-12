@@ -17,7 +17,14 @@ impl ToolRenderer for McpRenderer {
         tool_name.contains(':')
     }
 
-    fn render(&self, tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'static>> {
+    fn render(
+        &self,
+        tool: &ToolMessage,
+        colors: &Colors,
+        tick: u64,
+        _diff_expanded: bool,
+        _diff_scroll: usize,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let icon = super::status_icon(&tool.status, colors, tick);
 

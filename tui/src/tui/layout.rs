@@ -350,7 +350,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             ChatMessage::Tool(tool_msg) => {
                 let focused = app.focused_tool == Some(i);
                 app.tool_renderers
-                    .render(tool_msg, colors, focused, app.tick)
+                    .render(tool_msg, colors, focused, app.tick, false, 0)
             }
             ChatMessage::System { content } => {
                 crate::tui::chat::render_system_message(content, colors)
