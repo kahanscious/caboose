@@ -109,6 +109,8 @@ pub struct AgentLoop {
     pub recent_files: VecDeque<PathBuf>,
     /// Absolute path of the primary repo root — used for cross-workspace write detection.
     pub primary_root: std::path::PathBuf,
+    /// Paths of registered secondary workspaces — used for read path restriction.
+    pub workspace_paths: Vec<String>,
     event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
 }
 
@@ -141,6 +143,7 @@ impl AgentLoop {
             recent_files: VecDeque::new(),
             primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
                 .unwrap_or_default(),
+            workspace_paths: Vec::new(),
             event_rx: None,
         }
     }
@@ -403,6 +406,7 @@ impl AgentLoop {
     fn check_tool_permissions(&mut self) {
         let mut needs_approval = false;
 
+        let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
         for tc in &self.pending_tool_calls {
             let decision = check_permission(
                 &self.permission_mode,
@@ -413,6 +417,7 @@ impl AgentLoop {
                 &self.session_allows,
                 None, // CLI tool overrides resolved later in execute_pending_tools
                 Some(&self.primary_root),
+                &ws_paths,
             );
             if matches!(decision, ToolDecision::RequireApproval) {
                 needs_approval = true;
@@ -494,6 +499,7 @@ impl AgentLoop {
                 None
             };
 
+            let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
             let mut decision = check_permission(
                 &self.permission_mode,
                 &tc.name,
@@ -503,6 +509,7 @@ impl AgentLoop {
                 &self.session_allows,
                 tool_permission,
                 Some(&self.primary_root),
+                &ws_paths,
             );
 
             // Fire PermissionRequest hooks (only if tool would normally need approval)
@@ -685,6 +692,7 @@ impl AgentLoop {
                 return true;
             }
             // Check if remaining tools all auto-approve
+            let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
             let remaining_all_auto = tool_calls[*current_index..].iter().all(|tc| {
                 let d = check_permission(
                     &self.permission_mode,
@@ -695,6 +703,7 @@ impl AgentLoop {
                     &self.session_allows,
                     None,
                     Some(&self.primary_root),
+                    &ws_paths,
                 );
                 matches!(d, ToolDecision::AutoExecute)
             });
