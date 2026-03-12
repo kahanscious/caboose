@@ -1978,6 +1978,33 @@ impl App {
                     self.handle_approval_key(key).await;
                     return;
                 }
+                KeyCode::Char('d') => {
+                    self.state.diff_expanded = !self.state.diff_expanded;
+                    if !self.state.diff_expanded {
+                        self.state.diff_scroll = 0;
+                    }
+                    return;
+                }
+                KeyCode::Char('j') if self.state.diff_expanded => {
+                    self.state.diff_scroll = self.state.diff_scroll.saturating_add(1);
+                    return;
+                }
+                KeyCode::Char('k') if self.state.diff_expanded => {
+                    self.state.diff_scroll = self.state.diff_scroll.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    if self.state.diff_expanded {
+                        self.state.diff_scroll = self.state.diff_scroll.saturating_add(1);
+                    }
+                    return;
+                }
+                KeyCode::Up => {
+                    if self.state.diff_expanded {
+                        self.state.diff_scroll = self.state.diff_scroll.saturating_sub(1);
+                    }
+                    return;
+                }
                 _ => {}
             }
         }
