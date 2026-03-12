@@ -18,6 +18,21 @@ fn mode_accent(mode: Mode, colors: &theme::Colors) -> Color {
     }
 }
 
+/// Returns true if this tool message should render a diff toggle indicator (▶/▼).
+fn has_diff_toggle(tool: &crate::app::ToolMessage) -> bool {
+    match tool.status {
+        crate::app::ToolStatus::Pending => tool.diff_preview.is_some(),
+        crate::app::ToolStatus::Success => {
+            (tool.name == "edit_file"
+                && tool.args.get("old_string").and_then(|v| v.as_str()).is_some()
+                && tool.args.get("new_string").and_then(|v| v.as_str()).is_some())
+                || (tool.name == "apply_patch"
+                    && tool.args.get("diff").and_then(|v| v.as_str()).is_some())
+        }
+        _ => false,
+    }
+}
+
 /// Apply a turn margin indicator to a line, replacing the leading indent with │.
 fn apply_turn_margin(line: &mut Line, accent_style: Style) {
     if line.spans.is_empty() {
@@ -324,6 +339,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     let mut lines: Vec<Line> = Vec::new();
     // Track (logical_line_index, message_index) for truncation indicators
     let mut truncation_lines: Vec<(usize, usize)> = Vec::new();
+    // Track (logical_line_index, message_index) for diff toggle indicators
+    let mut tool_toggle_lines: Vec<(usize, usize)> = Vec::new();
     // Track message boundaries for connector grouping: 0=other, 1=tool, 2=assistant
     let mut msg_boundaries: Vec<(usize, u8)> = Vec::new();
 
@@ -363,10 +380,16 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 {
                     (app.diff_expanded, app.diff_scroll)
                 } else {
-                    (false, 0)
+                    (tool_msg.diff_expanded, 0)
                 };
-                app.tool_renderers
-                    .render(tool_msg, colors, focused, app.tick, de, ds)
+                let rendered =
+                    app.tool_renderers
+                        .render(tool_msg, colors, focused, app.tick, de, ds);
+                // Record the header row for mouse click hit-testing.
+                if has_diff_toggle(tool_msg) {
+                    tool_toggle_lines.push((lines.len(), i));
+                }
+                rendered
             }
             ChatMessage::System { content } => {
                 crate::tui::chat::render_system_message(content, colors)
@@ -761,6 +784,30 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
         }
         *app.truncation_click_zones.borrow_mut() = zones;
+
+        // Compute screen y for each diff toggle indicator (same two-pass approach)
+        let mut toggle_zones: Vec<(u16, usize)> = Vec::new();
+        if !tool_toggle_lines.is_empty() {
+            let mut wr: u16 = 0;
+            let mut ti = tool_toggle_lines.iter().peekable();
+            for (logical_idx, line) in lines.iter().enumerate() {
+                if let Some(&&(toggle_logical, msg_idx)) = ti.peek()
+                    && toggle_logical == logical_idx
+                {
+                    let screen_y = area.y as i32 + wr as i32 - effective_offset as i32;
+                    if screen_y >= area.y as i32 && screen_y < (area.y + area.height) as i32 {
+                        toggle_zones.push((screen_y as u16, msg_idx));
+                    }
+                    ti.next();
+                    if ti.peek().is_none() {
+                        break;
+                    }
+                }
+                let w = line.width().max(1) as u16;
+                wr += w.div_ceil(area.width);
+            }
+        }
+        *app.tool_toggle_rects.borrow_mut() = toggle_zones;
     }
 
     let max_scroll = total_lines.saturating_sub(area.height);
