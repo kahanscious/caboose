@@ -437,6 +437,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "execute.start",
+        name: "Execute",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("execute"),
+        available: |state| state.sub_agent_rx.is_none(),
+        execute: |_state| Action::None, // Handled specially in app.rs — needs async pipeline
+    });
+
+    registry.register(Command {
         id: "roundhouse.start",
         name: "Roundhouse",
         category: Category::Tools,

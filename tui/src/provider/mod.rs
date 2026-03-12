@@ -301,6 +301,42 @@ impl ProviderRegistry {
             ),
         }
     }
+
+    /// Like `get_provider` but returns an `Arc<dyn Provider + Send + Sync>`
+    /// suitable for sharing across async tasks.
+    pub fn get_provider_arc(
+        &self,
+        name: Option<&str>,
+        model_override: Option<&str>,
+    ) -> Result<Arc<dyn Provider + Send + Sync>> {
+        let boxed = self.get_provider(name, model_override)?;
+        Ok(Arc::from(BoxedProvider(boxed)))
+    }
+}
+
+/// Thin wrapper that lets a `Box<dyn Provider>` be placed behind an `Arc`.
+struct BoxedProvider(Box<dyn Provider>);
+
+impl Provider for BoxedProvider {
+    fn stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+    ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send + 'static>> {
+        self.0.stream(messages, tools)
+    }
+
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn model(&self) -> &str {
+        self.0.model()
+    }
+
+    fn list_models(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + '_>> {
+        self.0.list_models()
+    }
 }
 
 #[cfg(test)]
