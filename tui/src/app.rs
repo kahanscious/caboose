@@ -1914,8 +1914,13 @@ impl App {
                 let mut pending_messages: Vec<ChatMessage> = Vec::new();
                 let mut agent_updates: Vec<AgentUpdate> = Vec::new();
 
+                let mut new_agents: Option<Vec<crate::sub_agent::SubAgent>> = None;
+
                 while let Ok(event) = rx.try_recv() {
                     match event {
+                        SubAgentEvent::AgentsRegistered { agents } => {
+                            new_agents = Some(agents);
+                        }
                         SubAgentEvent::StateChange { id, state } => {
                             agent_updates.push((id, Some(state), None, None));
                         }
@@ -1984,6 +1989,9 @@ impl App {
                             agent.cost_usd = cost;
                         }
                     }
+                }
+                if let Some(agents) = new_agents {
+                    self.state.sub_agents = agents;
                 }
                 self.state.chat_messages.extend(pending_messages);
                 if pipeline_done {
@@ -8290,6 +8298,10 @@ impl App {
             let setup_result = setup_rx.recv().await;
             match setup_result {
                 Some(Ok(setup)) => {
+                    // Send initial agent list so State can populate sub_agents
+                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::AgentsRegistered {
+                        agents: setup.agents,
+                    });
                     // Forward all events from pipeline rx to bridge
                     let mut rx = setup.rx;
                     while let Some(event) = rx.recv().await {
