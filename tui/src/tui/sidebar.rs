@@ -21,6 +21,7 @@ pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static st
     match state {
         SubAgentState::Running => ("\u{25CF}", "run"),   // ●
         SubAgentState::Pending => ("\u{25CB}", "dim"),   // ○
+        SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
         SubAgentState::Done => ("\u{2713}", "done"),     // ✓
         SubAgentState::Failed { .. } => ("\u{2717}", "fail"),   // ✗
         SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
@@ -76,6 +77,14 @@ pub fn render_agents_section(
             Style::default().fg(colors.error),
         ));
     }
+    // Dismiss hint when all agents are in terminal state
+    if counts.running == 0 && counts.pending == 0 && !agents.is_empty() {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            "D dismiss",
+            Style::default().fg(colors.text_dim),
+        ));
+    }
     lines.push(Line::from(header_spans));
     lines.push(Line::from(""));
 
@@ -96,6 +105,7 @@ pub fn render_agents_section(
         let right_status: String = match &agent.state {
             SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
             SubAgentState::Pending => "pending".to_string(),
+            SubAgentState::WaitingApproval { tool_name } => format!("waiting: {tool_name}"),
             SubAgentState::Done => "done".to_string(),
             SubAgentState::Failed { .. } => "failed".to_string(),
             SubAgentState::Conflict { .. } => "conflict".to_string(),

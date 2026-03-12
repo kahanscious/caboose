@@ -25,6 +25,15 @@ pub struct TextSelection {
     pub end_col: u16,
 }
 
+/// A pending spawn_agent background task tracked by the event loop.
+pub struct SpawnAgentHandle {
+    pub tool_use_id: String,
+    #[allow(dead_code)]
+    pub arguments: serde_json::Value,
+    pub chat_placeholder_idx: usize,
+    pub handle: tokio::task::JoinHandle<crate::sub_agent::SpawnAgentResult>,
+}
+
 /// UI-visible state, separated so it can be borrowed independently from Terminal.
 pub struct State {
     pub config: Config,
@@ -176,10 +185,18 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
-    /// Active subagents for the current /execute pipeline.
+    /// Active subagents.
     pub sub_agents: Vec<crate::sub_agent::SubAgent>,
-    /// Receiver for subagent pipeline events, polled each frame.
+    /// Sender cloned into each subagent executor so they can emit events.
+    pub sub_agent_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>>,
+    /// Receiver for subagent events, polled each frame.
     pub sub_agent_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sub_agent::SubAgentEvent>>,
+    /// Queued subagent approval requests (agent_id, tool_name, arguments).
+    pub sub_agent_pending_approvals: std::collections::VecDeque<(uuid::Uuid, String, String)>,
+    /// The subagent approval currently being shown to the user, if any.
+    pub sub_agent_approval_showing: Option<(uuid::Uuid, String, String)>,
+    /// Pending spawn_agent background tasks. Polled each event-loop tick.
+    pub spawn_agent_handles: Vec<SpawnAgentHandle>,
     /// Index into sub_agents for the stream overlay. None = closed.
     // TODO: consumed by overlay renderer
     pub agent_stream_overlay: Option<usize>,
@@ -616,6 +633,21 @@ impl App {
             }
         };
 
+        // Inject spawn_agent guidance
+        let system_prompt = {
+            let mut prompt = system_prompt;
+            prompt.push_str(
+                "\n\n## Subagents\n\n\
+                 You have access to a `spawn_agent` tool. Use it when you identify work that \
+                 can proceed in parallel — for example, when you have a list of independent \
+                 tasks that don't share state or outputs. Call `spawn_agent` once per \
+                 independent task; multiple calls in the same response run concurrently. \
+                 The subagents work in isolated git worktrees and merge their changes back \
+                 when done. For sequential or dependent work, do it yourself.\n",
+            );
+            prompt
+        };
+
         let mut agent = AgentLoop::new(system_prompt, permission_mode);
 
         // Wire primary_root into agent for cross-workspace write detection
@@ -673,6 +705,9 @@ impl App {
             .as_ref()
             .map(|p| p.model().to_string())
             .unwrap_or_else(|| "no key configured".to_string());
+
+        let (sub_agent_tx, sub_agent_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
 
         let mut app = Self {
             state: State {
@@ -762,7 +797,11 @@ impl App {
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
                 sub_agents: Vec::new(),
-                sub_agent_rx: None,
+                sub_agent_tx: Some(sub_agent_tx),
+                sub_agent_rx: Some(sub_agent_rx),
+                sub_agent_pending_approvals: std::collections::VecDeque::new(),
+                sub_agent_approval_showing: None,
+                spawn_agent_handles: Vec::new(),
                 agent_stream_overlay: None,
                 sidebar_agent_selected: 0,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
@@ -1638,6 +1677,7 @@ impl App {
             // Non-blocking tool execution: poll spawned tool results and
             // kick off the next tool when the previous one finishes.
             self.poll_tool_execution().await;
+            self.poll_spawn_agent_handles().await;
             self.poll_mcp_connections();
 
             // Poll terminal panel output
@@ -1901,7 +1941,7 @@ impl App {
                 }
             }
 
-            // Poll subagent pipeline events (non-blocking)
+            // Poll subagent events (non-blocking)
             if let Some(ref mut rx) = self.state.sub_agent_rx {
                 use crate::sub_agent::SubAgentEvent;
                 type AgentUpdate = (
@@ -1910,17 +1950,11 @@ impl App {
                     Option<crate::sub_agent::SubAgentStreamLine>,
                     Option<f64>,
                 );
-                let mut pipeline_done = false;
                 let mut pending_messages: Vec<ChatMessage> = Vec::new();
                 let mut agent_updates: Vec<AgentUpdate> = Vec::new();
 
-                let mut new_agents: Option<Vec<crate::sub_agent::SubAgent>> = None;
-
                 while let Ok(event) = rx.try_recv() {
                     match event {
-                        SubAgentEvent::AgentsRegistered { agents } => {
-                            new_agents = Some(agents);
-                        }
                         SubAgentEvent::StateChange { id, state } => {
                             agent_updates.push((id, Some(state), None, None));
                         }
@@ -1959,14 +1993,13 @@ impl App {
                                 ),
                             });
                         }
-                        SubAgentEvent::PipelineHalted { message } => {
-                            pending_messages.push(ChatMessage::System { content: message });
-                            pipeline_done = true;
-                        }
-                        SubAgentEvent::PipelineDone => {
-                            pending_messages
-                                .push(ChatMessage::System { content: "all agents complete".to_string() });
-                            pipeline_done = true;
+                        SubAgentEvent::ApprovalRequest { id, tool_name, arguments } => {
+                            if let Some(agent) = self.state.sub_agents.iter_mut().find(|a| a.id == id) {
+                                agent.state = crate::sub_agent::SubAgentState::WaitingApproval {
+                                    tool_name: tool_name.clone(),
+                                };
+                            }
+                            self.state.sub_agent_pending_approvals.push_back((id, tool_name, arguments));
                         }
                     }
                 }
@@ -1990,12 +2023,14 @@ impl App {
                         }
                     }
                 }
-                if let Some(agents) = new_agents {
-                    self.state.sub_agents = agents;
-                }
                 self.state.chat_messages.extend(pending_messages);
-                if pipeline_done {
-                    self.state.sub_agent_rx = None;
+
+                // Drain approval queue: show next if nothing currently showing
+                if self.state.sub_agent_approval_showing.is_none()
+                    && !self.state.sub_agent_pending_approvals.is_empty()
+                {
+                    self.state.sub_agent_approval_showing =
+                        self.state.sub_agent_pending_approvals.pop_front();
                 }
             }
 
@@ -2112,6 +2147,37 @@ impl App {
             let action = (cmd.execute)(&mut self.state);
             self.process_action(action).await;
             return;
+        }
+
+        // Subagent approval bar — intercept y/n before main agent approval
+        if self.state.sub_agent_approval_showing.is_some() {
+            match key {
+                KeyCode::Char('y') | KeyCode::Char('n') => {
+                    if let Some((agent_id, _tool_name, _args)) =
+                        self.state.sub_agent_approval_showing.take()
+                    {
+                        let approved = matches!(key, KeyCode::Char('y'));
+                        if let Some(agent) = self
+                            .state
+                            .sub_agents
+                            .iter_mut()
+                            .find(|a| a.id == agent_id)
+                        {
+                            if let Some(ref tx) = agent.approval_tx {
+                                let _ = tx.send(approved);
+                            }
+                            if matches!(
+                                agent.state,
+                                crate::sub_agent::SubAgentState::WaitingApproval { .. }
+                            ) {
+                                agent.state = crate::sub_agent::SubAgentState::Running;
+                            }
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // Inline approval bar — intercept y/n/a before dialog dispatch
@@ -2388,11 +2454,6 @@ impl App {
                         }
                         if slash == "init" {
                             self.handle_init_command();
-                            return;
-                        }
-                        // /execute — spawn subagent pipeline from last assistant task list
-                        if slash == "execute" {
-                            self.handle_execute_command();
                             return;
                         }
                         if slash == "mcp" {
@@ -2706,6 +2767,27 @@ impl App {
                                 crate::tui::dialog::AgentStreamOverlayState::new(),
                             ),
                         );
+                        return;
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        // Dismiss all terminal-state agents
+                        self.state.sub_agents.retain(|a| {
+                            !matches!(
+                                a.state,
+                                crate::sub_agent::SubAgentState::Done
+                                    | crate::sub_agent::SubAgentState::Failed { .. }
+                                    | crate::sub_agent::SubAgentState::Conflict { .. }
+                            )
+                        });
+                        // Clamp selection
+                        if !self.state.sub_agents.is_empty() {
+                            let max = self.state.sub_agents.len().saturating_sub(1);
+                            if self.state.sidebar_agent_selected > max {
+                                self.state.sidebar_agent_selected = max;
+                            }
+                        } else {
+                            self.state.sidebar_focused = false;
+                        }
                         return;
                     }
                     KeyCode::Esc => {
@@ -3188,11 +3270,6 @@ impl App {
                         }
                         if slash == "init" {
                             self.handle_init_command();
-                            return;
-                        }
-                        // /execute — spawn subagent pipeline from last assistant task list
-                        if slash == "execute" {
-                            self.handle_execute_command();
                             return;
                         }
                         // /create-skill — LLM-guided skill creation
@@ -5916,7 +5993,106 @@ impl App {
 
         match &self.state.agent.state {
             AgentState::ExecutingTools => {
-                self.start_tool_execution();
+                // Intercept spawn_agent calls before normal tool dispatch
+                let spawn_calls: Vec<crate::agent::PendingToolCall> = self
+                    .state
+                    .agent
+                    .pending_tool_calls
+                    .iter()
+                    .filter(|tc| tc.name == "spawn_agent")
+                    .cloned()
+                    .collect();
+
+                if !spawn_calls.is_empty() {
+                    self.state
+                        .agent
+                        .pending_tool_calls
+                        .retain(|tc| tc.name != "spawn_agent");
+
+                    for call in spawn_calls {
+                        match self.spawn_agent_setup(&call.arguments).await {
+                            Ok((
+                                agent_id,
+                                input,
+                                provider,
+                                config,
+                                tx,
+                                task,
+                                branch,
+                                worktree_path,
+                            )) => {
+                                let placeholder_idx = self.state.chat_messages.len();
+                                self.state.chat_messages.push(ChatMessage::Tool(ToolMessage {
+                                    name: "spawn_agent".to_string(),
+                                    args: call.arguments.clone(),
+                                    output: None,
+                                    status: ToolStatus::Running,
+                                    expanded: false,
+                                    file_path: None,
+                                    diff_preview: None,
+                                    diff_expanded: false,
+                                }));
+
+                                let tool_use_id = call.id.clone();
+                                let handle = tokio::spawn(run_spawn_agent_task(
+                                    agent_id,
+                                    tool_use_id.clone(),
+                                    task,
+                                    branch,
+                                    worktree_path,
+                                    input,
+                                    provider,
+                                    config,
+                                    tx,
+                                ));
+
+                                self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                                    tool_use_id,
+                                    arguments: call.arguments,
+                                    chat_placeholder_idx: placeholder_idx,
+                                    handle,
+                                });
+                            }
+                            Err(err_msg) => {
+                                self.state.agent.conversation.push(
+                                    crate::agent::conversation::Message {
+                                        role: crate::agent::conversation::Role::User,
+                                        content:
+                                            crate::agent::conversation::Content::Blocks(vec![
+                                                crate::agent::conversation::ContentBlock::ToolResult {
+                                                    tool_use_id: call.id.clone(),
+                                                    content: err_msg.clone(),
+                                                    is_error: true,
+                                                },
+                                            ]),
+                                        tool_call_id: Some(call.id.clone()),
+                                    },
+                                );
+                                self.state.chat_messages.push(ChatMessage::Tool(ToolMessage {
+                                    name: "spawn_agent".to_string(),
+                                    args: call.arguments,
+                                    output: Some(err_msg),
+                                    status: ToolStatus::Failed,
+                                    expanded: false,
+                                    file_path: None,
+                                    diff_preview: None,
+                                    diff_expanded: false,
+                                }));
+                            }
+                        }
+                    }
+
+                    if self.state.agent.pending_tool_calls.is_empty() {
+                        if self.state.spawn_agent_handles.is_empty() {
+                            self.finalize_tool_execution();
+                        }
+                        // else: spawn handles running — poll will finalize
+                    } else {
+                        self.start_tool_execution();
+                    }
+                } else {
+                    self.start_tool_execution();
+                }
             }
             AgentState::PendingApproval { .. } => {
                 // Push Pending placeholders so diff preview shows before approval
@@ -6737,8 +6913,10 @@ impl App {
                         self.state.post_tool_hooks.run(&mut result, &mut ctx).await;
                     }
                     self.handle_tool_result(result);
-                    // If all done, finalize
-                    if self.state.tool_exec_queue.is_empty() {
+                    // If all done, finalize (also wait for spawn_agent handles)
+                    if self.state.tool_exec_queue.is_empty()
+                        && self.state.spawn_agent_handles.is_empty()
+                    {
                         self.finalize_tool_execution();
                         return;
                     }
@@ -6771,7 +6949,9 @@ impl App {
                             lines_added: 0,
                             lines_removed: 0,
                         });
-                    if self.state.tool_exec_queue.is_empty() {
+                    if self.state.tool_exec_queue.is_empty()
+                        && self.state.spawn_agent_handles.is_empty()
+                    {
                         self.finalize_tool_execution();
                         return;
                     }
@@ -6782,6 +6962,243 @@ impl App {
         // 2. Spawn the next tool if none is currently running
         if self.state.tool_exec_pending_rx.is_none() && !self.state.tool_exec_queue.is_empty() {
             self.spawn_next_tool().await;
+        }
+    }
+
+    /// Fast setup for a spawn_agent call. Creates worktree, registers SubAgent,
+    /// returns all owned data needed by the background task.
+    async fn spawn_agent_setup(
+        &mut self,
+        arguments: &serde_json::Value,
+    ) -> Result<
+        (
+            uuid::Uuid,
+            crate::sub_agent::executor::SubAgentInput,
+            std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
+            crate::config::Config,
+            tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
+            String,
+            String,
+            std::path::PathBuf,
+        ),
+        String,
+    > {
+        let task = match arguments.get("task").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => return Err("spawn_agent: missing required parameter 'task'".to_string()),
+        };
+
+        // Check gitignore
+        if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
+            return Err(format!(
+                "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
+                 Add .worktrees/ to .gitignore first."
+            ));
+        }
+
+        // Compute unique slug
+        let used_slugs: Vec<String> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter_map(|a| {
+                a.worktree_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_prefix("agent-"))
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
+        let branch = crate::sub_agent::worktree::branch_name(&slug);
+        let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
+
+        // Auto-clear terminal-state agents
+        self.state.sub_agents.retain(|a| {
+            !matches!(
+                a.state,
+                crate::sub_agent::SubAgentState::Done
+                    | crate::sub_agent::SubAgentState::Failed { .. }
+                    | crate::sub_agent::SubAgentState::Conflict { .. }
+            )
+        });
+
+        // Create worktree
+        let path_clone = worktree_path.clone();
+        let branch_clone = branch.clone();
+        let worktree_result = tokio::task::spawn_blocking(move || {
+            crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
+        })
+        .await;
+
+        match worktree_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(format!("spawn_agent: failed to create worktree: {e}"))
+            }
+            Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
+        }
+
+        // Register SubAgent
+        let agent_id = uuid::Uuid::new_v4();
+        let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+
+        self.state.sub_agents.push(crate::sub_agent::SubAgent {
+            id: agent_id,
+            task: task.clone(),
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            state: crate::sub_agent::SubAgentState::Running,
+            started_at: Some(std::time::Instant::now()),
+            cost_usd: 0.0,
+            stream: Vec::new(),
+            approval_tx: Some(approval_tx),
+        });
+
+        // Clamp permission mode
+        use crate::agent::permission::Mode;
+        let subagent_mode = match self.state.mode {
+            Mode::Plan => PermissionMode::Default,
+            Mode::Create => PermissionMode::Default,
+            Mode::Chug => PermissionMode::Chug,
+        };
+
+        let system_prompt = self.state.agent.conversation.system_prompt.clone();
+        let input = crate::sub_agent::executor::SubAgentInput {
+            id: agent_id,
+            task: task.clone(),
+            worktree_path: worktree_path.clone(),
+            system_prompt,
+            permission_mode: subagent_mode,
+            approval_rx,
+        };
+
+        // Get provider
+        let provider_arc = match self.state.providers.get_provider_arc(
+            Some(&self.state.active_provider_name),
+            Some(&self.state.active_model_name),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                if let Some(a) =
+                    self.state.sub_agents.iter_mut().find(|a| a.id == agent_id)
+                {
+                    a.state = crate::sub_agent::SubAgentState::Failed {
+                        message: format!("no provider: {e}"),
+                    };
+                    a.approval_tx = None;
+                }
+                let wt = worktree_path.clone();
+                let br = branch.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::sub_agent::worktree::remove_worktree(&wt, &br)
+                })
+                .await;
+                return Err(format!("spawn_agent: no active provider: {e}"));
+            }
+        };
+
+        let config = self.state.config.clone();
+        let tx = match self.state.sub_agent_tx.clone() {
+            Some(tx) => tx,
+            None => {
+                return Err(
+                    "spawn_agent: internal error — subagent channel not initialized".to_string(),
+                )
+            }
+        };
+
+        Ok((
+            agent_id,
+            input,
+            provider_arc,
+            config,
+            tx,
+            task,
+            branch,
+            worktree_path,
+        ))
+    }
+
+    /// Poll pending spawn_agent background tasks. Called each event-loop tick.
+    /// When a task completes, injects its ToolResult into the agent conversation,
+    /// updates the SubAgent state and chat placeholder, then cleans up.
+    async fn poll_spawn_agent_handles(&mut self) {
+        let mut completed: Vec<usize> = Vec::new();
+        for (i, sh) in self.state.spawn_agent_handles.iter().enumerate() {
+            if sh.handle.is_finished() {
+                completed.push(i);
+            }
+        }
+
+        for i in completed.into_iter().rev() {
+            let sh = self.state.spawn_agent_handles.remove(i);
+            // is_finished() was true, so .await returns immediately
+            let result = match sh.handle.await {
+                Ok(r) => r,
+                Err(e) => crate::sub_agent::SpawnAgentResult {
+                    agent_id: uuid::Uuid::nil(),
+                    tool_use_id: sh.tool_use_id.clone(),
+                    task: String::new(),
+                    result_text: format!("spawn_agent: task panicked: {e}"),
+                    is_error: true,
+                    final_state: crate::sub_agent::SubAgentState::Failed {
+                        message: format!("task panicked: {e}"),
+                    },
+                    cost_usd: 0.0,
+                },
+            };
+
+            // Update SubAgent state
+            if let Some(a) = self
+                .state
+                .sub_agents
+                .iter_mut()
+                .find(|a| a.id == result.agent_id)
+            {
+                a.state = result.final_state.clone();
+                a.cost_usd = result.cost_usd;
+                a.approval_tx = None;
+            }
+
+            // Update chat placeholder
+            if let Some(ChatMessage::Tool(tm)) =
+                self.state.chat_messages.get_mut(sh.chat_placeholder_idx)
+            {
+                tm.status = if result.is_error {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Success
+                };
+                tm.output = Some(result.result_text.clone());
+            }
+
+            // Inject ToolResult into agent conversation
+            self.state
+                .agent
+                .conversation
+                .push(crate::agent::conversation::Message {
+                    role: crate::agent::conversation::Role::User,
+                    content: crate::agent::conversation::Content::Blocks(vec![
+                        crate::agent::conversation::ContentBlock::ToolResult {
+                            tool_use_id: result.tool_use_id.clone(),
+                            content: result.result_text.clone(),
+                            is_error: result.is_error,
+                        },
+                    ]),
+                    tool_call_id: Some(result.tool_use_id),
+                });
+
+            // Emit system chat message
+            if result.is_error {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent failed: {}", result.task),
+                });
+            } else {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent done: {}", result.task),
+                });
+            }
         }
     }
 
@@ -8182,165 +8599,6 @@ impl App {
         });
     }
 
-    /// Handle `/execute` — spawn a subagent pipeline for the last assistant task list.
-    ///
-    /// Non-blocking: spawns the pipeline driver in the background via tokio::spawn.
-    /// The main loop polls `state.sub_agent_rx` for events.
-    fn handle_execute_command(&mut self) {
-        // Transition to chat screen so messages are visible
-        if matches!(self.state.dialog_stack.base, Screen::Home) {
-            self.state.dialog_stack.base = Screen::Chat;
-            self.state.dialog_stack.clear();
-        }
-
-        // Show the user's command in the chat
-        self.state.chat_messages.push(ChatMessage::User {
-            content: "/execute".to_string(),
-            images: vec![],
-        });
-        self.state.user_scrolled_up = false;
-
-        // Find last assistant message with a task list
-        let last_assistant_text = self
-            .state
-            .chat_messages
-            .iter()
-            .rev()
-            .find_map(|m| {
-                if let ChatMessage::Assistant { content } = m {
-                    Some(content.clone())
-                } else {
-                    None
-                }
-            });
-
-        let Some(text) = last_assistant_text else {
-            self.state.chat_messages.push(ChatMessage::System {
-                content:
-                    "no task list found — use /plan or /roundhouse to generate one first."
-                        .to_string(),
-            });
-            return;
-        };
-
-        let Some(tasks) = crate::sub_agent::pipeline::extract_tasks(&text) else {
-            self.state.chat_messages.push(ChatMessage::System {
-                content:
-                    "no task list found — use /plan or /roundhouse to generate one first."
-                        .to_string(),
-            });
-            return;
-        };
-
-        // Require Chug mode
-        if self.state.mode != crate::agent::permission::Mode::Chug {
-            self.state.chat_messages.push(ChatMessage::System {
-                content: "note: /execute currently requires chug mode. switch to chug (Tab) then run /execute again.".to_string(),
-            });
-            return;
-        }
-
-        // Get provider as Arc (required by start_pipeline)
-        let provider_arc = match self.state.providers.get_provider_arc(
-            Some(&self.state.active_provider_name),
-            Some(&self.state.active_model_name),
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                self.state.chat_messages.push(ChatMessage::Error {
-                    content: format!("no active provider: {e}"),
-                });
-                return;
-            }
-        };
-
-        let config = self.state.config.clone();
-        let system_prompt = self.state.agent.conversation.system_prompt.clone();
-        let task_count = tasks.len();
-
-        let (setup_tx, mut setup_rx) =
-            tokio::sync::mpsc::unbounded_channel::<
-                Result<crate::sub_agent::pipeline::PipelineSetup, String>,
-            >();
-
-        // Spawn: run start_pipeline async, send PipelineSetup back via channel
-        tokio::spawn(async move {
-            let result =
-                crate::sub_agent::pipeline::start_pipeline(tasks, system_prompt, provider_arc, config)
-                    .await;
-            let _ = setup_tx.send(result);
-        });
-
-        // We need the PipelineSetup to wire up sub_agent_rx and sub_agents.
-        // Since handle_execute_command is sync (called from the event loop), we poll the
-        // setup channel immediately — start_pipeline does a small amount of async work
-        // (branch check + worktree pre-allocation) so we use a oneshot style poll here:
-        // the main loop will re-check if the receiver is empty on the next tick.
-        // Store a temporary "pending setup" by spawning a separate task that writes
-        // directly to state via a dedicated oneshot channel stored in a temporary field.
-        //
-        // Simpler approach: just block briefly via handle().block_on is not available.
-        // Instead, store the setup receiver in a temporary oneshot on state and finalize
-        // on the next poll. We use sub_agent_rx = None as a sentinel and store the setup
-        // receiver as a separate field would require more state.
-        //
-        // Cleanest solution given sync handler: spawn a task that awaits setup and then
-        // sends events directly — pipeline events come through the PipelineSetup.rx.
-        // We create a bridge channel: spawn receives PipelineSetup, then pumps its events.
-
-        let (bridge_tx, bridge_rx) =
-            tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
-
-        // Swap the setup receiver so we can forward events from PipelineSetup.rx
-        let bridge_tx2 = bridge_tx.clone();
-        tokio::spawn(async move {
-            // Wait for setup to complete
-            let setup_result = setup_rx.recv().await;
-            match setup_result {
-                Some(Ok(setup)) => {
-                    // Send initial agent list so State can populate sub_agents
-                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::AgentsRegistered {
-                        agents: setup.agents,
-                    });
-                    // Forward all events from pipeline rx to bridge
-                    let mut rx = setup.rx;
-                    while let Some(event) = rx.recv().await {
-                        let done = matches!(
-                            event,
-                            crate::sub_agent::SubAgentEvent::PipelineDone
-                                | crate::sub_agent::SubAgentEvent::PipelineHalted { .. }
-                        );
-                        if bridge_tx2.send(event).is_err() {
-                            break;
-                        }
-                        if done {
-                            break;
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::PipelineHalted {
-                        message: format!("failed to start pipeline: {e}"),
-                    });
-                }
-                None => {
-                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::PipelineHalted {
-                        message: "pipeline setup channel closed unexpectedly".to_string(),
-                    });
-                }
-            }
-        });
-
-        // Pre-populate sub_agents with Pending placeholders (no worktree paths yet — empty)
-        // The actual agents are set up inside start_pipeline; we'll update them via events.
-        // For now, clear previous run.
-        self.state.sub_agents.clear();
-        self.state.sub_agent_rx = Some(bridge_rx);
-        self.state.chat_messages.push(ChatMessage::System {
-            content: format!("starting {task_count} agent(s)…"),
-        });
-    }
-
     /// Finalize /init generation: write file and show result.
     fn finalize_init(&mut self) {
         let generated = std::mem::take(&mut self.state.init_text);
@@ -8876,6 +9134,106 @@ impl App {
                 content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
             });
         }
+    }
+}
+
+/// Background task for a single spawn_agent call. Runs the subagent,
+/// merges on success, cleans up worktree. Returns a SpawnAgentResult
+/// for the event loop to inject as a ToolResult.
+#[allow(clippy::too_many_arguments)]
+async fn run_spawn_agent_task(
+    agent_id: uuid::Uuid,
+    tool_use_id: String,
+    task: String,
+    branch: String,
+    worktree_path: std::path::PathBuf,
+    input: crate::sub_agent::executor::SubAgentInput,
+    provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
+    config: crate::config::Config,
+    tx: tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
+) -> crate::sub_agent::SpawnAgentResult {
+    use crate::sub_agent::{SpawnAgentResult, SubAgentState};
+
+    let run_result =
+        crate::sub_agent::executor::run_subagent(input, provider, config, tx.clone()).await;
+
+    match run_result {
+        Ok((cost, summary)) => {
+            // Merge branch back
+            let branch_merge = branch.clone();
+            let merge_result = tokio::task::spawn_blocking(move || {
+                crate::sub_agent::worktree::merge_branch(&branch_merge)
+            })
+            .await;
+
+            match merge_result {
+                Ok(Ok(())) => {
+                    // Remove worktree
+                    let path_rm = worktree_path.clone();
+                    let branch_rm = branch.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::sub_agent::worktree::remove_worktree(&path_rm, &branch_rm)
+                    })
+                    .await;
+
+                    SpawnAgentResult {
+                        agent_id,
+                        tool_use_id,
+                        result_text: format!("Agent completed task: {task}\n\n{summary}"),
+                        is_error: false,
+                        task,
+                        final_state: SubAgentState::Done,
+                        cost_usd: cost,
+                    }
+                }
+                Ok(Err(e)) if e.to_string().contains("CONFLICT") => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!(
+                        "Merge conflict for task '{task}'. \
+                         Worktree preserved at {}. Resolve manually.",
+                        worktree_path.display()
+                    ),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Conflict {
+                        report: e.to_string(),
+                    },
+                    cost_usd: cost,
+                },
+                Ok(Err(e)) => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!("spawn_agent: merge failed for '{task}': {e}"),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Failed {
+                        message: format!("merge failed: {e}"),
+                    },
+                    cost_usd: cost,
+                },
+                Err(e) => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!("spawn_agent: merge task panicked: {e}"),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Failed {
+                        message: format!("merge panicked: {e}"),
+                    },
+                    cost_usd: 0.0,
+                },
+            }
+        }
+        Err(message) => SpawnAgentResult {
+            agent_id,
+            tool_use_id,
+            result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
+            is_error: true,
+            task,
+            final_state: SubAgentState::Failed { message },
+            cost_usd: 0.0,
+        },
     }
 }
 

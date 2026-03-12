@@ -13,17 +13,20 @@ pub struct SubAgentInput {
     pub task: String,
     pub worktree_path: PathBuf,
     pub system_prompt: String,
+    pub permission_mode: PermissionMode,
+    pub approval_rx: tokio::sync::mpsc::UnboundedReceiver<bool>,
 }
 
-/// Run a subagent task headlessly. Returns total cost in USD, or an error message.
+/// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
 #[allow(dead_code)]
 pub async fn run_subagent(
-    input: SubAgentInput,
+    mut input: SubAgentInput,
     provider: Arc<dyn crate::provider::Provider + Send + Sync>,
     config: Config,
     tx: tokio::sync::mpsc::UnboundedSender<SubAgentEvent>,
-) -> Result<f64, String> {
-    let mut agent = AgentLoop::new(input.system_prompt, PermissionMode::Chug);
+) -> Result<(f64, String), String> {
+    let perm_mode = input.permission_mode.clone();
+    let mut agent = AgentLoop::new(input.system_prompt, input.permission_mode);
     agent.primary_root = input.worktree_path.clone();
 
     // Wire tools config
@@ -47,6 +50,8 @@ pub async fn run_subagent(
     let mut mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
     mcp_manager.connect_all().await;
     let mut tool_defs = tool_registry.definitions().to_vec();
+    // Remove spawn_agent from subagent's tools — no recursive spawning
+    tool_defs.retain(|d| d.name != "spawn_agent");
     tool_defs.extend(mcp_manager.tool_definitions());
 
     // Inject working directory into the task message
@@ -60,6 +65,7 @@ pub async fn run_subagent(
     agent.send_message(task_message, provider.as_ref(), &tool_defs);
 
     let mut total_cost = 0.0f64;
+    let mut last_text = String::new();
     // Sonnet 4.5 pricing: $3.00/M input, $15.00/M output
     const INPUT_PRICE_PER_TOKEN: f64 = 3.0 / 1_000_000.0;
     const OUTPUT_PRICE_PER_TOKEN: f64 = 15.0 / 1_000_000.0;
@@ -72,6 +78,7 @@ pub async fn run_subagent(
         for event in &events {
             match event {
                 AgentEvent::TextDelta(text) => {
+                    last_text.push_str(text);
                     let _ = tx.send(SubAgentEvent::StreamLine {
                         id: input.id,
                         line: SubAgentStreamLine {
@@ -98,6 +105,8 @@ pub async fn run_subagent(
                         id: input.id,
                         cost_usd: total_cost,
                     });
+                    // Reset last_text for next turn's summary
+                    last_text.clear();
                 }
                 AgentEvent::Error(e) => {
                     let _ = tx.send(SubAgentEvent::StreamLine {
@@ -134,9 +143,49 @@ pub async fn run_subagent(
             AgentState::Streaming | AgentState::Compacting => {
                 // Keep polling
             }
-            AgentState::PendingApproval { .. } => {
-                // Defensive: Chug mode shouldn't reach here, but auto-approve if it does
-                while agent.approve_current() {}
+            AgentState::PendingApproval { ref tool_calls, .. } => {
+                if matches!(perm_mode, PermissionMode::Chug) {
+                    // Chug mode: auto-approve everything
+                    while agent.approve_current() {}
+                } else {
+                    // Non-chug: bubble approval request to main UI
+                    let tool_name = tool_calls
+                        .first()
+                        .map(|tc| tc.name.clone())
+                        .unwrap_or_default();
+                    let arguments = tool_calls
+                        .first()
+                        .map(|tc| tc.arguments.to_string())
+                        .unwrap_or_default();
+
+                    let _ = tx.send(SubAgentEvent::StateChange {
+                        id: input.id,
+                        state: super::SubAgentState::WaitingApproval {
+                            tool_name: tool_name.clone(),
+                        },
+                    });
+                    let _ = tx.send(SubAgentEvent::ApprovalRequest {
+                        id: input.id,
+                        tool_name,
+                        arguments,
+                    });
+
+                    // Block until we get a response from the main thread
+                    match input.approval_rx.recv().await {
+                        Some(true) => {
+                            agent.approve_current();
+                        }
+                        Some(false) | None => {
+                            agent.deny_current();
+                        }
+                    }
+
+                    // Restore running state
+                    let _ = tx.send(SubAgentEvent::StateChange {
+                        id: input.id,
+                        state: super::SubAgentState::Running,
+                    });
+                }
             }
             AgentState::ExecutingTools => {
                 let results = agent
@@ -173,7 +222,20 @@ pub async fn run_subagent(
         }
     }
 
-    Ok(total_cost)
+    // Build summary from the agent's last text output
+    let summary = if last_text.trim().is_empty() {
+        format!("Completed: {}", input.task)
+    } else {
+        // Take first 500 chars as summary
+        let trimmed = last_text.trim();
+        if trimmed.len() > 500 {
+            format!("{}…", &trimmed[..500])
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    Ok((total_cost, summary))
 }
 
 #[cfg(test)]
@@ -183,13 +245,17 @@ mod tests {
     #[test]
     fn subagent_input_fields() {
         let id = uuid::Uuid::new_v4();
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
         let input = SubAgentInput {
             id,
             task: "implement auth".to_string(),
             worktree_path: std::path::PathBuf::from(".worktrees/agent-auth"),
             system_prompt: "You are a helpful coding agent.".to_string(),
+            permission_mode: PermissionMode::Default,
+            approval_rx: rx,
         };
         assert_eq!(input.task, "implement auth");
         assert_eq!(input.id, id);
+        assert!(matches!(input.permission_mode, PermissionMode::Default));
     }
 }
