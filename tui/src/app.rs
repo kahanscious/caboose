@@ -174,6 +174,16 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Active subagents for the current /execute pipeline.
+    pub sub_agents: Vec<crate::sub_agent::SubAgent>,
+    /// Receiver for subagent pipeline events, polled each frame.
+    pub sub_agent_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sub_agent::SubAgentEvent>>,
+    /// Index into sub_agents for the stream overlay. None = closed.
+    #[allow(dead_code)]
+    pub agent_stream_overlay: Option<usize>,
+    /// Selected agent row in sidebar agents section.
+    #[allow(dead_code)]
+    pub sidebar_agent_selected: usize,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -749,6 +759,10 @@ impl App {
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
+                sub_agents: Vec::new(),
+                sub_agent_rx: None,
+                agent_stream_overlay: None,
+                sidebar_agent_selected: 0,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1885,6 +1899,96 @@ impl App {
                 }
             }
 
+            // Poll subagent pipeline events (non-blocking)
+            if let Some(ref mut rx) = self.state.sub_agent_rx {
+                use crate::sub_agent::SubAgentEvent;
+                type AgentUpdate = (
+                    uuid::Uuid,
+                    Option<crate::sub_agent::SubAgentState>,
+                    Option<crate::sub_agent::SubAgentStreamLine>,
+                    Option<f64>,
+                );
+                let mut pipeline_done = false;
+                let mut pending_messages: Vec<ChatMessage> = Vec::new();
+                let mut agent_updates: Vec<AgentUpdate> = Vec::new();
+
+                while let Ok(event) = rx.try_recv() {
+                    match event {
+                        SubAgentEvent::StateChange { id, state } => {
+                            agent_updates.push((id, Some(state), None, None));
+                        }
+                        SubAgentEvent::StreamLine { id, line } => {
+                            agent_updates.push((id, None, Some(line), None));
+                        }
+                        SubAgentEvent::CostUpdate { id, cost_usd } => {
+                            agent_updates.push((id, None, None, Some(cost_usd)));
+                        }
+                        SubAgentEvent::AgentMerged {
+                            task,
+                            elapsed_secs,
+                            cost_usd,
+                            ..
+                        } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "agent done: {} ({}  ·  ${:.3})",
+                                    task,
+                                    crate::sub_agent::format_elapsed(elapsed_secs),
+                                    cost_usd
+                                ),
+                            });
+                        }
+                        SubAgentEvent::AgentFailed { task, message, .. } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!("agent failed: {} — {}", task, message),
+                            });
+                        }
+                        SubAgentEvent::AgentConflict { task, worktree_path, .. } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "conflict: {} — worktree preserved at {}",
+                                    task,
+                                    worktree_path.display()
+                                ),
+                            });
+                        }
+                        SubAgentEvent::PipelineHalted { message } => {
+                            pending_messages.push(ChatMessage::System { content: message });
+                            pipeline_done = true;
+                        }
+                        SubAgentEvent::PipelineDone => {
+                            pending_messages
+                                .push(ChatMessage::System { content: "all agents complete".to_string() });
+                            pipeline_done = true;
+                        }
+                    }
+                }
+
+                // Apply agent updates
+                for (id, state_opt, line_opt, cost_opt) in agent_updates {
+                    if let Some(agent) =
+                        self.state.sub_agents.iter_mut().find(|a| a.id == id)
+                    {
+                        if let Some(state) = state_opt {
+                            if matches!(state, crate::sub_agent::SubAgentState::Running) {
+                                agent.started_at = Some(std::time::Instant::now());
+                            }
+                            agent.state = state;
+                        }
+                        if let Some(line) = line_opt {
+                            agent.stream.push(line);
+                        }
+                        if let Some(cost) = cost_opt {
+                            agent.cost_usd = cost;
+                        }
+                    }
+                }
+                self.state.chat_messages.extend(pending_messages);
+                if pipeline_done {
+                    self.state.sub_agent_rx = None;
+                }
+            }
+
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
 
@@ -2271,6 +2375,11 @@ impl App {
                         }
                         if slash == "init" {
                             self.handle_init_command();
+                            return;
+                        }
+                        // /execute — spawn subagent pipeline from last assistant task list
+                        if slash == "execute" {
+                            self.handle_execute_command();
                             return;
                         }
                         if slash == "mcp" {
@@ -3026,6 +3135,11 @@ impl App {
                         }
                         if slash == "init" {
                             self.handle_init_command();
+                            return;
+                        }
+                        // /execute — spawn subagent pipeline from last assistant task list
+                        if slash == "execute" {
+                            self.handle_execute_command();
                             return;
                         }
                         // /create-skill — LLM-guided skill creation
@@ -7949,6 +8063,161 @@ impl App {
         });
     }
 
+    /// Handle `/execute` — spawn a subagent pipeline for the last assistant task list.
+    ///
+    /// Non-blocking: spawns the pipeline driver in the background via tokio::spawn.
+    /// The main loop polls `state.sub_agent_rx` for events.
+    fn handle_execute_command(&mut self) {
+        // Transition to chat screen so messages are visible
+        if matches!(self.state.dialog_stack.base, Screen::Home) {
+            self.state.dialog_stack.base = Screen::Chat;
+            self.state.dialog_stack.clear();
+        }
+
+        // Show the user's command in the chat
+        self.state.chat_messages.push(ChatMessage::User {
+            content: "/execute".to_string(),
+            images: vec![],
+        });
+        self.state.user_scrolled_up = false;
+
+        // Find last assistant message with a task list
+        let last_assistant_text = self
+            .state
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let ChatMessage::Assistant { content } = m {
+                    Some(content.clone())
+                } else {
+                    None
+                }
+            });
+
+        let Some(text) = last_assistant_text else {
+            self.state.chat_messages.push(ChatMessage::System {
+                content:
+                    "no task list found — use /plan or /roundhouse to generate one first."
+                        .to_string(),
+            });
+            return;
+        };
+
+        let Some(tasks) = crate::sub_agent::pipeline::extract_tasks(&text) else {
+            self.state.chat_messages.push(ChatMessage::System {
+                content:
+                    "no task list found — use /plan or /roundhouse to generate one first."
+                        .to_string(),
+            });
+            return;
+        };
+
+        // Require Chug mode
+        if self.state.mode != crate::agent::permission::Mode::Chug {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "note: /execute currently requires chug mode. switch to chug (Tab) then run /execute again.".to_string(),
+            });
+            return;
+        }
+
+        // Get provider as Arc (required by start_pipeline)
+        let provider_arc = match self.state.providers.get_provider_arc(
+            Some(&self.state.active_provider_name),
+            Some(&self.state.active_model_name),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("no active provider: {e}"),
+                });
+                return;
+            }
+        };
+
+        let config = self.state.config.clone();
+        let system_prompt = self.state.agent.conversation.system_prompt.clone();
+        let task_count = tasks.len();
+
+        let (setup_tx, mut setup_rx) =
+            tokio::sync::mpsc::unbounded_channel::<
+                Result<crate::sub_agent::pipeline::PipelineSetup, String>,
+            >();
+
+        // Spawn: run start_pipeline async, send PipelineSetup back via channel
+        tokio::spawn(async move {
+            let result =
+                crate::sub_agent::pipeline::start_pipeline(tasks, system_prompt, provider_arc, config)
+                    .await;
+            let _ = setup_tx.send(result);
+        });
+
+        // We need the PipelineSetup to wire up sub_agent_rx and sub_agents.
+        // Since handle_execute_command is sync (called from the event loop), we poll the
+        // setup channel immediately — start_pipeline does a small amount of async work
+        // (branch check + worktree pre-allocation) so we use a oneshot style poll here:
+        // the main loop will re-check if the receiver is empty on the next tick.
+        // Store a temporary "pending setup" by spawning a separate task that writes
+        // directly to state via a dedicated oneshot channel stored in a temporary field.
+        //
+        // Simpler approach: just block briefly via handle().block_on is not available.
+        // Instead, store the setup receiver in a temporary oneshot on state and finalize
+        // on the next poll. We use sub_agent_rx = None as a sentinel and store the setup
+        // receiver as a separate field would require more state.
+        //
+        // Cleanest solution given sync handler: spawn a task that awaits setup and then
+        // sends events directly — pipeline events come through the PipelineSetup.rx.
+        // We create a bridge channel: spawn receives PipelineSetup, then pumps its events.
+
+        let (bridge_tx, bridge_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
+
+        // Swap the setup receiver so we can forward events from PipelineSetup.rx
+        let bridge_tx2 = bridge_tx.clone();
+        tokio::spawn(async move {
+            // Wait for setup to complete
+            let setup_result = setup_rx.recv().await;
+            match setup_result {
+                Some(Ok(setup)) => {
+                    // Forward all events from pipeline rx to bridge
+                    let mut rx = setup.rx;
+                    while let Some(event) = rx.recv().await {
+                        let done = matches!(
+                            event,
+                            crate::sub_agent::SubAgentEvent::PipelineDone
+                                | crate::sub_agent::SubAgentEvent::PipelineHalted { .. }
+                        );
+                        if bridge_tx2.send(event).is_err() {
+                            break;
+                        }
+                        if done {
+                            break;
+                        }
+                    }
+                }
+                Some(Err(e)) => {
+                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::PipelineHalted {
+                        message: format!("failed to start pipeline: {e}"),
+                    });
+                }
+                None => {
+                    let _ = bridge_tx2.send(crate::sub_agent::SubAgentEvent::PipelineHalted {
+                        message: "pipeline setup channel closed unexpectedly".to_string(),
+                    });
+                }
+            }
+        });
+
+        // Pre-populate sub_agents with Pending placeholders (no worktree paths yet — empty)
+        // The actual agents are set up inside start_pipeline; we'll update them via events.
+        // For now, clear previous run.
+        self.state.sub_agents.clear();
+        self.state.sub_agent_rx = Some(bridge_rx);
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("starting {task_count} agent(s)…"),
+        });
+    }
+
     /// Finalize /init generation: write file and show result.
     fn finalize_init(&mut self) {
         let generated = std::mem::take(&mut self.state.init_text);
@@ -9101,6 +9370,23 @@ mod workspace_list_handler_tests {
         state.workspaces.remove(2);
         state.clamp_selected();
         assert_eq!(state.selected, 1);
+    }
+}
+
+#[cfg(test)]
+mod execute_command_tests {
+    #[test]
+    fn extract_tasks_from_assistant_message() {
+        let text = "Here's what I'll do:\n- auth refactor\n- add session tests\n- update readme";
+        let tasks = crate::sub_agent::pipeline::extract_tasks(text).unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0], "auth refactor");
+    }
+
+    #[test]
+    fn no_task_list_returns_none() {
+        let text = "Just explaining some code...";
+        assert!(crate::sub_agent::pipeline::extract_tasks(text).is_none());
     }
 }
 
