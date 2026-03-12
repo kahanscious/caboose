@@ -80,12 +80,13 @@ pub async fn run_subagent(
                         },
                     });
                 }
-                AgentEvent::ToolCall { name, .. } => {
+                AgentEvent::ToolCall { name, arguments, .. } => {
+                    let text: String = format!("{name}  {arguments}").chars().take(120).collect();
                     let _ = tx.send(SubAgentEvent::StreamLine {
                         id: input.id,
                         line: SubAgentStreamLine {
                             kind: StreamLineKind::ToolCall,
-                            text: name.clone(),
+                            text,
                         },
                     });
                 }
