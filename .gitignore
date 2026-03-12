@@ -13,6 +13,7 @@ caboose-*.zip
 .caboose/
 .claude/
 .worktrees/
+.superpowers/
 
 # Roundhouse plan output
 roundhouse-*.md
