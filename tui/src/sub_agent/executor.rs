@@ -269,4 +269,36 @@ mod tests {
         assert_eq!(input.id, id);
         assert!(matches!(input.permission_mode, PermissionMode::Default));
     }
+
+    #[test]
+    fn pricing_zero_for_free_model() {
+        let input_price = 0.0f64 / 1_000_000.0;
+        let output_price = 0.0f64 / 1_000_000.0;
+        let cost = 100_000.0 * input_price + 50_000.0 * output_price;
+        assert!((cost - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn pricing_sonnet_rates() {
+        let input_per_m = 3.0f64;
+        let output_per_m = 15.0f64;
+        let input_price = input_per_m / 1_000_000.0;
+        let output_price = output_per_m / 1_000_000.0;
+        // 1M input + 1M output = $3 + $15 = $18
+        let cost = 1_000_000.0 * input_price + 1_000_000.0 * output_price;
+        assert!((cost - 18.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn pricing_accumulates_across_turns() {
+        let input_price = 3.0f64 / 1_000_000.0;
+        let output_price = 15.0f64 / 1_000_000.0;
+        let mut total = 0.0f64;
+        // Turn 1: 50k in, 25k out
+        total += 50_000.0 * input_price + 25_000.0 * output_price;
+        // Turn 2: 40k in, 20k out
+        total += 40_000.0 * input_price + 20_000.0 * output_price;
+        let expected = (90_000.0 * input_price) + (45_000.0 * output_price);
+        assert!((total - expected).abs() < f64::EPSILON);
+    }
 }

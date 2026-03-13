@@ -224,6 +224,25 @@ mod tests {
     }
 
     #[test]
+    fn sub_agent_auto_approve_defaults_false() {
+        let agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        assert!(!agent.auto_approve);
+    }
+
+    #[test]
+    fn sub_agent_auto_approve_toggleable() {
+        let mut agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        assert!(!agent.auto_approve);
+        agent.auto_approve = true;
+        assert!(agent.auto_approve);
+    }
+
+    #[test]
+    fn format_elapsed_one_second() {
+        assert_eq!(format_elapsed(1), "0m01s");
+    }
+
+    #[test]
     fn task_pipeline_struct() {
         let p = TaskPipeline {
             stages: vec![

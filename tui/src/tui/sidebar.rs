@@ -857,6 +857,47 @@ mod agents_section_tests {
         assert_eq!(counts.failed, 0);
     }
 
+    #[test]
+    fn agent_status_waiting_approval_color_warn() {
+        let (dot, color_key) = agent_status_display(&SubAgentState::WaitingApproval {
+            tool_name: "edit_file".into(),
+        });
+        assert_eq!(dot, "●");
+        assert_eq!(color_key, "warn");
+    }
+
+    #[test]
+    fn dismiss_none_when_agents_running() {
+        let agents = vec![
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Done),
+        ];
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
+        assert!(result.is_none(), "dismiss should not show when agents still running");
+    }
+
+    #[test]
+    fn dismiss_some_when_all_terminal() {
+        let agents = vec![
+            make_agent(SubAgentState::Done),
+            make_agent(SubAgentState::Failed { message: "err".into() }),
+        ];
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
+        assert!(result.is_some(), "dismiss should show when all agents terminal");
+    }
+
+    #[test]
+    fn dismiss_none_when_no_agents() {
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &[], 40, &colors, 0);
+        assert!(result.is_none());
+    }
+
     fn make_agent(state: SubAgentState) -> SubAgent {
         let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
         a.state = state;

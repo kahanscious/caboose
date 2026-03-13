@@ -1726,3 +1726,28 @@ fn render_agent_stream_overlay(
         footer_area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_min_less_than_max() {
+        assert!(SIDEBAR_MIN_WIDTH < SIDEBAR_MAX_WIDTH);
+    }
+
+    #[test]
+    fn sidebar_min_width_reasonable() {
+        assert!(SIDEBAR_MIN_WIDTH >= 15, "sidebar must fit at least a short label");
+    }
+
+    #[test]
+    fn sidebar_max_width_bounded() {
+        assert!(SIDEBAR_MAX_WIDTH <= 120, "sidebar should not exceed half a wide terminal");
+    }
+
+    #[test]
+    fn sidebar_min_terminal_width_covers_sidebar() {
+        assert!(SIDEBAR_MIN_TERMINAL_WIDTH > SIDEBAR_MAX_WIDTH);
+    }
+}
