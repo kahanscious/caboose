@@ -895,20 +895,49 @@ impl App {
         };
 
         // Restore chat messages for display
-        for msg in &messages {
+        let mut i = 0;
+        while i < messages.len() {
+            let msg = &messages[i];
             let chat_msg = match msg.role.as_str() {
-                "user" => ChatMessage::User {
-                    content: msg.content.clone(),
-                    images: vec![],
-                },
-                "assistant" => ChatMessage::Assistant {
-                    content: msg.content.clone(),
-                    thinking: None,
-                },
-                "system" => ChatMessage::System {
-                    content: msg.content.clone(),
-                },
+                "user" => {
+                    i += 1;
+                    ChatMessage::User {
+                        content: msg.content.clone(),
+                        images: vec![],
+                    }
+                }
+                "thinking" => {
+                    // Look ahead: if next message is "assistant", attach thinking to it
+                    if i + 1 < messages.len() && messages[i + 1].role == "assistant" {
+                        let thinking_content = msg.content.clone();
+                        i += 1; // advance to assistant
+                        let assistant_content = messages[i].content.clone();
+                        i += 1; // advance past assistant
+                        ChatMessage::Assistant {
+                            content: assistant_content,
+                            thinking: Some(thinking_content),
+                        }
+                    } else {
+                        // Orphaned thinking — skip it
+                        i += 1;
+                        continue;
+                    }
+                }
+                "assistant" => {
+                    i += 1;
+                    ChatMessage::Assistant {
+                        content: msg.content.clone(),
+                        thinking: None,
+                    }
+                }
+                "system" => {
+                    i += 1;
+                    ChatMessage::System {
+                        content: msg.content.clone(),
+                    }
+                }
                 "provider_error" => {
+                    i += 1;
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         ChatMessage::ProviderError {
                             category: serde_json::from_value(
@@ -936,10 +965,14 @@ impl App {
                         }
                     }
                 }
-                "error" => ChatMessage::Error {
-                    content: msg.content.clone(),
-                },
+                "error" => {
+                    i += 1;
+                    ChatMessage::Error {
+                        content: msg.content.clone(),
+                    }
+                }
                 "task_outline" => {
+                    i += 1;
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         if let Ok(outline) = TaskOutline::from_tool_input(&json) {
                             ChatMessage::TaskOutline(outline)
@@ -950,7 +983,10 @@ impl App {
                         continue;
                     }
                 }
-                _ => continue,
+                _ => {
+                    i += 1;
+                    continue;
+                }
             };
             self.state.chat_messages.push(chat_msg);
         }
@@ -8184,12 +8220,15 @@ impl App {
                 } else {
                     Some(std::mem::take(&mut self.state.agent.streaming_thinking))
                 };
+                let t0 = Instant::now();
+                if let Some(ref thinking) = thinking {
+                    self.persist_message("thinking", thinking);
+                }
+                self.persist_message("assistant", &text);
                 self.state.chat_messages.push(ChatMessage::Assistant {
                     content: text.clone(),
                     thinking,
                 });
-                let t0 = Instant::now();
-                self.persist_message("assistant", &text);
                 let persist_ms = t0.elapsed().as_millis();
                 let t1 = Instant::now();
                 self.update_session_meta();
