@@ -71,9 +71,8 @@ impl SseAccumulator {
                     self.json_buffer.push_str(&partial_json);
                     Ok(None)
                 }
-                DeltaPayload::ThinkingDelta { .. } => {
-                    // Extended thinking — ignored for now
-                    Ok(None)
+                DeltaPayload::ThinkingDelta { thinking } => {
+                    Ok(Some(StreamEvent::ThinkingDelta(thinking)))
                 }
                 DeltaPayload::SignatureDelta { .. } => Ok(None),
             },
@@ -302,6 +301,17 @@ mod tests {
             acc.process(me).unwrap(),
             Some(StreamEvent::Done { .. })
         ));
+    }
+
+    #[test]
+    fn test_thinking_delta_yields_stream_event() {
+        let mut acc = SseAccumulator::new();
+        let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think about this"}}"#;
+        let result = acc.process(data).unwrap();
+        match result {
+            Some(StreamEvent::ThinkingDelta(text)) => assert_eq!(text, "Let me think about this"),
+            other => panic!("Expected ThinkingDelta, got {:?}", other),
+        }
     }
 
     #[test]
