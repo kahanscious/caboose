@@ -128,7 +128,9 @@ pub fn is_path_allowed(
     if p.starts_with(primary_root) {
         return true;
     }
-    workspace_paths.iter().any(|ws| p.starts_with(std::path::Path::new(ws)))
+    workspace_paths
+        .iter()
+        .any(|ws| p.starts_with(std::path::Path::new(ws)))
 }
 
 /// Extract the primary path argument from a read tool's input, if any.
