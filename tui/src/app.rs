@@ -2857,27 +2857,6 @@ impl App {
                         );
                         return;
                     }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        // Dismiss all terminal-state agents
-                        self.state.sub_agents.retain(|a| {
-                            !matches!(
-                                a.state,
-                                crate::sub_agent::SubAgentState::Done
-                                    | crate::sub_agent::SubAgentState::Failed { .. }
-                                    | crate::sub_agent::SubAgentState::Conflict { .. }
-                            )
-                        });
-                        // Clamp selection
-                        if !self.state.sub_agents.is_empty() {
-                            let max = self.state.sub_agents.len().saturating_sub(1);
-                            if self.state.sidebar_agent_selected > max {
-                                self.state.sidebar_agent_selected = max;
-                            }
-                        } else {
-                            self.state.sidebar_focused = false;
-                        }
-                        return;
-                    }
                     KeyCode::Esc => {
                         self.state.sidebar_focused = false;
                         return;
