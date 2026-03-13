@@ -1232,9 +1232,37 @@ pub fn render_slash_autocomplete(
         }
     };
 
+    // Determine if this mode uses a search filter
+    let has_filter = matches!(
+        state.mode,
+        DropdownMode::Models { .. }
+            | DropdownMode::Sessions { .. }
+            | DropdownMode::Providers
+            | DropdownMode::Skills
+    );
+
+    // If filterable, prepend a search input row
+    let filter_row_count: u16 = if has_filter { 1 } else { 0 };
+    let search_item = if has_filter {
+        let cursor = "\u{2588}"; // █ block cursor
+        let search_text = if state.filter.is_empty() {
+            format!(" search...{cursor}")
+        } else {
+            format!(" {}{cursor}", state.filter)
+        };
+        let style = if state.filter.is_empty() {
+            Style::default().fg(colors.text_muted)
+        } else {
+            Style::default().fg(colors.text)
+        };
+        Some(ListItem::new(Line::from(Span::styled(search_text, style))))
+    } else {
+        None
+    };
+
     // Compute dropdown area, clamped to fit within the terminal
     let frame_area = frame.area();
-    let total_rows = items.len() as u16 + 2; // +2 for top/bottom border
+    let total_rows = items.len() as u16 + 2 + filter_row_count; // +2 for top/bottom border
     let height = total_rows.min(MAX_DROPDOWN_ROWS);
     let width = anchor.width;
 
@@ -1260,13 +1288,23 @@ pub fn render_slash_autocomplete(
         block = block.title(t);
     }
 
-    let list = List::new(items)
+    // Prepend search row to items if filterable
+    let mut all_items = Vec::new();
+    if let Some(search) = search_item {
+        all_items.push(search);
+    }
+    all_items.extend(items);
+
+    // Offset selected index to account for the search row
+    let adjusted_selected = selected_item_idx.map(|i| i + filter_row_count as usize);
+
+    let list = List::new(all_items)
         .block(block)
         .highlight_style(Style::default().bg(colors.bg_hover).fg(colors.text))
         .highlight_symbol("\u{25b8} "); // ▸
 
     let mut list_state = ratatui::widgets::ListState::default();
-    list_state.select(selected_item_idx);
+    list_state.select(adjusted_selected);
     frame.render_stateful_widget(list, dropdown_area, &mut list_state);
 }
 

@@ -644,30 +644,44 @@ fn parse_inline_formatting(text: &str, colors: &Colors) -> Vec<Span<'static>> {
 
 /// Render a thinking block, either collapsed or expanded.
 ///
-/// Collapsed: `▶ Thinking...` (typewriter-animated, text_muted, italic)
+/// Collapsed (streaming): `▶ Thinking...` (typewriter-animated, text_muted, italic)
+/// Collapsed (finalized): `▶ Thought for Xs` (static, text_muted, italic)
 /// Expanded:  `▼ thinking` header + `│ content` lines (text_dim, plain text)
 pub fn render_thinking_block(
     thinking: &str,
     collapsed: bool,
     colors: &Colors,
     tick: u64,
+    streaming: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if collapsed {
-        const PHRASE_TICKS: u64 = 50;
-        let phrase_idx = (tick / PHRASE_TICKS) as usize;
-        let chars_visible = ((tick % PHRASE_TICKS) / 2 + 1) as usize;
-        let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
-        let visible: String = phrase.chars().take(chars_visible).collect();
+        if streaming {
+            // Animated typewriter while thinking is in progress
+            const PHRASE_TICKS: u64 = 50;
+            let phrase_idx = (tick / PHRASE_TICKS) as usize;
+            let chars_visible = ((tick % PHRASE_TICKS) / 2 + 1) as usize;
+            let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
+            let visible: String = phrase.chars().take(chars_visible).collect();
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                "\u{25B6} ", // ▶
-                Style::default().fg(colors.text_muted),
-            ),
-            Span::styled(visible, Style::default().fg(colors.text_muted).italic()),
-        ]));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "\u{25B6} ", // ▶
+                    Style::default().fg(colors.text_muted),
+                ),
+                Span::styled(visible, Style::default().fg(colors.text_muted).italic()),
+            ]));
+        } else {
+            // Static label for finalized thinking blocks
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "\u{25B6} ", // ▶
+                    Style::default().fg(colors.text_muted),
+                ),
+                Span::styled("Thought process", Style::default().fg(colors.text_muted).italic()),
+            ]));
+        }
     } else {
         lines.push(Line::from(vec![
             Span::styled(
@@ -929,16 +943,25 @@ mod tests {
 
     #[test]
     fn render_thinking_collapsed() {
-        let lines = render_thinking_block("some thinking content", true, &colors(), 0);
+        let lines = render_thinking_block("some thinking content", true, &colors(), 0, true);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("\u{25B6}")); // ▶ arrow
     }
 
     #[test]
+    fn render_thinking_collapsed_finalized() {
+        let lines = render_thinking_block("some thinking content here", true, &colors(), 0, false);
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("\u{25B6}")); // ▶ arrow
+        assert!(text.contains("Thought process")); // static label
+    }
+
+    #[test]
     fn render_thinking_expanded() {
         let thinking = "Line one\nLine two\nLine three";
-        let lines = render_thinking_block(thinking, false, &colors(), 0);
+        let lines = render_thinking_block(thinking, false, &colors(), 0, false);
         // Should have: header line + 3 content lines
         assert_eq!(lines.len(), 4);
         let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -950,7 +973,7 @@ mod tests {
 
     #[test]
     fn render_thinking_empty_content() {
-        let lines = render_thinking_block("", false, &colors(), 0);
+        let lines = render_thinking_block("", false, &colors(), 0, false);
         // Empty thinking should still show the header
         assert_eq!(lines.len(), 1);
     }

@@ -16,6 +16,16 @@ pub struct ApiRequest {
     pub messages: Vec<ApiMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ApiToolDef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingParam>,
+}
+
+/// Extended thinking configuration.
+#[derive(Debug, Serialize)]
+pub struct ThinkingParam {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    pub budget_tokens: u32,
 }
 
 /// A system-prompt block (always type "text").

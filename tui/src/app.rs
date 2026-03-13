@@ -114,6 +114,10 @@ pub struct State {
     pub model_supports_tools: bool,
     /// Whether the active model supports vision (image input).
     pub model_supports_vision: bool,
+    /// Whether the active model supports extended thinking/reasoning.
+    pub model_supports_thinking: bool,
+    /// Current thinking mode toggle state.
+    pub thinking_mode: crate::provider::ThinkingMode,
     /// Index into the tips array shown on the home screen (randomized at startup).
     pub home_tip_index: usize,
     /// Frame counter for animations — incremented every render loop iteration.
@@ -214,6 +218,10 @@ pub struct State {
     pub sidebar_agent_selected: usize,
     /// Absolute screen row of the clickable agents dismiss button (set each frame).
     pub agents_dismiss_row: Cell<Option<u16>>,
+    /// Whether the "Files Modified" sidebar section is collapsed.
+    pub files_modified_collapsed: bool,
+    /// Screen row of the "Files Modified" header for click-to-toggle (set each frame).
+    pub files_modified_header_row: Cell<Option<u16>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -782,6 +790,8 @@ impl App {
                 mode,
                 model_supports_tools: true,
                 model_supports_vision: true, // default true for Anthropic models
+                model_supports_thinking: true, // default true for Anthropic models
+                thinking_mode: crate::provider::ThinkingMode::Off,
                 home_tip_index: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as usize % crate::tui::home::TIPS.len())
@@ -830,6 +840,8 @@ impl App {
                 agent_stream_overlay: None,
                 sidebar_agent_selected: 0,
                 agents_dismiss_row: Cell::new(None),
+                files_modified_collapsed: false,
+                files_modified_header_row: Cell::new(None),
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1552,6 +1564,14 @@ impl App {
                                             } else {
                                                 self.state.sidebar_focused = false;
                                             }
+                                            continue;
+                                        }
+
+                                        // Files Modified header click to toggle collapse
+                                        if let Some(header_y) = self.state.files_modified_header_row.get()
+                                            && mouse.row == header_y
+                                        {
+                                            self.state.files_modified_collapsed = !self.state.files_modified_collapsed;
                                             continue;
                                         }
 
@@ -2600,6 +2620,14 @@ impl App {
                     crate::tui::file_browser::FileBrowserState::new(cwd),
                 ));
             }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if self.state.model_supports_thinking {
+                    self.state.thinking_mode = self.state.thinking_mode.toggle();
+                    if let Some(ref provider) = self.provider {
+                        provider.set_thinking_mode(self.state.thinking_mode);
+                    }
+                }
+            }
             (KeyCode::Enter, KeyModifiers::SHIFT)
             | (KeyCode::Enter, KeyModifiers::ALT)
             | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
@@ -3229,6 +3257,14 @@ impl App {
                 self.state.dialog_stack.push(DialogKind::FileBrowser(
                     crate::tui::file_browser::FileBrowserState::new(cwd),
                 ));
+            }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if self.state.model_supports_thinking {
+                    self.state.thinking_mode = self.state.thinking_mode.toggle();
+                    if let Some(ref provider) = self.provider {
+                        provider.set_thinking_mode(self.state.thinking_mode);
+                    }
+                }
             }
             // Skill creation preview keys (p/g/e/c) — intercept before normal input
             (KeyCode::Char(c @ ('p' | 'g' | 'e' | 'c')), KeyModifiers::NONE)
@@ -4033,16 +4069,16 @@ impl App {
                     auto.selected,
                 );
                 // Look up capabilities before clearing slash_auto (borrows models/recent)
-                let (supports_tools, supports_vision) = selection
+                let (supports_tools, supports_vision, supports_thinking) = selection
                     .as_ref()
                     .and_then(|(_, model_id)| {
                         models
                             .iter()
                             .chain(recent.iter())
                             .find(|(_, m)| m.id == *model_id)
-                            .map(|(_, m)| (m.supports_tools, m.supports_vision))
+                            .map(|(_, m)| (m.supports_tools, m.supports_vision, m.supports_thinking))
                     })
-                    .unwrap_or((true, false));
+                    .unwrap_or((true, false, false));
                 // Build display name for roundhouse before clearing slash_auto
                 let display_for_roundhouse = selection.as_ref().map(|(provider, model_id)| {
                     let display = crate::provider::catalog::by_id(provider)
@@ -4069,6 +4105,11 @@ impl App {
                 } else if let Some((provider, model_id)) = selection {
                     self.state.model_supports_tools = supports_tools;
                     self.state.model_supports_vision = supports_vision;
+                    self.state.model_supports_thinking = supports_thinking;
+                    // Reset thinking mode when switching to a model that doesn't support it
+                    if !supports_thinking {
+                        self.state.thinking_mode = crate::provider::ThinkingMode::Off;
+                    }
                     self.select_model(&provider, &model_id);
                 }
             }
@@ -5916,6 +5957,7 @@ impl App {
                         context_window: None,
                         supports_tools: true,
                         supports_vision: false,
+                        supports_thinking: false,
                     },
                 ));
             }
@@ -5939,6 +5981,7 @@ impl App {
                 let found = models.iter().find(|(_, m)| m.id == rm.model_id);
                 let supports_tools = found.map(|(_, m)| m.supports_tools).unwrap_or(true);
                 let supports_vision = found.map(|(_, m)| m.supports_vision).unwrap_or(false);
+                let supports_thinking = found.map(|(_, m)| m.supports_thinking).unwrap_or(false);
                 (
                     rm.provider.clone(),
                     crate::provider::ModelInfo {
@@ -5947,6 +5990,7 @@ impl App {
                         context_window: None,
                         supports_tools,
                         supports_vision,
+                        supports_thinking,
                     },
                 )
             })
@@ -6088,6 +6132,8 @@ impl App {
             Ok(new_provider) => {
                 self.state.active_provider_name = new_provider.name().to_string();
                 self.state.active_model_name = new_provider.model().to_string();
+                // Sync thinking mode to the new provider
+                new_provider.set_thinking_mode(self.state.thinking_mode);
                 self.provider = Some(new_provider);
 
                 // Update context window for compaction and sidebar display

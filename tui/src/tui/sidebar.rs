@@ -183,6 +183,8 @@ pub fn render(
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
     active_watchers: &[crate::scm::watcher::Watcher],
     sub_agents: &[SubAgent],
+    files_modified_collapsed: bool,
+    files_modified_header_row: &std::cell::Cell<Option<u16>>,
 ) -> Option<u16> {
     let colors = Colors::default();
 
@@ -286,7 +288,7 @@ pub fn render(
     lines.push(Line::from(""));
 
     // --- Files Modified section ---
-    render_files_modified(&mut lines, modified_files, inner.width, &colors);
+    let files_header_line = render_files_modified(&mut lines, modified_files, inner.width, &colors, files_modified_collapsed);
 
     // --- MCP Servers section ---
     lines.push(Line::from(Span::styled(
@@ -514,6 +516,14 @@ pub fn render(
         width: inner.width,
         height: fixed_height.min(inner.height),
     };
+    // Compute screen row for files modified header click zone
+    let header_screen_y = inner.y + files_header_line as u16;
+    if header_screen_y < inner.y + fixed_area.height {
+        files_modified_header_row.set(Some(header_screen_y));
+    } else {
+        files_modified_header_row.set(None);
+    }
+
     frame.render_widget(Paragraph::new(lines), fixed_area);
 
     // --- Tasks section (scrollable, takes remaining space) ---
@@ -708,59 +718,72 @@ fn truncate_provider_name(name: &str, max: usize) -> String {
 }
 
 /// Render the "Files Modified" sidebar section.
+/// Returns the logical line index of the header (for click-zone mapping).
 fn render_files_modified(
     lines: &mut Vec<Line>,
     modified_files: &std::collections::HashMap<String, FileStats>,
     sidebar_width: u16,
     colors: &Colors,
-) {
+    collapsed: bool,
+) -> usize {
     // Only show files that were actually written/edited (have additions or deletions)
     let mut write_files: Vec<(&String, &FileStats)> = modified_files
         .iter()
         .filter(|(_, stats)| stats.additions > 0 || stats.deletions > 0)
         .collect();
 
-    lines.push(Line::from(Span::styled(
-        "  Files Modified",
-        Style::default().fg(colors.text_secondary).bold(),
-    )));
+    let file_count = write_files.len();
+    let arrow = if collapsed { "\u{25B6}" } else { "\u{25BC}" }; // ▶ or ▼
+    let header_line_idx = lines.len();
 
-    if write_files.is_empty() {
+    if file_count == 0 {
         lines.push(Line::from(Span::styled(
-            "  None",
-            Style::default().fg(colors.text_dim),
+            format!("  {arrow} Files Modified"),
+            Style::default().fg(colors.text_secondary).bold(),
         )));
-    } else {
-        // Sort by path for stable display
-        write_files.sort_by_key(|(path, _)| path.as_str());
-
-        for (path, stats) in &write_files {
-            // Show just the filename (or last 2 path components if space allows)
-            let display_name = shorten_path(path, sidebar_width.saturating_sub(16) as usize);
-
-            // Format: "  filename  +N -N"
-            let added = format!("+{}", stats.additions);
-            let removed = format!("-{}", stats.deletions);
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {display_name} "),
-                    Style::default().fg(colors.text_secondary),
-                ),
-                Span::styled(added, Style::default().fg(colors.success)),
-                Span::styled(" ", Style::default()),
-                Span::styled(removed, Style::default().fg(colors.error)),
-            ]));
+        if !collapsed {
+            lines.push(Line::from(Span::styled(
+                "    None",
+                Style::default().fg(colors.text_dim),
+            )));
         }
-
-        // Summary line
+    } else {
         let total_added: usize = write_files.iter().map(|(_, s)| s.additions).sum();
         let total_removed: usize = write_files.iter().map(|(_, s)| s.deletions).sum();
-        let file_count = write_files.len();
-        lines.push(Line::from(Span::styled(
-            format!("  {file_count} file(s) +{total_added} -{total_removed}"),
-            Style::default().fg(colors.text_muted),
-        )));
+
+        // Header with count summary
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {arrow} Files Modified "),
+                Style::default().fg(colors.text_secondary).bold(),
+            ),
+            Span::styled(format!("{file_count}"), Style::default().fg(colors.text_muted)),
+            Span::styled(" ", Style::default()),
+            Span::styled(format!("+{total_added}"), Style::default().fg(colors.success)),
+            Span::styled(" ", Style::default()),
+            Span::styled(format!("-{total_removed}"), Style::default().fg(colors.error)),
+        ]));
+
+        if !collapsed {
+            // Sort by path for stable display
+            write_files.sort_by_key(|(path, _)| path.as_str());
+
+            for (path, stats) in &write_files {
+                let display_name = shorten_path(path, sidebar_width.saturating_sub(16) as usize);
+                let added = format!("+{}", stats.additions);
+                let removed = format!("-{}", stats.deletions);
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("    {display_name} "),
+                        Style::default().fg(colors.text_secondary),
+                    ),
+                    Span::styled(added, Style::default().fg(colors.success)),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(removed, Style::default().fg(colors.error)),
+                ]));
+            }
+        }
     }
 
     // Separator
@@ -773,6 +796,8 @@ fn render_files_modified(
         Style::default().fg(colors.border),
     )));
     lines.push(Line::from(""));
+
+    header_line_idx
 }
 
 /// Shorten a file path to fit within `max_width` characters.

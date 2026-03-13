@@ -19,6 +19,38 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
+/// Thinking/reasoning toggle for models that support extended thinking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ThinkingMode {
+    /// Thinking disabled — no reasoning tokens requested.
+    #[default]
+    Off = 0,
+    /// Thinking enabled.
+    On = 1,
+}
+
+impl ThinkingMode {
+    /// Toggle between Off and On.
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Off => Self::On,
+            Self::On => Self::Off,
+        }
+    }
+
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
 /// Events emitted by provider streams — the universal output format.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -59,6 +91,7 @@ pub struct ModelInfo {
     pub context_window: Option<u32>,
     pub supports_tools: bool,
     pub supports_vision: bool,
+    pub supports_thinking: bool,
 }
 
 /// Trait that all LLM providers must implement.
@@ -78,6 +111,10 @@ pub trait Provider: Send + Sync {
 
     /// Fetch available models from this provider's API.
     fn list_models(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + '_>>;
+
+    /// Set the thinking/reasoning mode for subsequent stream calls.
+    /// Default implementation is a no-op for providers that don't support thinking.
+    fn set_thinking_mode(&self, _mode: ThinkingMode) {}
 }
 
 /// A chat message in the conversation.
@@ -337,6 +374,10 @@ impl Provider for BoxedProvider {
     fn list_models(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + '_>> {
         self.0.list_models()
     }
+
+    fn set_thinking_mode(&self, mode: ThinkingMode) {
+        self.0.set_thinking_mode(mode);
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +503,7 @@ mod tests {
             context_window: Some(200_000),
             supports_tools: true,
             supports_vision: true,
+            supports_thinking: true,
         };
         assert!(vision_model.supports_vision);
 
@@ -471,6 +513,7 @@ mod tests {
             context_window: Some(128_000),
             supports_tools: false,
             supports_vision: false,
+            supports_thinking: false,
         };
         assert!(!text_only_model.supports_vision);
     }

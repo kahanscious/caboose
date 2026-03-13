@@ -13,9 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inline diff viewer** — pending write/edit/patch approvals show a collapsible diff preview. `d` key or click toggles expand/collapse, `j/k/arrows` scroll. Post-execution diffs also collapsible per-message.
 - **Autonomous subagent spawning** — model calls `spawn_agent` to parallelize independent tasks into isolated git worktrees. Non-blocking design with approval bubbling for non-Chug modes (y/n/a where "a" is always-approve). Auto-merge on success, conflict detection, worktree cleanup. Sidebar shows live agent status with blinking dots, elapsed time.
 - **Thinking blocks** — streaming thinking content from Anthropic models rendered as collapsible blocks in chat. Click or arrow to expand/collapse. Thinking persisted and restored across sessions. OpenAI-compatible providers (OpenRouter, DeepSeek) now emit reasoning content via `reasoning`/`reasoning_content` fields.
+- **Thinking toggle** — `Ctrl+T` toggles thinking on/off for models that support it. Status bar shows `thinking` indicator when active. Anthropic models get `anthropic-beta` header with `thinking` param. OpenAI/OpenRouter models get `reasoning_effort`. Gemini 2.5 models get `thinkingConfig`. Per-model capability detection: Anthropic hardcoded, OpenRouter from `supported_parameters`, OpenAI by model prefix (`o1`/`o3`/`o4`), Gemini by model prefix (`gemini-2.5`). Toggle hidden for non-thinking models.
+- **Model picker search** — typing in the `/model` picker now shows a visible search textbox with live filter text and cursor. Also visible in `/sessions`, `/connect`, and `/skills` pickers.
+- **Collapsible files modified** — sidebar "Files Modified" section is now collapsible. Click the header to toggle. Collapsed view shows file count and total +/- on one line.
 - **Sidebar resize** — drag the sidebar border to resize. Clamped between 20–80 columns.
 
 ### Changed
+
+- Thinking blocks show static "Thought process" label when collapsed after completion instead of looping typewriter animation. Click to re-expand and view full thinking content.
 
 - **System prompt overhaul** — Caboose now has a defined personality: conversational, direct, narrates what it's about to do, no filler. Replaces the generic "helpful assistant" prompt. Still overridable via `system_prompt` in config.
 - Task outlines automatically cleared when user sends a new message, so stale tasks don't linger after topic changes.

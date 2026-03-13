@@ -12,7 +12,7 @@ use tracing::debug;
 
 use self::sse::SseAccumulator;
 use self::types::*;
-use super::{Message, ModelInfo, Provider, StreamEvent, ToolDefinition};
+use super::{Message, ModelInfo, Provider, StreamEvent, ThinkingMode, ToolDefinition};
 
 const DEFAULT_API_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -24,6 +24,7 @@ pub struct OpenAiProvider {
     provider_name: String,
     model_filter: Option<fn(&str) -> bool>,
     client: reqwest::Client,
+    thinking_mode: std::sync::atomic::AtomicU8,
 }
 
 impl OpenAiProvider {
@@ -35,6 +36,7 @@ impl OpenAiProvider {
             provider_name: "openai".to_string(),
             model_filter: Some(|id: &str| id.starts_with("gpt-") || id.starts_with("o")),
             client: reqwest::Client::new(),
+            thinking_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -75,6 +77,15 @@ impl OpenAiProvider {
             )
         };
 
+        let mode = ThinkingMode::from_u8(
+            self.thinking_mode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let reasoning_effort = match mode {
+            ThinkingMode::Off => None,
+            ThinkingMode::On => Some("high".to_string()),
+        };
+
         ChatRequest {
             model: self.model.clone(),
             messages: chat_messages,
@@ -84,6 +95,7 @@ impl OpenAiProvider {
             }),
             tools: chat_tools,
             max_tokens: Some(DEFAULT_MAX_TOKENS),
+            reasoning_effort,
         }
     }
 
@@ -395,18 +407,27 @@ impl Provider for OpenAiProvider {
                     let vision = m.id.contains("gpt-4o")
                         || m.id.contains("gpt-4-turbo")
                         || m.id.contains("gpt-4-vision");
+                    let thinking = m.id.starts_with("o1")
+                        || m.id.starts_with("o3")
+                        || m.id.starts_with("o4");
                     ModelInfo {
                         name: m.id.clone(),
                         id: m.id,
                         context_window: None,
                         supports_tools: true,
                         supports_vision: vision,
+                        supports_thinking: thinking,
                     }
                 })
                 .collect();
             models.sort_by(|a, b| a.id.cmp(&b.id));
             Ok(models)
         })
+    }
+
+    fn set_thinking_mode(&self, mode: ThinkingMode) {
+        self.thinking_mode
+            .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

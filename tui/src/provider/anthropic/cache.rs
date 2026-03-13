@@ -106,6 +106,7 @@ mod tests {
             }]),
             messages: vec![make_user_msg("Hello")],
             tools: None,
+            thinking: None,
         };
         inject_anthropic_cache(&mut request);
         assert!(request.system.unwrap()[0].cache_control.is_some());
@@ -133,6 +134,7 @@ mod tests {
                     cache_control: None,
                 },
             ]),
+            thinking: None,
         };
         inject_anthropic_cache(&mut request);
         let tools = request.tools.unwrap();
@@ -155,6 +157,7 @@ mod tests {
                 make_user_msg("Third question"),
             ],
             tools: None,
+            thinking: None,
         };
         inject_anthropic_cache(&mut request);
 
@@ -183,6 +186,7 @@ mod tests {
             system: None,
             messages: vec![make_user_msg("Only message")],
             tools: None,
+            thinking: None,
         };
         // Should not panic — just doesn't mark anything
         inject_anthropic_cache(&mut request);

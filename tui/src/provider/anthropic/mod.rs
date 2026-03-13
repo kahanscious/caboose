@@ -14,10 +14,11 @@ use tracing::{debug, warn};
 use self::cache::inject_anthropic_cache;
 use self::sse::SseAccumulator;
 use self::types::*;
-use super::{Message, ModelInfo, Provider, StreamEvent, ToolDefinition};
+use super::{Message, ModelInfo, Provider, StreamEvent, ThinkingMode, ToolDefinition};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
+const BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 /// Anthropic Messages API client with SSE streaming.
@@ -25,6 +26,7 @@ pub struct AnthropicProvider {
     api_key: String,
     model: String,
     client: reqwest::Client,
+    thinking_mode: std::sync::atomic::AtomicU8,
 }
 
 impl AnthropicProvider {
@@ -33,6 +35,7 @@ impl AnthropicProvider {
             api_key,
             model,
             client: reqwest::Client::new(),
+            thinking_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -95,9 +98,27 @@ impl AnthropicProvider {
             )
         };
 
+        let mode = ThinkingMode::from_u8(
+            self.thinking_mode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let thinking = match mode {
+            ThinkingMode::Off => None,
+            ThinkingMode::On => Some(ThinkingParam {
+                thinking_type: "enabled".to_string(),
+                budget_tokens: 10_000,
+            }),
+        };
+
+        // When thinking is enabled, max_tokens must be larger than budget_tokens
+        let max_tokens = match &thinking {
+            Some(tp) => tp.budget_tokens + DEFAULT_MAX_TOKENS,
+            None => DEFAULT_MAX_TOKENS,
+        };
+
         ApiRequest {
             model: self.model.clone(),
-            max_tokens: DEFAULT_MAX_TOKENS,
+            max_tokens,
             stream: true,
             system: if system_blocks.is_empty() {
                 None
@@ -106,6 +127,7 @@ impl AnthropicProvider {
             },
             messages: api_messages,
             tools: api_tools,
+            thinking,
         }
     }
 
@@ -208,13 +230,19 @@ impl Provider for AnthropicProvider {
             "Sending Anthropic streaming request"
         );
 
-        let req = self
+        let mut req = self
             .client
             .post(API_URL)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
-            .json(&request);
+            .header("content-type", "application/json");
+
+        // Add beta header when thinking is enabled
+        if request.thinking.is_some() {
+            req = req.header("anthropic-beta", BETA_HEADER);
+        }
+
+        let req = req.json(&request);
 
         let provider_name = "anthropic".to_string();
         let model_name = self.model.clone();
@@ -305,6 +333,7 @@ impl Provider for AnthropicProvider {
                     context_window: Some(200_000),
                     supports_tools: true,
                     supports_vision: true,
+                    supports_thinking: true,
                 },
                 ModelInfo {
                     id: "claude-haiku-4-5-20251001".into(),
@@ -312,6 +341,7 @@ impl Provider for AnthropicProvider {
                     context_window: Some(200_000),
                     supports_tools: true,
                     supports_vision: true,
+                    supports_thinking: true,
                 },
                 ModelInfo {
                     id: "claude-opus-4-6".into(),
@@ -319,9 +349,15 @@ impl Provider for AnthropicProvider {
                     context_window: Some(200_000),
                     supports_tools: true,
                     supports_vision: true,
+                    supports_thinking: true,
                 },
             ])
         })
+    }
+
+    fn set_thinking_mode(&self, mode: ThinkingMode) {
+        self.thinking_mode
+            .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

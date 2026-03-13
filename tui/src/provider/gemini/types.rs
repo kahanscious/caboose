@@ -13,6 +13,21 @@ pub struct GenerateContentRequest {
     pub system_instruction: Option<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<GeminiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_config: Option<GenerationConfig>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_config: Option<ThinkingConfig>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingConfig {
+    pub thinking_budget: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

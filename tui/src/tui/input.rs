@@ -296,6 +296,8 @@ pub fn build_info_left<'a>(
     mode: crate::agent::permission::Mode,
     model: &str,
     provider: &str,
+    thinking_mode: crate::provider::ThinkingMode,
+    model_supports_thinking: bool,
     colors: &theme::Colors,
 ) -> (Color, Vec<Span<'a>>) {
     if quit_confirm {
@@ -324,31 +326,54 @@ pub fn build_info_left<'a>(
         crate::agent::permission::Mode::Chug => colors.warning,
     };
 
-    (
-        mode_color,
-        vec![
-            Span::styled(
-                mode.label().to_string(),
-                Style::default().fg(mode_color).bold(),
-            ),
-            Span::styled("  ".to_string(), Style::default().fg(colors.text_dim)),
-            Span::styled(model.to_string(), Style::default().fg(colors.text_dim)),
-            Span::styled(
-                " \u{00b7} ".to_string(),
-                Style::default().fg(colors.text_muted),
-            ),
-            Span::styled(provider.to_string(), Style::default().fg(colors.text_dim)),
-        ],
-    )
+    let mut spans = vec![
+        Span::styled(
+            mode.label().to_string(),
+            Style::default().fg(mode_color).bold(),
+        ),
+        Span::styled("  ".to_string(), Style::default().fg(colors.text_dim)),
+        Span::styled(model.to_string(), Style::default().fg(colors.text_dim)),
+        Span::styled(
+            " \u{00b7} ".to_string(),
+            Style::default().fg(colors.text_muted),
+        ),
+        Span::styled(provider.to_string(), Style::default().fg(colors.text_dim)),
+    ];
+
+    // Show thinking indicator when enabled
+    if model_supports_thinking && thinking_mode.is_on() {
+        spans.push(Span::styled(
+            " \u{00b7} ".to_string(),
+            Style::default().fg(colors.text_muted),
+        ));
+        spans.push(Span::styled(
+            "thinking".to_string(),
+            Style::default().fg(colors.info),
+        ));
+    }
+
+    (mode_color, spans)
 }
 
 /// Build the info-line right spans (keybind hints).
-pub fn build_info_right(colors: &theme::Colors) -> Vec<Span<'static>> {
-    vec![
+pub fn build_info_right(
+    model_supports_thinking: bool,
+    colors: &theme::Colors,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![
         Span::styled("tab ", Style::default().fg(colors.text_muted)),
         Span::styled("mode", Style::default().fg(colors.text_dim)),
-        Span::styled("  ", Style::default().fg(colors.text_muted)),
-        Span::styled("ctrl+k ", Style::default().fg(colors.text_muted)),
-        Span::styled("commands", Style::default().fg(colors.text_dim)),
-    ]
+    ];
+
+    if model_supports_thinking {
+        spans.push(Span::styled("  ", Style::default().fg(colors.text_muted)));
+        spans.push(Span::styled("ctrl+t ", Style::default().fg(colors.text_muted)));
+        spans.push(Span::styled("thinking", Style::default().fg(colors.text_dim)));
+    }
+
+    spans.push(Span::styled("  ", Style::default().fg(colors.text_muted)));
+    spans.push(Span::styled("ctrl+k ", Style::default().fg(colors.text_muted)));
+    spans.push(Span::styled("commands", Style::default().fg(colors.text_dim)));
+
+    spans
 }

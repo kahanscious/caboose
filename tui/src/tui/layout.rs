@@ -291,6 +291,8 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             app.roundhouse_session.as_ref(),
             &app.active_watchers,
             &app.sub_agents,
+            app.files_modified_collapsed,
+            &app.files_modified_header_row,
         );
         app.agents_dismiss_row.set(dismiss_row);
     }
@@ -397,6 +399,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                         !thinking_expanded,
                         colors,
                         app.tick,
+                        false, // finalized — static label
                     );
                     // Record logical line index of the arrow for post-render click zone computation
                     thinking_lines.push((start_idx + msg_lines.len(), i));
@@ -513,6 +516,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             collapsed,
             colors,
             app.tick,
+            true, // streaming — animated
         );
         lines.extend(thinking_rendered);
     }
@@ -1157,6 +1161,8 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         app.mode,
         &app.active_model_name,
         &app.active_provider_name,
+        app.thinking_mode,
+        app.model_supports_thinking,
         colors,
     );
 
@@ -1165,7 +1171,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         accent_color = colors.brand;
     }
 
-    let info_right = build_info_right(colors);
+    let info_right = build_info_right(app.model_supports_thinking, colors);
 
     render_input_field(
         frame,
