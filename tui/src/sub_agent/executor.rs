@@ -137,6 +137,10 @@ pub async fn run_subagent(
                     });
                     return Err(message.clone());
                 }
+                AgentEvent::ThinkingDelta(_) => {
+                    // Thinking deltas are accumulated in the agent loop but
+                    // not surfaced to sub-agent callers.
+                }
                 AgentEvent::CompactionComplete => {
                     // Resume stream after compaction if needed
                     if !agent.stashed_tool_defs.is_empty() {
