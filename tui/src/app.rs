@@ -1651,9 +1651,19 @@ impl App {
             let events = self.state.agent.poll();
             for event in &events {
                 match event {
+                    crate::agent::AgentEvent::ThinkingDelta(_) => {
+                        // Thinking accumulates in agent.streaming_thinking (in poll()).
+                        // Ensure the streaming thinking block is expanded by default.
+                        self.state.expanded_thinking.insert(usize::MAX);
+                    }
                     crate::agent::AgentEvent::TextDelta(_) => {
                         // Text accumulates in agent.streaming_text,
                         // which layout.rs reads during render
+
+                        // Auto-collapse thinking when text response begins
+                        if !self.state.agent.streaming_thinking.is_empty() {
+                            self.state.expanded_thinking.remove(&usize::MAX);
+                        }
                     }
                     crate::agent::AgentEvent::TurnComplete { .. } => {
                         // finalize_turn() already ran inside poll().
@@ -8144,9 +8154,14 @@ impl App {
             };
             let text = text.trim().to_string();
             if !text.is_empty() {
+                let thinking = if self.state.agent.streaming_thinking.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(&mut self.state.agent.streaming_thinking))
+                };
                 self.state.chat_messages.push(ChatMessage::Assistant {
                     content: text.clone(),
-                    thinking: None,
+                    thinking,
                 });
                 let t0 = Instant::now();
                 self.persist_message("assistant", &text);
