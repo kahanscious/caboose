@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Multi-repo workspaces** — `/workspace` registers sibling repos the agent can read from and write to. Supports proactive (auto-searched) and explicit (reference-only) modes, with read-only or read-write access per workspace. Workspace add flow guides through path, name, mode, and permissions. Agent is blocked from accessing paths outside the primary project unless explicitly registered as a workspace.
+- **Inline diff viewer** — pending write/edit/patch approvals show a collapsible diff preview. `d` key or click toggles expand/collapse, `j/k/arrows` scroll. Post-execution diffs also collapsible per-message.
+- **Autonomous subagent spawning** — model calls `spawn_agent` to parallelize independent tasks into isolated git worktrees. Non-blocking design with approval bubbling for non-Chug modes (y/n/a where "a" is always-approve). Auto-merge on success, conflict detection, worktree cleanup. Sidebar shows live agent status with blinking dots, elapsed time.
+- **Thinking blocks** — streaming thinking content from Anthropic models rendered as collapsible blocks in chat. Click or arrow to expand/collapse. Thinking persisted and restored across sessions.
+- **Sidebar resize** — drag the sidebar border to resize. Clamped between 20–80 columns.
+
+### Changed
+
+- Subagent dismiss is now a clickable "clear" button instead of `D` keyboard shortcut.
+- Subagent cost tracking uses actual model pricing from PricingRegistry instead of hardcoded rates.
+
+### Fixed
+
+- Escape cancel now fully cleans up state so the next prompt works correctly.
+- Subagent approval dialog now appears properly (layout allocates space for subagent approvals).
+- WaitingApproval agents show yellow dot instead of gray.
+- Stale git branches from failed agent runs no longer block new agent spawning.
 
 ---
 
