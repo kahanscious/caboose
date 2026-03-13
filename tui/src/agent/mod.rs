@@ -21,6 +21,8 @@ use permission::{PermissionMode, ToolDecision, check_permission};
 pub enum AgentEvent {
     /// Partial text from the model.
     TextDelta(String),
+    /// Partial thinking/reasoning from the model.
+    ThinkingDelta(String),
     /// Model requested a tool call.
     ToolCall {
         id: String,
@@ -78,6 +80,7 @@ pub struct AgentLoop {
     pub turn_count: u32,
     pub permission_mode: PermissionMode,
     pub streaming_text: String,
+    pub streaming_thinking: String,
     pub pending_tool_calls: Vec<PendingToolCall>,
     pub session_allows: HashSet<String>,
     pub allow_list: Vec<String>,
@@ -124,6 +127,7 @@ impl AgentLoop {
             turn_count: 0,
             permission_mode,
             streaming_text: String::new(),
+            streaming_thinking: String::new(),
             pending_tool_calls: Vec::new(),
             session_allows: HashSet::new(),
             allow_list: Vec::new(),
@@ -212,6 +216,7 @@ impl AgentLoop {
     /// Start a new provider stream task.
     pub(crate) fn start_stream(&mut self, provider: &dyn Provider, tool_defs: &[ToolDefinition]) {
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
         self.pending_tool_calls.clear();
         self.state = AgentState::Streaming;
         self.first_token_at = None;
@@ -241,9 +246,8 @@ impl AgentLoop {
                         name,
                         arguments,
                     },
-                    Ok(provider::StreamEvent::ThinkingDelta(_)) => {
-                        // Extended thinking — ignored for now
-                        continue;
+                    Ok(provider::StreamEvent::ThinkingDelta(text)) => {
+                        AgentEvent::ThinkingDelta(text)
                     }
                     Ok(provider::StreamEvent::Done {
                         input_tokens,
@@ -293,6 +297,9 @@ impl AgentLoop {
                         self.first_token_at = Some(Instant::now());
                     }
                     self.streaming_text.push_str(text);
+                }
+                AgentEvent::ThinkingDelta(text) => {
+                    self.streaming_thinking.push_str(text);
                 }
                 AgentEvent::ToolCall {
                     id,
@@ -772,6 +779,7 @@ impl AgentLoop {
     pub fn compact(&mut self, provider: &dyn Provider, must_keep: Option<&str>) {
         self.state = AgentState::Compacting;
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
 
         // Pass 0: prune old tool outputs (protects recent 40k tokens)
         let tool_pruned = compaction::prune_tool_outputs(&mut self.conversation);
@@ -872,6 +880,7 @@ impl AgentLoop {
     pub fn cancel(&mut self) {
         self.event_rx = None; // drops the receiver, stream task will stop
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
         self.pending_tool_calls.clear();
         self.state = AgentState::Idle;
     }
