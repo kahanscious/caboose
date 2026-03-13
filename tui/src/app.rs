@@ -3510,6 +3510,11 @@ impl App {
                         return;
                     }
 
+                    // Clear stale task outlines — agent will recreate if still relevant
+                    self.state
+                        .chat_messages
+                        .retain(|m| !matches!(m, ChatMessage::TaskOutline(_)));
+
                     self.persist_message("user", &message);
                     self.state.checkpoints.create(&message);
 
