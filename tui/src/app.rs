@@ -141,6 +141,11 @@ pub struct State {
     pub workspace_scan_last_query: String,
     /// Screen y → message index for clickable truncation indicators.
     pub truncation_click_zones: RefCell<Vec<(u16, usize)>>,
+    /// Click zones for thinking block arrows: (screen_row, message_index).
+    /// usize::MAX represents the currently-streaming thinking block.
+    /// Populated by the post-render wrapping pass (same pattern as truncation_click_zones).
+    #[allow(dead_code)]
+    pub thinking_click_zones: RefCell<Vec<(u16, usize)>>,
     /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
     pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
@@ -787,6 +792,7 @@ impl App {
                 workspace_scan_rx: None,
                 workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
+                thinking_click_zones: RefCell::new(Vec::new()),
                 tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
