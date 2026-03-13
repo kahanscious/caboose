@@ -88,6 +88,9 @@ pub struct State {
     pub history: crate::tui::input_history::InputHistory,
     /// Messages expanded past truncation threshold.
     pub expanded_messages: std::collections::HashSet<usize>,
+    /// Indices of assistant messages whose thinking blocks are expanded.
+    #[allow(dead_code)]
+    pub expanded_thinking: std::collections::HashSet<usize>,
     pub pricing: crate::provider::pricing::PricingRegistry,
     pub tool_renderers: crate::tui::tools::ToolRendererRegistry,
     /// Queue of user messages to send after current agent turn completes.
@@ -348,6 +351,8 @@ pub enum ChatMessage {
     },
     Assistant {
         content: String,
+        #[allow(dead_code)]
+        thinking: Option<String>,
     },
     Tool(ToolMessage),
     System {
@@ -754,6 +759,7 @@ impl App {
                 memory: memory_store,
                 history: crate::tui::input_history::InputHistory::load(),
                 expanded_messages: std::collections::HashSet::new(),
+                expanded_thinking: std::collections::HashSet::new(),
                 pricing: crate::provider::pricing::PricingRegistry::new(),
                 tool_renderers: crate::tui::tools::ToolRendererRegistry::new(),
                 message_queue: std::collections::VecDeque::new(),
@@ -892,6 +898,7 @@ impl App {
                 },
                 "assistant" => ChatMessage::Assistant {
                     content: msg.content.clone(),
+                    thinking: None,
                 },
                 "system" => ChatMessage::System {
                     content: msg.content.clone(),
@@ -1985,6 +1992,7 @@ impl App {
                                         plan_text,
                                         path.display()
                                     ),
+                                    thinking: None,
                                 });
                             }
                             Err(e) => {
@@ -1993,6 +2001,7 @@ impl App {
                                         "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
                                         plan_text, e
                                     ),
+                                    thinking: None,
                                 });
                             }
                         }
@@ -6053,7 +6062,7 @@ impl App {
         // Text-based task fallback for models without tool support
         if !self.state.model_supports_tools
             && let Some(text) = self.state.chat_messages.iter().rev().find_map(|m| {
-                if let ChatMessage::Assistant { content } = m {
+                if let ChatMessage::Assistant { content, .. } = m {
                     Some(content.clone())
                 } else {
                     None
@@ -8137,6 +8146,7 @@ impl App {
             if !text.is_empty() {
                 self.state.chat_messages.push(ChatMessage::Assistant {
                     content: text.clone(),
+                    thinking: None,
                 });
                 let t0 = Instant::now();
                 self.persist_message("assistant", &text);
@@ -8835,6 +8845,7 @@ impl App {
         // Persist the generated content as a collapsible Assistant message
         self.state.chat_messages.push(ChatMessage::Assistant {
             content: generated.trim().to_string(),
+            thinking: None,
         });
 
         match crate::init::handler::write_caboose_md(&write_root, generated.trim()) {

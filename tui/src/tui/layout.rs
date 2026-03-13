@@ -382,7 +382,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let accent = mode_accent(app.mode, colors);
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
-            ChatMessage::Assistant { content } => {
+            ChatMessage::Assistant { content, .. } => {
                 let expanded = app.expanded_messages.contains(&i);
                 let accent = mode_accent(app.mode, colors);
                 crate::tui::chat::render_assistant_message_truncated(
