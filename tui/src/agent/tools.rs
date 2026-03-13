@@ -112,7 +112,6 @@ pub async fn execute_tool(
             }
         }
         "web_search" => {
-            // Resolve provider and API key from services config, falling back to env
             let (provider, api_key_env) = services
                 .and_then(|s| s.services.get("web_search"))
                 .filter(|sc| sc.enabled)

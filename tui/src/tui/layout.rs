@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Paragraph, Wrap};
 
 use crate::agent::AgentState;
 use crate::agent::permission::Mode;
-use crate::app::{ChatMessage, State};
+use crate::app::{ChatMessage, State, ToolStatus};
 use crate::tui::dialog::{DialogKind, Screen};
 use crate::tui::theme;
 
@@ -15,6 +15,29 @@ fn mode_accent(mode: Mode, colors: &theme::Colors) -> Color {
         Mode::Plan => colors.info,
         Mode::Create => colors.brand,
         Mode::Chug => colors.warning,
+    }
+}
+
+/// Returns true if this tool message should render a diff toggle indicator (▶/▼).
+fn has_diff_toggle(tool: &crate::app::ToolMessage) -> bool {
+    match tool.status {
+        crate::app::ToolStatus::Pending => tool.diff_preview.is_some(),
+        crate::app::ToolStatus::Success => {
+            (tool.name == "edit_file"
+                && tool
+                    .args
+                    .get("old_string")
+                    .and_then(|v| v.as_str())
+                    .is_some()
+                && tool
+                    .args
+                    .get("new_string")
+                    .and_then(|v| v.as_str())
+                    .is_some())
+                || (tool.name == "apply_patch"
+                    && tool.args.get("diff").and_then(|v| v.as_str()).is_some())
+        }
+        _ => false,
     }
 }
 
@@ -65,8 +88,9 @@ fn apply_turn_margin(line: &mut Line, accent_style: Style) {
     }
 }
 
-const SIDEBAR_WIDTH: u16 = 35;
 const SIDEBAR_MIN_TERMINAL_WIDTH: u16 = 120;
+pub const SIDEBAR_MIN_WIDTH: u16 = 20;
+pub const SIDEBAR_MAX_WIDTH: u16 = 80;
 
 /// Render the full application layout.
 pub fn render(frame: &mut Frame, app: &State) {
@@ -116,6 +140,15 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::MigrationChecklist(checklist) => {
                 render_migration_checklist(frame, checklist, &colors);
             }
+            DialogKind::WorkspaceList(state) => {
+                crate::tui::workspace_list::render(frame, frame.area(), state);
+            }
+            DialogKind::WorkspaceAdd(state) => {
+                crate::tui::workspace_add::render(frame, frame.area(), state);
+            }
+            DialogKind::AgentStreamOverlay(overlay_state) => {
+                render_agent_stream_overlay(frame, frame.area(), overlay_state, app, &colors);
+            }
         }
     }
 }
@@ -162,7 +195,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
 
     // Horizontal split: [chat area | sidebar] (sidebar optional)
     let h_constraints = if show_sidebar {
-        vec![Constraint::Min(1), Constraint::Length(SIDEBAR_WIDTH)]
+        vec![Constraint::Min(1), Constraint::Length(app.sidebar_width)]
     } else {
         vec![Constraint::Min(1)]
     };
@@ -186,7 +219,9 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
     } else {
         app.message_queue.len() as u16 + 2
     };
-    let approval_height = if matches!(app.agent.state, AgentState::PendingApproval { .. }) {
+    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. })
+        || app.sub_agent_approval_showing.is_some();
+    let approval_height = if has_approval {
         crate::tui::approval::APPROVAL_BAR_HEIGHT
     } else {
         0u16
@@ -239,7 +274,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             }
         });
 
-        crate::tui::sidebar::render(
+        let dismiss_row = crate::tui::sidebar::render(
             frame,
             h_chunks[1],
             app.agent.last_input_tokens,
@@ -255,7 +290,11 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             app.tick,
             app.roundhouse_session.as_ref(),
             &app.active_watchers,
+            &app.sub_agents,
+            app.files_modified_collapsed,
+            &app.files_modified_header_row,
         );
+        app.agents_dismiss_row.set(dismiss_row);
     }
 
     // --- Footer ---
@@ -318,8 +357,21 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     let mut lines: Vec<Line> = Vec::new();
     // Track (logical_line_index, message_index) for truncation indicators
     let mut truncation_lines: Vec<(usize, usize)> = Vec::new();
+    // Track (logical_line_index, message_index) for diff toggle indicators
+    let mut tool_toggle_lines: Vec<(usize, usize)> = Vec::new();
+    // Track (logical_line_index, message_index) for thinking block toggle indicators
+    let mut thinking_lines: Vec<(usize, usize)> = Vec::new();
     // Track message boundaries for connector grouping: 0=other, 1=tool, 2=assistant
     let mut msg_boundaries: Vec<(usize, u8)> = Vec::new();
+
+    // Index of the last Pending tool message — receives live diff state.
+    let last_pending_idx = app.chat_messages.iter().rposition(|m| {
+        if let ChatMessage::Tool(t) = m {
+            t.status == ToolStatus::Pending
+        } else {
+            false
+        }
+    });
 
     for (i, msg) in app.chat_messages.iter().enumerate() {
         let start_idx = lines.len();
@@ -334,17 +386,50 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let accent = mode_accent(app.mode, colors);
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
-            ChatMessage::Assistant { content } => {
+            ChatMessage::Assistant {
+                content, thinking, ..
+            } => {
+                let mut msg_lines = Vec::new();
+
+                // Thinking block (if present) — rendered above the assistant header
+                if let Some(thinking_text) = thinking {
+                    let thinking_expanded = app.expanded_thinking.contains(&i);
+                    let thinking_rendered = crate::tui::chat::render_thinking_block(
+                        thinking_text,
+                        !thinking_expanded,
+                        colors,
+                        app.tick,
+                        false, // finalized — static label
+                    );
+                    // Record logical line index of the arrow for post-render click zone computation
+                    thinking_lines.push((start_idx + msg_lines.len(), i));
+                    msg_lines.extend(thinking_rendered);
+                }
+
+                // Standard assistant rendering (header + truncated text)
                 let expanded = app.expanded_messages.contains(&i);
                 let accent = mode_accent(app.mode, colors);
-                crate::tui::chat::render_assistant_message_truncated(
+                msg_lines.extend(crate::tui::chat::render_assistant_message_truncated(
                     content, colors, expanded, accent,
-                )
+                ));
+                msg_lines
             }
             ChatMessage::Tool(tool_msg) => {
                 let focused = app.focused_tool == Some(i);
-                app.tool_renderers
-                    .render(tool_msg, colors, focused, app.tick)
+                let (de, ds) =
+                    if tool_msg.status == ToolStatus::Pending && Some(i) == last_pending_idx {
+                        (app.diff_expanded, app.diff_scroll)
+                    } else {
+                        (tool_msg.diff_expanded, 0)
+                    };
+                let rendered = app
+                    .tool_renderers
+                    .render(tool_msg, colors, focused, app.tick, de, ds);
+                // Record the header row for mouse click hit-testing.
+                if has_diff_toggle(tool_msg) {
+                    tool_toggle_lines.push((lines.len(), i));
+                }
+                rendered
             }
             ChatMessage::System { content } => {
                 crate::tui::chat::render_system_message(content, colors)
@@ -413,29 +498,69 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         lines.extend(msg_lines);
     }
 
+    // Show streaming thinking block (when thinking arrives before text)
+    if matches!(app.agent.state, AgentState::Streaming) && !app.agent.streaming_thinking.is_empty()
+    {
+        // If text hasn't started yet, add assistant header so thinking has context
+        if app.agent.streaming_text.is_empty() {
+            msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
+            lines.push(Line::from(vec![
+                Span::styled("● ", Style::default().fg(colors.text_dim)),
+                Span::styled("Caboose", Style::default().fg(colors.text_secondary).bold()),
+            ]));
+        }
+        let collapsed = !app.expanded_thinking.contains(&usize::MAX);
+        thinking_lines.push((lines.len(), usize::MAX));
+        let thinking_rendered = crate::tui::chat::render_thinking_block(
+            &app.agent.streaming_thinking,
+            collapsed,
+            colors,
+            app.tick,
+            true, // streaming — animated
+        );
+        lines.extend(thinking_rendered);
+    }
+
     // Show streaming text if actively streaming
     if matches!(app.agent.state, AgentState::Streaming) && !app.agent.streaming_text.is_empty() {
-        msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
         let accent = mode_accent(app.mode, colors);
-        let streaming_lines =
-            crate::tui::chat::render_assistant_message(&app.agent.streaming_text, colors, accent);
-        // Remove the trailing blank line and add an animated spinner
-        if !streaming_lines.is_empty() {
-            let mut sl = streaming_lines;
-            // Remove trailing blank separator
-            if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                sl.pop();
+        if app.agent.streaming_thinking.is_empty() {
+            // No thinking — render full assistant message with header (existing behavior)
+            msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
+            let streaming_lines = crate::tui::chat::render_assistant_message(
+                &app.agent.streaming_text,
+                colors,
+                accent,
+            );
+            // Remove the trailing blank line and add an animated spinner
+            if !streaming_lines.is_empty() {
+                let mut sl = streaming_lines;
+                // Remove trailing blank separator
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
             }
-            lines.extend(sl);
-            // Animated spinner on last line (rotates every 5 ticks ~4 Hz)
-            const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
-            let spinner = SPINNER[(app.tick / 5) as usize % SPINNER.len()];
-            let accent = mode_accent(app.mode, colors);
-            lines.push(Line::from(Span::styled(
-                format!("{spinner} "),
-                Style::default().fg(accent),
-            )));
+        } else {
+            // Thinking already rendered header — just render text content without header
+            let parsed =
+                crate::tui::chat::parse_markdown(&app.agent.streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
         }
+        // Animated spinner on last line (rotates every 5 ticks ~4 Hz)
+        const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
+        let spinner = SPINNER[(app.tick / 5) as usize % SPINNER.len()];
+        let accent = mode_accent(app.mode, colors);
+        lines.push(Line::from(Span::styled(
+            format!("{spinner} "),
+            Style::default().fg(accent),
+        )));
     }
 
     // Show Roundhouse streaming text in main window (planning + synthesis)
@@ -609,13 +734,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
 
     // Show animated status indicators for non-idle states
     {
-        const THINKING_PHRASES: &[&str] = &[
-            "Thinking...",
-            "Working...",
-            "Caboosing...",
-            "Chugging along...",
-            "Choo chooing...",
-        ];
+        use crate::tui::chat::THINKING_PHRASES;
         // Rotate phrase every ~2.5 seconds (50 ticks at 20 FPS)
         const PHRASE_TICKS: u64 = 50;
         let phrase_idx = (app.tick / PHRASE_TICKS) as usize;
@@ -652,7 +771,10 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         ];
 
         match &app.agent.state {
-            AgentState::Streaming if app.agent.streaming_text.is_empty() => {
+            AgentState::Streaming
+                if app.agent.streaming_text.is_empty()
+                    && app.agent.streaming_thinking.is_empty() =>
+            {
                 let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -739,6 +861,56 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
         }
         *app.truncation_click_zones.borrow_mut() = zones;
+
+        // Compute screen y for each diff toggle indicator (same two-pass approach)
+        let mut toggle_zones: Vec<(u16, usize)> = Vec::new();
+        if !tool_toggle_lines.is_empty() {
+            let mut wr: u16 = 0;
+            let mut ti = tool_toggle_lines.iter().peekable();
+            for (logical_idx, line) in lines.iter().enumerate() {
+                if let Some(&&(toggle_logical, msg_idx)) = ti.peek()
+                    && toggle_logical == logical_idx
+                {
+                    let screen_y = area.y as i32 + wr as i32 - effective_offset as i32;
+                    if screen_y >= area.y as i32 && screen_y < (area.y + area.height) as i32 {
+                        toggle_zones.push((screen_y as u16, msg_idx));
+                    }
+                    ti.next();
+                    if ti.peek().is_none() {
+                        break;
+                    }
+                }
+                let w = line.width().max(1) as u16;
+                wr += w.div_ceil(area.width);
+            }
+        }
+        *app.tool_toggle_rects.borrow_mut() = toggle_zones;
+
+        // Compute screen y for each thinking block toggle indicator
+        {
+            let mut thinking_zones: Vec<(u16, usize)> = Vec::new();
+            if !thinking_lines.is_empty() {
+                let mut wr: u16 = 0;
+                let mut ti = thinking_lines.iter().peekable();
+                for (logical_idx, line) in lines.iter().enumerate() {
+                    if let Some(&&(think_logical, msg_idx)) = ti.peek()
+                        && think_logical == logical_idx
+                    {
+                        let screen_y = area.y as i32 + wr as i32 - effective_offset as i32;
+                        if screen_y >= area.y as i32 && screen_y < (area.y + area.height) as i32 {
+                            thinking_zones.push((screen_y as u16, msg_idx));
+                        }
+                        ti.next();
+                        if ti.peek().is_none() {
+                            break;
+                        }
+                    }
+                    let w = line.width().max(1) as u16;
+                    wr += w.div_ceil(area.width);
+                }
+            }
+            *app.thinking_click_zones.borrow_mut() = thinking_zones;
+        }
     }
 
     let max_scroll = total_lines.saturating_sub(area.height);
@@ -835,7 +1007,8 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         0
     };
 
-    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. });
+    let has_approval = matches!(app.agent.state, AgentState::PendingApproval { .. })
+        || app.sub_agent_approval_showing.is_some();
     let approval_height = if has_approval {
         crate::tui::approval::APPROVAL_BAR_HEIGHT
     } else {
@@ -920,7 +1093,33 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
     if let Some(a_area) = approval_area
         && let Some((name, args)) = app.agent.current_approval_prompt()
     {
-        crate::tui::approval::render(frame, a_area, name, args);
+        let has_diff = app
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let ChatMessage::Tool(t) = m
+                    && t.status == ToolStatus::Pending
+                {
+                    return Some(t.diff_preview.is_some());
+                }
+                None
+            })
+            .unwrap_or(false);
+        crate::tui::approval::render(frame, a_area, name, args, has_diff);
+    } else if let Some(a_area) = approval_area
+        && let Some((agent_id, ref tool_name, ref arguments)) = app.sub_agent_approval_showing
+    {
+        let task_label = app
+            .sub_agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .map(|a| a.task.as_str())
+            .unwrap_or("subagent");
+        let header = format!("agent '{task_label}' requests: {tool_name}");
+        let args_val = serde_json::from_str::<serde_json::Value>(arguments)
+            .unwrap_or(serde_json::Value::String(arguments.clone()));
+        crate::tui::approval::render(frame, a_area, &header, &args_val, false);
     }
 
     // Render attachment chips
@@ -962,6 +1161,8 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         app.mode,
         &app.active_model_name,
         &app.active_provider_name,
+        app.thinking_mode,
+        app.model_supports_thinking,
         colors,
     );
 
@@ -970,7 +1171,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         accent_color = colors.brand;
     }
 
-    let info_right = build_info_right(colors);
+    let info_right = build_info_right(app.model_supports_thinking, colors);
 
     render_input_field(
         frame,
@@ -1499,5 +1700,144 @@ fn render_migration_checklist(
         MigrationPhase::Applying => {
             // Brief spinner-like state (instant for now)
         }
+    }
+}
+
+fn render_agent_stream_overlay(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    overlay_state: &crate::tui::dialog::AgentStreamOverlayState,
+    state: &State,
+    colors: &theme::Colors,
+) {
+    use ratatui::style::Modifier;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Paragraph};
+
+    // Semi-transparent backdrop
+    let backdrop = Block::default().style(Style::default().bg(ratatui::style::Color::Rgb(0, 0, 0)));
+    frame.render_widget(backdrop, area);
+
+    // Window: centered, 88% width
+    let win_width = (area.width as f32 * 0.88) as u16;
+    let win_height = area.height.saturating_sub(4);
+    let x = (area.width.saturating_sub(win_width)) / 2;
+    let y = (area.height.saturating_sub(win_height)) / 2;
+    let win_area = ratatui::layout::Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: win_width,
+        height: win_height,
+    };
+
+    let Some(idx) = state.agent_stream_overlay else {
+        return;
+    };
+    let Some(agent) = state.sub_agents.get(idx) else {
+        return;
+    };
+    let agent_count = state.sub_agents.len();
+
+    // Title
+    let (dot, _) = crate::tui::sidebar::agent_status_display(&agent.state);
+    let elapsed = crate::sub_agent::format_elapsed(agent.elapsed_secs());
+    let title = format!(" {dot} {}   {} · {}", agent.task, elapsed, agent.branch);
+    let nav_hint = if agent_count > 1 {
+        "  \u{2191}\u{2193} scroll  tab next  esc close "
+    } else {
+        "  \u{2191}\u{2193} scroll  esc close "
+    };
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(colors.border))
+        .title(Span::styled(title, Style::default().fg(colors.text)))
+        .title_bottom(Span::styled(nav_hint, Style::default().fg(colors.text_dim)));
+    frame.render_widget(block.clone(), win_area);
+    let inner = block.inner(win_area);
+
+    // Body area and footer area
+    let body_height = inner.height.saturating_sub(1);
+    let body_area = ratatui::layout::Rect {
+        height: body_height,
+        ..inner
+    };
+    let footer_area = ratatui::layout::Rect {
+        y: inner.y + inner.height.saturating_sub(1),
+        height: 1,
+        ..inner
+    };
+
+    // Stream lines
+    let stream_lines: Vec<Line> = agent
+        .stream
+        .iter()
+        .map(|line| {
+            let (style, prefix) = match line.kind {
+                crate::sub_agent::StreamLineKind::Thinking => (
+                    Style::default()
+                        .fg(colors.text_dim)
+                        .add_modifier(Modifier::ITALIC),
+                    "",
+                ),
+                crate::sub_agent::StreamLineKind::ToolCall => {
+                    (Style::default().fg(colors.info), "")
+                }
+                crate::sub_agent::StreamLineKind::ToolResult => {
+                    (Style::default().fg(colors.success), "\u{2192} ")
+                }
+                crate::sub_agent::StreamLineKind::Text => (Style::default().fg(colors.text), ""),
+                crate::sub_agent::StreamLineKind::Error => (Style::default().fg(colors.error), ""),
+            };
+            Line::from(Span::styled(format!("{prefix}{}", line.text), style))
+        })
+        .collect();
+
+    let scroll = if overlay_state.follow {
+        stream_lines.len().saturating_sub(body_height as usize) as u16
+    } else {
+        overlay_state.scroll_offset as u16
+    };
+
+    let body = Paragraph::new(stream_lines).scroll((scroll, 0));
+    frame.render_widget(body, body_area);
+
+    // Footer
+    let footer_text = format!(
+        " worktree: {}    ${:.3}",
+        agent.worktree_path.display(),
+        agent.cost_usd
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            footer_text,
+            Style::default().fg(colors.text_dim),
+        )),
+        footer_area,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_min_less_than_max() {
+        assert!(SIDEBAR_MIN_WIDTH < SIDEBAR_MAX_WIDTH);
+    }
+
+    #[test]
+    fn sidebar_min_width_reasonable() {
+        assert!(SIDEBAR_MIN_WIDTH >= 15, "sidebar must fit at least a short label");
+    }
+
+    #[test]
+    fn sidebar_max_width_bounded() {
+        assert!(SIDEBAR_MAX_WIDTH <= 120, "sidebar should not exceed half a wide terminal");
+    }
+
+    #[test]
+    fn sidebar_min_terminal_width_covers_sidebar() {
+        assert!(SIDEBAR_MIN_TERMINAL_WIDTH > SIDEBAR_MAX_WIDTH);
     }
 }

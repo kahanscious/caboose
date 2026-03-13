@@ -200,7 +200,7 @@ impl ToolRegistry {
                 ),
                 tool_def(
                     "todo_write",
-                    "Create or update the task outline displayed to the user. Use for multi-step tasks to show progress. Each call replaces the entire task list.",
+                    "Create or update the task outline displayed to the user. Use for multi-step tasks to show progress. Each call replaces the entire task list. When the user changes topic or says they want to do something else, do NOT call this tool — the old tasks are automatically cleared. Only create new tasks when you have a concrete plan for the user's current request.",
                     serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -267,6 +267,20 @@ impl ToolRegistry {
                             }
                         },
                         "required": ["questions"]
+                    }),
+                ),
+                tool_def(
+                    "spawn_agent",
+                    "Spawn an autonomous sub-agent that works in an isolated git worktree. Use this when you identify tasks that can be done in parallel without conflicting file edits. Each sub-agent gets its own branch and worktree, runs independently, and its changes are merged back when complete. The sub-agent inherits the current permission mode. Do NOT spawn agents for tasks that depend on each other's output — those must be sequential.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "A clear, self-contained description of the work to do. Include enough context for the agent to work independently (file paths, function names, expected behavior)."
+                            }
+                        },
+                        "required": ["task"]
                     }),
                 ),
             ],
@@ -698,6 +712,25 @@ mod tests {
             .expect("exec_db not found");
         let props = db.input_schema.get("properties").unwrap();
         assert!(props.get("sql").is_some());
+    }
+
+    #[test]
+    fn registry_includes_spawn_agent() {
+        let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
+        let defs = registry.definitions();
+        let spawn = defs
+            .iter()
+            .find(|d| d.name == "spawn_agent")
+            .expect("spawn_agent not found");
+        let props = spawn.input_schema.get("properties").unwrap();
+        assert!(props.get("task").is_some());
+        let required = spawn
+            .input_schema
+            .get("required")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(required.iter().any(|v| v.as_str() == Some("task")));
     }
 
     #[test]

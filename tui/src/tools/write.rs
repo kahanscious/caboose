@@ -44,6 +44,45 @@ pub fn line_diff(old: &str, new: &str) -> (usize, usize) {
     (added, removed)
 }
 
+/// Produce diff lines for preview: removed lines prefixed "- ", added lines prefixed "+ ".
+/// Returns empty vec if old == new. Does NOT include context lines.
+/// Skips common prefix/suffix lines (same logic as line_diff).
+pub fn compute_diff_lines(old: &str, new: &str) -> Vec<String> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    // Find common prefix
+    let prefix_len = old_lines
+        .iter()
+        .zip(new_lines.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    // Find common suffix
+    let old_rem = old_lines.len() - prefix_len;
+    let new_rem = new_lines.len() - prefix_len;
+    let suffix_len = old_lines[prefix_len..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix_len..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(old_rem)
+        .min(new_rem);
+
+    let old_changed = &old_lines[prefix_len..old_lines.len() - suffix_len];
+    let new_changed = &new_lines[prefix_len..new_lines.len() - suffix_len];
+
+    let mut result = Vec::new();
+    for line in old_changed {
+        result.push(format!("- {line}"));
+    }
+    for line in new_changed {
+        result.push(format!("+ {line}"));
+    }
+    result
+}
+
 /// Write content to a file (create or overwrite).
 pub async fn execute_write(input: &Value) -> Result<ToolResult> {
     let path = resolve_path(input).ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
@@ -291,5 +330,26 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(result.lines_added, 2);
         assert_eq!(result.lines_removed, 1);
+    }
+
+    #[test]
+    fn compute_diff_lines_basic_change() {
+        let lines = compute_diff_lines("line1\nline2\nline3", "line1\nchanged\nline3");
+        assert!(lines.iter().any(|l| l.starts_with("- line2")));
+        assert!(lines.iter().any(|l| l.starts_with("+ changed")));
+    }
+
+    #[test]
+    fn compute_diff_lines_new_file() {
+        let lines = compute_diff_lines("", "hello\nworld");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("+ hello"));
+        assert!(lines[1].starts_with("+ world"));
+    }
+
+    #[test]
+    fn compute_diff_lines_identical_returns_empty() {
+        let lines = compute_diff_lines("a\nb", "a\nb");
+        assert!(lines.is_empty());
     }
 }

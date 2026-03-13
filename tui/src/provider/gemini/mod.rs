@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 
 use self::sse::SseAccumulator;
 use self::types::*;
-use super::{Message, ModelInfo, Provider, StreamEvent, ToolDefinition};
+use super::{Message, ModelInfo, Provider, StreamEvent, ThinkingMode, ToolDefinition};
 
 const DEFAULT_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -21,6 +21,7 @@ pub struct GeminiProvider {
     model: String,
     base_url: String,
     client: reqwest::Client,
+    thinking_mode: std::sync::atomic::AtomicU8,
 }
 
 impl GeminiProvider {
@@ -30,6 +31,7 @@ impl GeminiProvider {
             model,
             base_url: DEFAULT_API_URL.to_string(),
             client: reqwest::Client::new(),
+            thinking_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -97,10 +99,24 @@ impl GeminiProvider {
             }])
         };
 
+        let mode = ThinkingMode::from_u8(
+            self.thinking_mode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let generation_config = match mode {
+            ThinkingMode::Off => None,
+            ThinkingMode::On => Some(GenerationConfig {
+                thinking_config: Some(ThinkingConfig {
+                    thinking_budget: 10_000,
+                }),
+            }),
+        };
+
         GenerateContentRequest {
             contents,
             system_instruction,
             tools: gemini_tools,
+            generation_config,
         }
     }
 
@@ -282,6 +298,11 @@ impl Provider for GeminiProvider {
         &self.model
     }
 
+    fn set_thinking_mode(&self, mode: ThinkingMode) {
+        self.thinking_mode
+            .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn list_models(&self) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + '_>> {
         Box::pin(async {
             let url = format!("{}/models?key={}", self.base_url, self.api_key);
@@ -297,12 +318,14 @@ impl Provider for GeminiProvider {
                         .strip_prefix("models/")
                         .unwrap_or(&m.name)
                         .to_string();
+                    let thinking = id.starts_with("gemini-2.5");
                     ModelInfo {
                         name: m.display_name.unwrap_or_else(|| id.clone()),
                         id,
                         context_window: m.input_token_limit,
                         supports_tools: true,
                         supports_vision: true,
+                        supports_thinking: thinking,
                     }
                 })
                 .collect();

@@ -9,14 +9,20 @@ use crate::tui::theme;
 pub const APPROVAL_BAR_HEIGHT: u16 = 4;
 
 /// Render the inline approval bar into the given area.
-pub fn render(frame: &mut ratatui::Frame, area: Rect, tool_name: &str, args: &serde_json::Value) {
+pub fn render(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    tool_name: &str,
+    args: &serde_json::Value,
+    has_diff: bool,
+) {
     let colors = theme::Colors::default();
 
     let summary = format_tool_summary(tool_name, args, area.width.saturating_sub(4) as usize);
 
     let content = vec![
         Line::from(Span::styled(summary, Style::default().fg(colors.text))),
-        build_action_hints(&colors),
+        build_action_hints(&colors, has_diff),
     ];
 
     let block = Block::default()
@@ -32,13 +38,13 @@ pub fn render(frame: &mut ratatui::Frame, area: Rect, tool_name: &str, args: &se
 }
 
 /// Build the `[y]es  [n]o  [a]lways` hints line with highlighted key letters.
-fn build_action_hints(colors: &theme::Colors) -> Line<'static> {
+fn build_action_hints(colors: &theme::Colors, has_diff: bool) -> Line<'static> {
     let key_style = Style::default()
         .fg(colors.warning)
         .add_modifier(Modifier::BOLD);
     let dim_style = Style::default().fg(colors.text_dim);
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled("[", dim_style),
         Span::styled("y", key_style),
         Span::styled("]es  ", dim_style),
@@ -48,7 +54,15 @@ fn build_action_hints(colors: &theme::Colors) -> Line<'static> {
         Span::styled("[", dim_style),
         Span::styled("a", key_style),
         Span::styled("]lways", dim_style),
-    ])
+    ];
+
+    if has_diff {
+        spans.push(Span::styled("  [", dim_style));
+        spans.push(Span::styled("d", key_style));
+        spans.push(Span::styled("] diff", dim_style));
+    }
+
+    Line::from(spans)
 }
 
 /// Public summary for use in rejection messages (no width limit).

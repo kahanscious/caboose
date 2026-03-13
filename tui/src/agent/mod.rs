@@ -21,6 +21,8 @@ use permission::{PermissionMode, ToolDecision, check_permission};
 pub enum AgentEvent {
     /// Partial text from the model.
     TextDelta(String),
+    /// Partial thinking/reasoning from the model.
+    ThinkingDelta(String),
     /// Model requested a tool call.
     ToolCall {
         id: String,
@@ -78,6 +80,7 @@ pub struct AgentLoop {
     pub turn_count: u32,
     pub permission_mode: PermissionMode,
     pub streaming_text: String,
+    pub streaming_thinking: String,
     pub pending_tool_calls: Vec<PendingToolCall>,
     pub session_allows: HashSet<String>,
     pub allow_list: Vec<String>,
@@ -107,6 +110,10 @@ pub struct AgentLoop {
     pub(crate) stashed_tool_defs: Vec<ToolDefinition>,
     /// Recently read file paths (most recent first, max 10).
     pub recent_files: VecDeque<PathBuf>,
+    /// Absolute path of the primary repo root — used for cross-workspace write detection.
+    pub primary_root: std::path::PathBuf,
+    /// Paths of registered secondary workspaces — used for read path restriction.
+    pub workspace_paths: Vec<String>,
     event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
 }
 
@@ -120,6 +127,7 @@ impl AgentLoop {
             turn_count: 0,
             permission_mode,
             streaming_text: String::new(),
+            streaming_thinking: String::new(),
             pending_tool_calls: Vec::new(),
             session_allows: HashSet::new(),
             allow_list: Vec::new(),
@@ -137,6 +145,9 @@ impl AgentLoop {
             resume_after_compaction: false,
             stashed_tool_defs: Vec::new(),
             recent_files: VecDeque::new(),
+            primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
+                .unwrap_or_default(),
+            workspace_paths: Vec::new(),
             event_rx: None,
         }
     }
@@ -205,6 +216,7 @@ impl AgentLoop {
     /// Start a new provider stream task.
     pub(crate) fn start_stream(&mut self, provider: &dyn Provider, tool_defs: &[ToolDefinition]) {
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
         self.pending_tool_calls.clear();
         self.state = AgentState::Streaming;
         self.first_token_at = None;
@@ -234,9 +246,8 @@ impl AgentLoop {
                         name,
                         arguments,
                     },
-                    Ok(provider::StreamEvent::ThinkingDelta(_)) => {
-                        // Extended thinking — ignored for now
-                        continue;
+                    Ok(provider::StreamEvent::ThinkingDelta(text)) => {
+                        AgentEvent::ThinkingDelta(text)
                     }
                     Ok(provider::StreamEvent::Done {
                         input_tokens,
@@ -286,6 +297,9 @@ impl AgentLoop {
                         self.first_token_at = Some(Instant::now());
                     }
                     self.streaming_text.push_str(text);
+                }
+                AgentEvent::ThinkingDelta(text) => {
+                    self.streaming_thinking.push_str(text);
                 }
                 AgentEvent::ToolCall {
                     id,
@@ -399,6 +413,7 @@ impl AgentLoop {
     fn check_tool_permissions(&mut self) {
         let mut needs_approval = false;
 
+        let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
         for tc in &self.pending_tool_calls {
             let decision = check_permission(
                 &self.permission_mode,
@@ -408,6 +423,8 @@ impl AgentLoop {
                 &self.deny_list,
                 &self.session_allows,
                 None, // CLI tool overrides resolved later in execute_pending_tools
+                Some(&self.primary_root),
+                &ws_paths,
             );
             if matches!(decision, ToolDecision::RequireApproval) {
                 needs_approval = true;
@@ -489,6 +506,7 @@ impl AgentLoop {
                 None
             };
 
+            let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
             let mut decision = check_permission(
                 &self.permission_mode,
                 &tc.name,
@@ -497,6 +515,8 @@ impl AgentLoop {
                 &self.deny_list,
                 &self.session_allows,
                 tool_permission,
+                Some(&self.primary_root),
+                &ws_paths,
             );
 
             // Fire PermissionRequest hooks (only if tool would normally need approval)
@@ -679,6 +699,7 @@ impl AgentLoop {
                 return true;
             }
             // Check if remaining tools all auto-approve
+            let ws_paths: Vec<&str> = self.workspace_paths.iter().map(|s| s.as_str()).collect();
             let remaining_all_auto = tool_calls[*current_index..].iter().all(|tc| {
                 let d = check_permission(
                     &self.permission_mode,
@@ -688,6 +709,8 @@ impl AgentLoop {
                     &self.deny_list,
                     &self.session_allows,
                     None,
+                    Some(&self.primary_root),
+                    &ws_paths,
                 );
                 matches!(d, ToolDecision::AutoExecute)
             });
@@ -756,6 +779,7 @@ impl AgentLoop {
     pub fn compact(&mut self, provider: &dyn Provider, must_keep: Option<&str>) {
         self.state = AgentState::Compacting;
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
 
         // Pass 0: prune old tool outputs (protects recent 40k tokens)
         let tool_pruned = compaction::prune_tool_outputs(&mut self.conversation);
@@ -856,6 +880,7 @@ impl AgentLoop {
     pub fn cancel(&mut self) {
         self.event_rx = None; // drops the receiver, stream task will stop
         self.streaming_text.clear();
+        self.streaming_thinking.clear();
         self.pending_tool_calls.clear();
         self.state = AgentState::Idle;
     }

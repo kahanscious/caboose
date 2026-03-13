@@ -494,5 +494,26 @@ pub fn build_default_registry() -> CommandRegistry {
         execute: |_state| Action::Quit,
     });
 
+    registry.register(Command {
+        id: "workspace.list",
+        name: "Workspaces",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("workspace"),
+        available: |_| true,
+        execute: |_state| Action::None, // Handled in app.rs handle_workspace_command
+    });
+
     registry
+}
+
+#[cfg(test)]
+mod workspace_command_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_command_registered() {
+        let registry = build_default_registry();
+        assert!(registry.find_slash("workspace").is_some());
+    }
 }

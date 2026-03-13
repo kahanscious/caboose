@@ -22,6 +22,7 @@ mod safety;
 mod scm;
 mod session;
 mod skills;
+mod sub_agent;
 mod terminal;
 mod tools;
 mod tui;

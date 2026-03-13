@@ -12,7 +12,7 @@ use tracing::debug;
 
 use self::sse::SseAccumulator;
 use self::types::*;
-use super::{Message, ModelInfo, Provider, StreamEvent, ToolDefinition};
+use super::{Message, ModelInfo, Provider, StreamEvent, ThinkingMode, ToolDefinition};
 
 const DEFAULT_API_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -22,6 +22,7 @@ pub struct OpenRouterProvider {
     model: String,
     base_url: String,
     client: reqwest::Client,
+    thinking_mode: std::sync::atomic::AtomicU8,
 }
 
 impl OpenRouterProvider {
@@ -31,6 +32,7 @@ impl OpenRouterProvider {
             model,
             base_url: DEFAULT_API_URL.to_string(),
             client: reqwest::Client::new(),
+            thinking_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -73,6 +75,13 @@ impl OpenRouterProvider {
                     .supported_parameters
                     .as_ref()
                     .map(|params| params.iter().any(|p| p == "images"))
+                    .unwrap_or(false),
+                supports_thinking: m
+                    .supported_parameters
+                    .as_ref()
+                    .map(|params| {
+                        params.iter().any(|p| p == "reasoning" || p == "reasoning_content")
+                    })
                     .unwrap_or(false),
             });
             if let Some(p) = m.pricing {
@@ -121,6 +130,15 @@ impl OpenRouterProvider {
             )
         };
 
+        let mode = ThinkingMode::from_u8(
+            self.thinking_mode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let reasoning_effort = match mode {
+            ThinkingMode::Off => None,
+            ThinkingMode::On => Some("high".to_string()),
+        };
+
         ChatRequest {
             model: self.model.clone(),
             messages: chat_messages,
@@ -130,6 +148,7 @@ impl OpenRouterProvider {
             }),
             tools: chat_tools,
             max_tokens: Some(DEFAULT_MAX_TOKENS),
+            reasoning_effort,
         }
     }
 }
@@ -402,11 +421,23 @@ impl Provider for OpenRouterProvider {
                         .as_ref()
                         .map(|params| params.iter().any(|p| p == "images"))
                         .unwrap_or(false),
+                    supports_thinking: m
+                        .supported_parameters
+                        .as_ref()
+                        .map(|params| {
+                            params.iter().any(|p| p == "reasoning" || p == "reasoning_content")
+                        })
+                        .unwrap_or(false),
                     id: m.id,
                     context_window: m.context_length,
                 })
                 .collect();
             Ok(models)
         })
+    }
+
+    fn set_thinking_mode(&self, mode: ThinkingMode) {
+        self.thinking_mode
+            .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
     }
 }

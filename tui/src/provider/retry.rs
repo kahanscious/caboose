@@ -177,6 +177,10 @@ impl Provider for RetryProvider {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ModelInfo>>> + Send + '_>> {
         self.inner.list_models()
     }
+
+    fn set_thinking_mode(&self, mode: crate::provider::ThinkingMode) {
+        self.inner.set_thinking_mode(mode);
+    }
 }
 
 #[cfg(test)]

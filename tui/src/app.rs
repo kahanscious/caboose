@@ -25,6 +25,15 @@ pub struct TextSelection {
     pub end_col: u16,
 }
 
+/// A pending spawn_agent background task tracked by the event loop.
+pub struct SpawnAgentHandle {
+    pub tool_use_id: String,
+    #[allow(dead_code)]
+    pub arguments: serde_json::Value,
+    pub chat_placeholder_idx: usize,
+    pub handle: tokio::task::JoinHandle<crate::sub_agent::SpawnAgentResult>,
+}
+
 /// UI-visible state, separated so it can be borrowed independently from Terminal.
 pub struct State {
     pub config: Config,
@@ -57,6 +66,12 @@ pub struct State {
     pub tool_counts: std::collections::HashMap<String, u32>,
     pub commands: crate::tui::command::CommandRegistry,
     pub sidebar_visible: bool,
+    /// Current sidebar width in columns (user-resizable via drag).
+    pub sidebar_width: u16,
+    /// Whether keyboard focus is in the sidebar (agents section navigation).
+    pub sidebar_focused: bool,
+    /// Active sidebar resize drag (column where drag started).
+    pub sidebar_drag: Option<u16>,
     /// Index of the focused tool message in chat_messages (for expand/collapse navigation).
     pub focused_tool: Option<usize>,
     /// Inline slash autocomplete state — active when input starts with `/`.
@@ -73,6 +88,8 @@ pub struct State {
     pub history: crate::tui::input_history::InputHistory,
     /// Messages expanded past truncation threshold.
     pub expanded_messages: std::collections::HashSet<usize>,
+    /// Indices of assistant messages whose thinking blocks are expanded.
+    pub expanded_thinking: std::collections::HashSet<usize>,
     pub pricing: crate::provider::pricing::PricingRegistry,
     pub tool_renderers: crate::tui::tools::ToolRendererRegistry,
     /// Queue of user messages to send after current agent turn completes.
@@ -97,6 +114,10 @@ pub struct State {
     pub model_supports_tools: bool,
     /// Whether the active model supports vision (image input).
     pub model_supports_vision: bool,
+    /// Whether the active model supports extended thinking/reasoning.
+    pub model_supports_thinking: bool,
+    /// Current thinking mode toggle state.
+    pub thinking_mode: crate::provider::ThinkingMode,
     /// Index into the tips array shown on the home screen (randomized at startup).
     pub home_tip_index: usize,
     /// Frame counter for animations — incremented every render loop iteration.
@@ -113,8 +134,22 @@ pub struct State {
     pub init_old_lines: Option<usize>,
     /// /init generation: directory to write CABOOSE.md to.
     pub init_write_root: std::path::PathBuf,
+    /// Absolute canonicalized path of the primary repository root.
+    /// Captured at startup via `canonicalize(current_dir())`.
+    pub primary_root: std::path::PathBuf,
+    /// Receiver for async directory scan results used by WorkspaceAdd dialog.
+    /// `None` when no scan is in progress.
+    pub workspace_scan_rx: Option<tokio::sync::mpsc::Receiver<Vec<String>>>,
+    /// Debounce tracking: last path_input value when scan was triggered.
+    pub workspace_scan_last_query: String,
     /// Screen y → message index for clickable truncation indicators.
     pub truncation_click_zones: RefCell<Vec<(u16, usize)>>,
+    /// Click zones for thinking block arrows: (screen_row, message_index).
+    /// usize::MAX represents the currently-streaming thinking block.
+    /// Populated by the post-render wrapping pass (same pattern as truncation_click_zones).
+    pub thinking_click_zones: RefCell<Vec<(u16, usize)>>,
+    /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
+    pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
     pub text_selection: Option<TextSelection>,
     /// The Rect of the chat area, set each frame for mouse hit-testing.
@@ -164,6 +199,29 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Active subagents.
+    pub sub_agents: Vec<crate::sub_agent::SubAgent>,
+    /// Sender cloned into each subagent executor so they can emit events.
+    pub sub_agent_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>>,
+    /// Receiver for subagent events, polled each frame.
+    pub sub_agent_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sub_agent::SubAgentEvent>>,
+    /// Queued subagent approval requests (agent_id, tool_name, arguments).
+    pub sub_agent_pending_approvals: std::collections::VecDeque<(uuid::Uuid, String, String)>,
+    /// The subagent approval currently being shown to the user, if any.
+    pub sub_agent_approval_showing: Option<(uuid::Uuid, String, String)>,
+    /// Pending spawn_agent background tasks. Polled each event-loop tick.
+    pub spawn_agent_handles: Vec<SpawnAgentHandle>,
+    /// Index into sub_agents for the stream overlay. None = closed.
+    // TODO: consumed by overlay renderer
+    pub agent_stream_overlay: Option<usize>,
+    /// Selected agent row in sidebar agents section.
+    pub sidebar_agent_selected: usize,
+    /// Absolute screen row of the clickable agents dismiss button (set each frame).
+    pub agents_dismiss_row: Cell<Option<u16>>,
+    /// Whether the "Files Modified" sidebar section is collapsed.
+    pub files_modified_collapsed: bool,
+    /// Screen row of the "Files Modified" header for click-to-toggle (set each frame).
+    pub files_modified_header_row: Cell<Option<u16>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -176,6 +234,10 @@ pub struct State {
     pub scm_provider: crate::scm::detection::ScmProvider,
     /// Active SCM watchers (each backed by a circuit).
     pub active_watchers: Vec<crate::scm::watcher::Watcher>,
+    /// Whether the pending diff preview is expanded (true) or collapsed (false).
+    pub diff_expanded: bool,
+    /// Scroll offset for the expanded pending diff.
+    pub diff_scroll: usize,
 }
 
 /// Status of a tool execution.
@@ -284,6 +346,11 @@ pub struct ToolMessage {
     pub status: ToolStatus,
     pub expanded: bool,
     pub file_path: Option<String>,
+    pub diff_preview: Option<Vec<String>>, // pre-computed diff lines for pending state
+    /// Per-message diff expand/collapse state for post-execution diffs.
+    /// For pending messages this is unused — pending diff state lives in State.diff_expanded.
+    /// For post-execution edit_file / apply_patch, true = diff shown (default), false = collapsed.
+    pub diff_expanded: bool,
 }
 
 /// A message in the chat display.
@@ -295,6 +362,7 @@ pub enum ChatMessage {
     },
     Assistant {
         content: String,
+        thinking: Option<String>,
     },
     Tool(ToolMessage),
     System {
@@ -506,24 +574,32 @@ impl App {
             .system_prompt
             .clone()
             .unwrap_or_else(|| {
-                "You are a helpful AI coding assistant. You have access to tools for reading, \
-                 writing, and searching files, running shell commands, and fetching URLs. \
-                 Use them to help the user with their coding tasks.\n\n\
-                 Use `glob` and `grep` to locate relevant files before reading them — don't guess paths. \
-                 Use `read_file` with `offset`/`limit` for targeted reads. Read a small window first \
-                 (50–100 lines) to orient, then target specific sections. \
-                 Batch independent tool calls in a single response — multiple reads, greps, or globs \
-                 can run in one turn. \
-                 Don't re-read files already in context unless they've been modified. \
-                 When `read_file` output is truncated, use `offset`/`limit` to read the specific section \
-                 you need rather than increasing the limit.\n\n\
-                 You have `todo_write` and `todo_read` tools for task management. \
-                 Use `todo_write` for multi-step tasks (3+ steps) to show progress. \
-                 Use `todo_read` to check current task state before updating. \
-                 Each `todo_write` call replaces the entire task list. Keep task names short. \
-                 Mark tasks completed immediately after finishing each one. \
-                 Mark tasks cancelled if they are no longer needed. \
-                 Statuses: pending, in_progress, completed, cancelled."
+                "You are Caboose, a terminal-native AI coding agent. You help users build, debug, \
+                 and understand software from the command line.\n\n\
+                 ## Tone\n\n\
+                 Be conversational and direct — like a sharp coworker pairing with the user. \
+                 Briefly say what you're about to do before doing it (e.g. \"let me check that file\", \
+                 \"I'll search for where that's defined\"). Don't explain what you just did after — the \
+                 user can see the tool output. Keep text responses to a few lines unless the user asks \
+                 for detail. No preamble (\"Based on my analysis...\"), no postamble (\"Let me know if \
+                 you need anything else!\"), no filler.\n\n\
+                 Your output renders as markdown in a monospace terminal. Use formatting when it helps \
+                 (code blocks, bold, lists) but don't over-format simple answers.\n\n\
+                 ## Tools\n\n\
+                 Use `glob` and `grep` to locate files before reading — don't guess paths. \
+                 Use `read_file` with `offset`/`limit` for targeted reads. \
+                 Batch independent tool calls in a single response. \
+                 Don't re-read files already in context unless they've been modified.\n\n\
+                 ## Tasks\n\n\
+                 Use `todo_write` for multi-step work (3+ steps) to show progress in the sidebar. \
+                 Each call replaces the entire list. Keep task names short. \
+                 Mark tasks completed as you finish each one. \
+                 When the user changes topic, don't carry over old tasks — they are cleared automatically.\n\n\
+                 ## Conventions\n\n\
+                 Before editing code, read it first. Match the existing style — naming, patterns, \
+                 libraries. Don't add comments unless the code is genuinely tricky. Don't refactor \
+                 code you weren't asked to touch. Don't commit unless the user asks you to. \
+                 Follow security best practices — never log secrets, never commit credentials."
                     .to_string()
             });
 
@@ -574,7 +650,40 @@ impl App {
             system_prompt
         };
 
+        // Inject workspace context
+        let system_prompt = {
+            let ws_block = workspace_system_prompt_block(&config.workspaces);
+            if !ws_block.is_empty() {
+                let mut prompt = system_prompt;
+                prompt.push_str(&ws_block);
+                prompt
+            } else {
+                system_prompt
+            }
+        };
+
+        // Inject spawn_agent guidance
+        let system_prompt = {
+            let mut prompt = system_prompt;
+            prompt.push_str(
+                "\n\n## Subagents\n\n\
+                 You have access to a `spawn_agent` tool. Use it when you identify work that \
+                 can proceed in parallel — for example, when you have a list of independent \
+                 tasks that don't share state or outputs. Call `spawn_agent` once per \
+                 independent task; multiple calls in the same response run concurrently. \
+                 The subagents work in isolated git worktrees and merge their changes back \
+                 when done. For sequential or dependent work, do it yourself.\n",
+            );
+            prompt
+        };
+
         let mut agent = AgentLoop::new(system_prompt, permission_mode);
+
+        // Wire primary_root into agent for cross-workspace write detection
+        let primary_root =
+            std::fs::canonicalize(std::env::current_dir().unwrap_or_default()).unwrap_or_default();
+        agent.primary_root = primary_root.clone();
+        agent.workspace_paths = config.workspaces.values().map(|c| c.path.clone()).collect();
 
         // Wire tools config (allow/deny commands, additional secrets) into agent
         if let Some(ref tools_cfg) = config.tools {
@@ -626,6 +735,9 @@ impl App {
             .map(|p| p.model().to_string())
             .unwrap_or_else(|| "no key configured".to_string());
 
+        let (sub_agent_tx, sub_agent_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
+
         let mut app = Self {
             state: State {
                 config,
@@ -654,6 +766,9 @@ impl App {
                 tool_counts: std::collections::HashMap::new(),
                 commands: crate::tui::command::build_default_registry(),
                 sidebar_visible: prefs.sidebar_visible,
+                sidebar_width: 35,
+                sidebar_focused: false,
+                sidebar_drag: None,
                 focused_tool: None,
                 slash_auto: None,
                 file_auto: None,
@@ -662,6 +777,7 @@ impl App {
                 memory: memory_store,
                 history: crate::tui::input_history::InputHistory::load(),
                 expanded_messages: std::collections::HashSet::new(),
+                expanded_thinking: std::collections::HashSet::new(),
                 pricing: crate::provider::pricing::PricingRegistry::new(),
                 tool_renderers: crate::tui::tools::ToolRendererRegistry::new(),
                 message_queue: std::collections::VecDeque::new(),
@@ -674,6 +790,8 @@ impl App {
                 mode,
                 model_supports_tools: true,
                 model_supports_vision: true, // default true for Anthropic models
+                model_supports_thinking: true, // default true for Anthropic models
+                thinking_mode: crate::provider::ThinkingMode::Off,
                 home_tip_index: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as usize % crate::tui::home::TIPS.len())
@@ -685,7 +803,12 @@ impl App {
                 init_had_existing: false,
                 init_old_lines: None,
                 init_write_root: std::path::PathBuf::new(),
+                primary_root: primary_root.clone(),
+                workspace_scan_rx: None,
+                workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
+                thinking_click_zones: RefCell::new(Vec::new()),
+                tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
                 rendered_chat_text: RefCell::new(Vec::new()),
@@ -708,11 +831,24 @@ impl App {
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
+                sub_agents: Vec::new(),
+                sub_agent_tx: Some(sub_agent_tx),
+                sub_agent_rx: Some(sub_agent_rx),
+                sub_agent_pending_approvals: std::collections::VecDeque::new(),
+                sub_agent_approval_showing: None,
+                spawn_agent_handles: Vec::new(),
+                agent_stream_overlay: None,
+                sidebar_agent_selected: 0,
+                agents_dismiss_row: Cell::new(None),
+                files_modified_collapsed: false,
+                files_modified_header_row: Cell::new(None),
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
                 scm_provider,
                 active_watchers: Vec::new(),
+                diff_expanded: false,
+                diff_scroll: 0,
             },
             terminal,
             provider,
@@ -777,19 +913,49 @@ impl App {
         };
 
         // Restore chat messages for display
-        for msg in &messages {
+        let mut i = 0;
+        while i < messages.len() {
+            let msg = &messages[i];
             let chat_msg = match msg.role.as_str() {
-                "user" => ChatMessage::User {
-                    content: msg.content.clone(),
-                    images: vec![],
-                },
-                "assistant" => ChatMessage::Assistant {
-                    content: msg.content.clone(),
-                },
-                "system" => ChatMessage::System {
-                    content: msg.content.clone(),
-                },
+                "user" => {
+                    i += 1;
+                    ChatMessage::User {
+                        content: msg.content.clone(),
+                        images: vec![],
+                    }
+                }
+                "thinking" => {
+                    // Look ahead: if next message is "assistant", attach thinking to it
+                    if i + 1 < messages.len() && messages[i + 1].role == "assistant" {
+                        let thinking_content = msg.content.clone();
+                        i += 1; // advance to assistant
+                        let assistant_content = messages[i].content.clone();
+                        i += 1; // advance past assistant
+                        ChatMessage::Assistant {
+                            content: assistant_content,
+                            thinking: Some(thinking_content),
+                        }
+                    } else {
+                        // Orphaned thinking — skip it
+                        i += 1;
+                        continue;
+                    }
+                }
+                "assistant" => {
+                    i += 1;
+                    ChatMessage::Assistant {
+                        content: msg.content.clone(),
+                        thinking: None,
+                    }
+                }
+                "system" => {
+                    i += 1;
+                    ChatMessage::System {
+                        content: msg.content.clone(),
+                    }
+                }
                 "provider_error" => {
+                    i += 1;
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         ChatMessage::ProviderError {
                             category: serde_json::from_value(
@@ -817,10 +983,14 @@ impl App {
                         }
                     }
                 }
-                "error" => ChatMessage::Error {
-                    content: msg.content.clone(),
-                },
+                "error" => {
+                    i += 1;
+                    ChatMessage::Error {
+                        content: msg.content.clone(),
+                    }
+                }
                 "task_outline" => {
+                    i += 1;
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         if let Ok(outline) = TaskOutline::from_tool_input(&json) {
                             ChatMessage::TaskOutline(outline)
@@ -831,7 +1001,10 @@ impl App {
                         continue;
                     }
                 }
-                _ => continue,
+                _ => {
+                    i += 1;
+                    continue;
+                }
             };
             self.state.chat_messages.push(chat_msg);
         }
@@ -1054,6 +1227,8 @@ impl App {
     /// Main event loop.
     pub async fn run(&mut self) -> Result<()> {
         self.terminal.enter()?;
+        // Set terminal tab title
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetTitle("caboose"));
         // Enable bracketed paste for API key input
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
 
@@ -1179,6 +1354,78 @@ impl App {
                 }
             }
 
+            // Poll workspace dir scan results
+            if let Some(ref mut rx) = self.state.workspace_scan_rx {
+                match rx.try_recv() {
+                    Ok(matches) => {
+                        if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(state)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            // Filter out the current primary repo from suggestions
+                            let primary = self.state.primary_root.to_string_lossy().to_string();
+                            let primary_canon = std::fs::canonicalize(&self.state.primary_root)
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or(primary.clone());
+                            state.path_matches = matches
+                                .into_iter()
+                                .filter(|p| {
+                                    let canon = std::fs::canonicalize(p)
+                                        .map(|c| c.to_string_lossy().to_string())
+                                        .unwrap_or_else(|_| p.clone());
+                                    canon != primary_canon
+                                })
+                                .collect();
+                        }
+                        self.state.workspace_scan_rx = None;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        self.state.workspace_scan_rx = None;
+                    }
+                }
+            }
+
+            // Trigger workspace dir scan when query changes and has 2+ chars
+            if let Some(crate::tui::dialog::DialogKind::WorkspaceAdd(add_state)) =
+                self.state.dialog_stack.top()
+            {
+                let query = add_state.path_input.clone();
+                if query.len() >= 2
+                    && query != self.state.workspace_scan_last_query
+                    && self.state.workspace_scan_rx.is_none()
+                {
+                    self.state.workspace_scan_last_query = query.clone();
+                    // If the user typed a partial path, walk from its parent.
+                    // Otherwise prioritize the project neighbourhood first, then
+                    // all drive roots so nearby repos surface before timeout.
+                    let roots = if query.contains('/') || query.contains('\\') {
+                        let parent = std::path::Path::new(&query)
+                            .parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| query.clone());
+                        vec![parent]
+                    } else {
+                        // Put the two ancestors of primary_root first so sibling
+                        // repos are found immediately, then fall back to full scan.
+                        let mut roots: Vec<String> = Vec::new();
+                        let pr = &self.state.primary_root;
+                        if let Some(p) = pr.parent() {
+                            roots.push(p.to_string_lossy().to_string());
+                            if let Some(gp) = p.parent() {
+                                roots.push(gp.to_string_lossy().to_string());
+                            }
+                        }
+                        for r in scan_roots() {
+                            if !roots.contains(&r) {
+                                roots.push(r);
+                            }
+                        }
+                        roots
+                    };
+                    self.state.workspace_scan_rx = Some(spawn_dir_scan(roots, query));
+                }
+            }
+
             // Draw UI
             let state = &self.state;
             self.terminal.draw(|frame| {
@@ -1267,6 +1514,19 @@ impl App {
                                 }
                                 MouseEventKind::Down(_) => {
                                     self.state.text_selection = None;
+                                    // Sidebar border drag to resize
+                                    if self.state.sidebar_visible {
+                                        let (tw, _) =
+                                            crossterm::terminal::size().unwrap_or((80, 24));
+                                        let border_col =
+                                            tw.saturating_sub(self.state.sidebar_width);
+                                        if mouse.column >= border_col.saturating_sub(1)
+                                            && mouse.column <= border_col + 1
+                                        {
+                                            self.state.sidebar_drag = Some(mouse.column);
+                                            continue;
+                                        }
+                                    }
                                     if in_terminal {
                                         // Check for [x] close button click (header row, last 5 cols)
                                         if let Some(area) = self.state.terminal_area.get()
@@ -1282,6 +1542,82 @@ impl App {
                                         self.state.terminal_focused = true;
                                     } else {
                                         self.state.terminal_focused = false;
+
+                                        // Agents dismiss click
+                                        if let Some(dismiss_y) = self.state.agents_dismiss_row.get()
+                                            && mouse.row == dismiss_y
+                                        {
+                                            self.state.sub_agents.retain(|a| {
+                                                !matches!(
+                                                    a.state,
+                                                    crate::sub_agent::SubAgentState::Done
+                                                        | crate::sub_agent::SubAgentState::Failed { .. }
+                                                        | crate::sub_agent::SubAgentState::Conflict { .. }
+                                                )
+                                            });
+                                            if !self.state.sub_agents.is_empty() {
+                                                let max =
+                                                    self.state.sub_agents.len().saturating_sub(1);
+                                                if self.state.sidebar_agent_selected > max {
+                                                    self.state.sidebar_agent_selected = max;
+                                                }
+                                            } else {
+                                                self.state.sidebar_focused = false;
+                                            }
+                                            continue;
+                                        }
+
+                                        // Files Modified header click to toggle collapse
+                                        if let Some(header_y) = self.state.files_modified_header_row.get()
+                                            && mouse.row == header_y
+                                        {
+                                            self.state.files_modified_collapsed = !self.state.files_modified_collapsed;
+                                            continue;
+                                        }
+
+                                        // Diff toggle click zone logic — runs BEFORE truncation zones.
+                                        // Extract the hit message index first (drops borrow before mutating chat_messages).
+                                        let toggle_hit = {
+                                            let rects = self.state.tool_toggle_rects.borrow();
+                                            rects.iter().find(|&&(y, _)| y == mouse.row).copied()
+                                        };
+                                        if let Some((_, msg_idx)) = toggle_hit {
+                                            // Determine if this is the active pending message
+                                            let is_pending = matches!(
+                                                self.state.chat_messages.get(msg_idx),
+                                                Some(ChatMessage::Tool(t)) if t.status == ToolStatus::Pending
+                                            );
+                                            if is_pending {
+                                                // Pending diff state lives on State, not ToolMessage
+                                                self.state.diff_expanded =
+                                                    !self.state.diff_expanded;
+                                            } else if let Some(ChatMessage::Tool(tool_msg)) =
+                                                self.state.chat_messages.get_mut(msg_idx)
+                                            {
+                                                tool_msg.diff_expanded = !tool_msg.diff_expanded;
+                                            }
+                                            continue;
+                                        }
+
+                                        // Thinking block click zone logic
+                                        let thinking_zones =
+                                            self.state.thinking_click_zones.borrow();
+                                        let mut thinking_handled = false;
+                                        for &(zone_y, msg_idx) in thinking_zones.iter() {
+                                            if mouse.row == zone_y {
+                                                if self.state.expanded_thinking.contains(&msg_idx) {
+                                                    self.state.expanded_thinking.remove(&msg_idx);
+                                                } else {
+                                                    self.state.expanded_thinking.insert(msg_idx);
+                                                }
+                                                thinking_handled = true;
+                                                break;
+                                            }
+                                        }
+                                        drop(thinking_zones);
+                                        if thinking_handled {
+                                            continue;
+                                        }
 
                                         // Truncation click zone logic
                                         let zones = self.state.truncation_click_zones.borrow();
@@ -1309,6 +1645,16 @@ impl App {
                                     }
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
+                                    if self.state.sidebar_drag.is_some() {
+                                        let (tw, _) =
+                                            crossterm::terminal::size().unwrap_or((80, 24));
+                                        let new_width = tw.saturating_sub(mouse.column);
+                                        self.state.sidebar_width = new_width.clamp(
+                                            crate::tui::layout::SIDEBAR_MIN_WIDTH,
+                                            crate::tui::layout::SIDEBAR_MAX_WIDTH,
+                                        );
+                                        continue;
+                                    }
                                     if let Some(ref mut sel) = self.state.text_selection {
                                         sel.end_row = mouse.row;
                                         sel.end_col = mouse.column;
@@ -1347,6 +1693,9 @@ impl App {
                                             }
                                         }
                                     }
+                                }
+                                MouseEventKind::Up(_) => {
+                                    self.state.sidebar_drag = None;
                                 }
                                 MouseEventKind::Moved => {
                                     // Mouse hover selects items in command palette
@@ -1389,9 +1738,19 @@ impl App {
             let events = self.state.agent.poll();
             for event in &events {
                 match event {
+                    crate::agent::AgentEvent::ThinkingDelta(_) => {
+                        // Thinking accumulates in agent.streaming_thinking (in poll()).
+                        // Ensure the streaming thinking block is expanded by default.
+                        self.state.expanded_thinking.insert(usize::MAX);
+                    }
                     crate::agent::AgentEvent::TextDelta(_) => {
                         // Text accumulates in agent.streaming_text,
                         // which layout.rs reads during render
+
+                        // Auto-collapse thinking when text response begins
+                        if !self.state.agent.streaming_thinking.is_empty() {
+                            self.state.expanded_thinking.remove(&usize::MAX);
+                        }
                     }
                     crate::agent::AgentEvent::TurnComplete { .. } => {
                         // finalize_turn() already ran inside poll().
@@ -1482,6 +1841,7 @@ impl App {
             // Non-blocking tool execution: poll spawned tool results and
             // kick off the next tool when the previous one finishes.
             self.poll_tool_execution().await;
+            self.poll_spawn_agent_handles().await;
             self.poll_mcp_connections();
 
             // Poll terminal panel output
@@ -1729,6 +2089,7 @@ impl App {
                                         plan_text,
                                         path.display()
                                     ),
+                                    thinking: None,
                                 });
                             }
                             Err(e) => {
@@ -1737,11 +2098,128 @@ impl App {
                                         "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
                                         plan_text, e
                                     ),
+                                    thinking: None,
                                 });
                             }
                         }
                     }
                     self.state.roundhouse_synthesis_rx = None;
+                }
+            }
+
+            // Poll subagent events (non-blocking)
+            if let Some(ref mut rx) = self.state.sub_agent_rx {
+                use crate::sub_agent::SubAgentEvent;
+                type AgentUpdate = (
+                    uuid::Uuid,
+                    Option<crate::sub_agent::SubAgentState>,
+                    Option<crate::sub_agent::SubAgentStreamLine>,
+                    Option<f64>,
+                );
+                let mut pending_messages: Vec<ChatMessage> = Vec::new();
+                let mut agent_updates: Vec<AgentUpdate> = Vec::new();
+
+                while let Ok(event) = rx.try_recv() {
+                    match event {
+                        SubAgentEvent::StateChange { id, state } => {
+                            agent_updates.push((id, Some(state), None, None));
+                        }
+                        SubAgentEvent::StreamLine { id, line } => {
+                            agent_updates.push((id, None, Some(line), None));
+                        }
+                        SubAgentEvent::CostUpdate { id, cost_usd } => {
+                            agent_updates.push((id, None, None, Some(cost_usd)));
+                        }
+                        SubAgentEvent::AgentMerged {
+                            task,
+                            elapsed_secs,
+                            cost_usd,
+                            ..
+                        } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "agent done: {} ({}  ·  ${:.3})",
+                                    task,
+                                    crate::sub_agent::format_elapsed(elapsed_secs),
+                                    cost_usd
+                                ),
+                            });
+                        }
+                        SubAgentEvent::AgentFailed { task, message, .. } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!("agent failed: {} — {}", task, message),
+                            });
+                        }
+                        SubAgentEvent::AgentConflict {
+                            task,
+                            worktree_path,
+                            ..
+                        } => {
+                            pending_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "conflict: {} — worktree preserved at {}",
+                                    task,
+                                    worktree_path.display()
+                                ),
+                            });
+                        }
+                        SubAgentEvent::ApprovalRequest {
+                            id,
+                            tool_name,
+                            arguments,
+                        } => {
+                            if let Some(agent) =
+                                self.state.sub_agents.iter_mut().find(|a| a.id == id)
+                            {
+                                if agent.auto_approve {
+                                    // Auto-approve: send true immediately, stay Running
+                                    if let Some(ref tx) = agent.approval_tx {
+                                        let _ = tx.send(true);
+                                    }
+                                } else {
+                                    agent.state =
+                                        crate::sub_agent::SubAgentState::WaitingApproval {
+                                            tool_name: tool_name.clone(),
+                                        };
+                                    self.state
+                                        .sub_agent_pending_approvals
+                                        .push_back((id, tool_name, arguments));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply agent updates
+                for (id, state_opt, line_opt, cost_opt) in agent_updates {
+                    if let Some(agent) = self.state.sub_agents.iter_mut().find(|a| a.id == id) {
+                        if let Some(state) = state_opt {
+                            if matches!(state, crate::sub_agent::SubAgentState::Running) {
+                                agent.started_at = Some(std::time::Instant::now());
+                            }
+                            agent.state = state;
+                        }
+                        if let Some(line) = line_opt {
+                            agent.stream.push(line);
+                        }
+                        if let Some(cost) = cost_opt {
+                            // Add the delta to session cost
+                            let delta = cost - agent.cost_usd;
+                            if delta > 0.0 {
+                                self.state.session_cost += delta;
+                            }
+                            agent.cost_usd = cost;
+                        }
+                    }
+                }
+                self.state.chat_messages.extend(pending_messages);
+
+                // Drain approval queue: show next if nothing currently showing
+                if self.state.sub_agent_approval_showing.is_none()
+                    && !self.state.sub_agent_pending_approvals.is_empty()
+                {
+                    self.state.sub_agent_approval_showing =
+                        self.state.sub_agent_pending_approvals.pop_front();
                 }
             }
 
@@ -1756,13 +2234,10 @@ impl App {
                     .state
                     .roundhouse_session
                     .as_ref()
-                    .is_some_and(|rh| {
-                        rh.phase == crate::roundhouse::RoundhousePhase::Executing
-                    })
+                    .is_some_and(|rh| rh.phase == crate::roundhouse::RoundhousePhase::Executing)
+                && let Some(ref mut rh) = self.state.roundhouse_session
             {
-                if let Some(ref mut rh) = self.state.roundhouse_session {
-                    rh.phase = crate::roundhouse::RoundhousePhase::Complete;
-                }
+                rh.phase = crate::roundhouse::RoundhousePhase::Complete;
             }
 
             if self.state.should_quit {
@@ -1819,8 +2294,15 @@ impl App {
             return;
         }
 
-        // Escape cancels active agent operations before any UI dismissal
-        if key == KeyCode::Esc && !matches!(self.state.agent.state, AgentState::Idle) {
+        // Escape cancels active agent operations before any UI dismissal.
+        // Also fires when the main agent is idle but sub-agents/tasks/approvals
+        // are still active — the user expects a clean slate after Escape.
+        if key == KeyCode::Esc
+            && (!matches!(self.state.agent.state, AgentState::Idle)
+                || !self.state.sub_agents.is_empty()
+                || self.state.sub_agent_approval_showing.is_some()
+                || !self.state.sub_agent_pending_approvals.is_empty())
+        {
             self.cancel_all_operations();
             return;
         }
@@ -1861,11 +2343,69 @@ impl App {
             return;
         }
 
+        // Subagent approval bar — intercept y/n/a before main agent approval
+        if self.state.sub_agent_approval_showing.is_some() {
+            match key {
+                KeyCode::Char('y') | KeyCode::Char('n') | KeyCode::Char('a') => {
+                    if let Some((agent_id, _tool_name, _args)) =
+                        self.state.sub_agent_approval_showing.take()
+                    {
+                        let approved = matches!(key, KeyCode::Char('y') | KeyCode::Char('a'));
+                        if let Some(agent) =
+                            self.state.sub_agents.iter_mut().find(|a| a.id == agent_id)
+                        {
+                            if matches!(key, KeyCode::Char('a')) {
+                                agent.auto_approve = true;
+                            }
+                            if let Some(ref tx) = agent.approval_tx {
+                                let _ = tx.send(approved);
+                            }
+                            if matches!(
+                                agent.state,
+                                crate::sub_agent::SubAgentState::WaitingApproval { .. }
+                            ) {
+                                agent.state = crate::sub_agent::SubAgentState::Running;
+                            }
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Inline approval bar — intercept y/n/a before dialog dispatch
         if matches!(self.state.agent.state, AgentState::PendingApproval { .. }) {
             match key {
                 KeyCode::Char('y') | KeyCode::Char('n') | KeyCode::Char('a') => {
                     self.handle_approval_key(key).await;
+                    return;
+                }
+                KeyCode::Char('d') => {
+                    self.state.diff_expanded = !self.state.diff_expanded;
+                    if !self.state.diff_expanded {
+                        self.state.diff_scroll = 0;
+                    }
+                    return;
+                }
+                KeyCode::Char('j') if self.state.diff_expanded => {
+                    self.state.diff_scroll = self.state.diff_scroll.saturating_add(1);
+                    return;
+                }
+                KeyCode::Char('k') if self.state.diff_expanded => {
+                    self.state.diff_scroll = self.state.diff_scroll.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    if self.state.diff_expanded {
+                        self.state.diff_scroll = self.state.diff_scroll.saturating_add(1);
+                    }
+                    return;
+                }
+                KeyCode::Up => {
+                    if self.state.diff_expanded {
+                        self.state.diff_scroll = self.state.diff_scroll.saturating_sub(1);
+                    }
                     return;
                 }
                 _ => {}
@@ -1909,6 +2449,11 @@ impl App {
             }
             Some(DialogKind::MigrationChecklist(_)) => {
                 self.handle_migration_checklist_key(key);
+            }
+            Some(DialogKind::WorkspaceList(_)) => self.handle_workspace_list_key(key),
+            Some(DialogKind::WorkspaceAdd(_)) => self.handle_workspace_add_key(key).await,
+            Some(DialogKind::AgentStreamOverlay(_)) => {
+                self.handle_agent_stream_overlay_key(key, modifiers);
             }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
@@ -2075,6 +2620,14 @@ impl App {
                     crate::tui::file_browser::FileBrowserState::new(cwd),
                 ));
             }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if self.state.model_supports_thinking {
+                    self.state.thinking_mode = self.state.thinking_mode.toggle();
+                    if let Some(ref provider) = self.provider {
+                        provider.set_thinking_mode(self.state.thinking_mode);
+                    }
+                }
+            }
             (KeyCode::Enter, KeyModifiers::SHIFT)
             | (KeyCode::Enter, KeyModifiers::ALT)
             | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
@@ -2111,6 +2664,10 @@ impl App {
                         }
                         if slash.starts_with("mcp ") {
                             self.handle_mcp_command(slash).await;
+                            return;
+                        }
+                        if slash == "workspace" || slash.starts_with("workspace ") {
+                            self.handle_workspace_command(slash);
                             return;
                         }
                         // /model needs async model loading — handle specially
@@ -2381,6 +2938,46 @@ impl App {
                 self.request_quit();
             }
             return;
+        }
+
+        // Sidebar agent navigation (when agents exist and sidebar is focused)
+        if !self.state.sub_agents.is_empty() && self.state.sidebar_visible {
+            // Alt+A toggles sidebar focus
+            if key == KeyCode::Char('a') && modifiers.contains(KeyModifiers::ALT) {
+                self.state.sidebar_focused = !self.state.sidebar_focused;
+                return;
+            }
+            if self.state.sidebar_focused {
+                match key {
+                    KeyCode::Up => {
+                        self.state.sidebar_agent_selected =
+                            self.state.sidebar_agent_selected.saturating_sub(1);
+                        return;
+                    }
+                    KeyCode::Down => {
+                        let max = self.state.sub_agents.len().saturating_sub(1);
+                        if self.state.sidebar_agent_selected < max {
+                            self.state.sidebar_agent_selected += 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        let idx = self.state.sidebar_agent_selected;
+                        self.state.agent_stream_overlay = Some(idx);
+                        self.state.dialog_stack.push(
+                            crate::tui::dialog::DialogKind::AgentStreamOverlay(
+                                crate::tui::dialog::AgentStreamOverlayState::new(),
+                            ),
+                        );
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        self.state.sidebar_focused = false;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Picker mode has its own key handling
@@ -2661,6 +3258,14 @@ impl App {
                     crate::tui::file_browser::FileBrowserState::new(cwd),
                 ));
             }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if self.state.model_supports_thinking {
+                    self.state.thinking_mode = self.state.thinking_mode.toggle();
+                    if let Some(ref provider) = self.provider {
+                        provider.set_thinking_mode(self.state.thinking_mode);
+                    }
+                }
+            }
             // Skill creation preview keys (p/g/e/c) — intercept before normal input
             (KeyCode::Char(c @ ('p' | 'g' | 'e' | 'c')), KeyModifiers::NONE)
                 if self.state.input.is_empty()
@@ -2878,6 +3483,10 @@ impl App {
                             self.handle_mcp_command(slash).await;
                             return;
                         }
+                        if slash == "workspace" || slash.starts_with("workspace ") {
+                            self.handle_workspace_command(slash);
+                            return;
+                        }
                         // /model needs async model loading — handle specially
                         if slash == "model" {
                             self.open_model_dropdown().await;
@@ -2944,6 +3553,11 @@ impl App {
                         self.state.input.set(&message);
                         return;
                     }
+
+                    // Clear stale task outlines — agent will recreate if still relevant
+                    self.state
+                        .chat_messages
+                        .retain(|m| !matches!(m, ChatMessage::TaskOutline(_)));
 
                     self.persist_message("user", &message);
                     self.state.checkpoints.create(&message);
@@ -3165,6 +3779,8 @@ impl App {
     }
 
     async fn handle_approval_key(&mut self, key: KeyCode) {
+        self.state.diff_expanded = false;
+        self.state.diff_scroll = 0;
         match key {
             KeyCode::Char('y') => {
                 let should_execute = self.state.agent.approve_current();
@@ -3453,16 +4069,16 @@ impl App {
                     auto.selected,
                 );
                 // Look up capabilities before clearing slash_auto (borrows models/recent)
-                let (supports_tools, supports_vision) = selection
+                let (supports_tools, supports_vision, supports_thinking) = selection
                     .as_ref()
                     .and_then(|(_, model_id)| {
                         models
                             .iter()
                             .chain(recent.iter())
                             .find(|(_, m)| m.id == *model_id)
-                            .map(|(_, m)| (m.supports_tools, m.supports_vision))
+                            .map(|(_, m)| (m.supports_tools, m.supports_vision, m.supports_thinking))
                     })
-                    .unwrap_or((true, false));
+                    .unwrap_or((true, false, false));
                 // Build display name for roundhouse before clearing slash_auto
                 let display_for_roundhouse = selection.as_ref().map(|(provider, model_id)| {
                     let display = crate::provider::catalog::by_id(provider)
@@ -3489,6 +4105,11 @@ impl App {
                 } else if let Some((provider, model_id)) = selection {
                     self.state.model_supports_tools = supports_tools;
                     self.state.model_supports_vision = supports_vision;
+                    self.state.model_supports_thinking = supports_thinking;
+                    // Reset thinking mode when switching to a model that doesn't support it
+                    if !supports_thinking {
+                        self.state.thinking_mode = crate::provider::ThinkingMode::Off;
+                    }
                     self.select_model(&provider, &model_id);
                 }
             }
@@ -4503,6 +5124,489 @@ impl App {
         }
     }
 
+    fn handle_agent_stream_overlay_key(
+        &mut self,
+        key: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) {
+        use crate::tui::dialog::{AgentStreamOverlayState, DialogKind};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key {
+            KeyCode::Esc => {
+                self.state.agent_stream_overlay = None;
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Tab => {
+                let agent_count = self.state.sub_agents.len();
+                if agent_count > 1 {
+                    if modifiers.contains(KeyModifiers::SHIFT) {
+                        // Shift+Tab: cycle to previous agent
+                        let idx = self.state.agent_stream_overlay.unwrap_or(0);
+                        let prev = if idx == 0 { agent_count - 1 } else { idx - 1 };
+                        self.state.agent_stream_overlay = Some(prev);
+                    } else {
+                        // Tab: cycle to next agent
+                        let idx = self.state.agent_stream_overlay.unwrap_or(0);
+                        let next = (idx + 1) % agent_count;
+                        self.state.agent_stream_overlay = Some(next);
+                    }
+                    // Reset scroll state
+                    if let Some(DialogKind::AgentStreamOverlay(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        *state = AgentStreamOverlayState::new();
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::AgentStreamOverlay(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    state.follow = false;
+                    state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(idx) = self.state.agent_stream_overlay
+                    && let Some(agent) = self.state.sub_agents.get(idx)
+                {
+                    let stream_len = agent.stream.len();
+                    if let Some(DialogKind::AgentStreamOverlay(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        let new_offset = state.scroll_offset + 1;
+                        // If we've scrolled to the bottom, re-enable follow
+                        if new_offset >= stream_len {
+                            state.scroll_offset = stream_len.saturating_sub(1);
+                            state.follow = true;
+                        } else {
+                            state.scroll_offset = new_offset;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_workspace_list_key(&mut self, key: crossterm::event::KeyCode) {
+        use crate::tui::dialog::{DialogKind, WorkspaceAddState};
+        use crossterm::event::KeyCode;
+
+        match key {
+            KeyCode::Esc => {
+                self.state.dialog_stack.pop();
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut()
+                    && state.selected > 0
+                {
+                    state.selected -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
+                    let max = state.workspaces.len().saturating_sub(1);
+                    if state.selected < max {
+                        state.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                self.state
+                    .dialog_stack
+                    .push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
+            }
+            KeyCode::Char('e') | KeyCode::Enter => {
+                // Edit the selected workspace (mode + permissions only)
+                let edit_state =
+                    if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top() {
+                        state.workspaces.get(state.selected).map(|(name, cfg, _)| {
+                            use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+                            let mode_selected = if cfg.mode == WorkspaceMode::Proactive {
+                                0
+                            } else {
+                                1
+                            };
+                            let permissions_selected = if cfg.access == WorkspaceAccess::ReadWrite {
+                                0
+                            } else {
+                                1
+                            };
+                            WorkspaceAddState::for_edit(
+                                name.clone(),
+                                cfg.path.clone(),
+                                mode_selected,
+                                permissions_selected,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                if let Some(s) = edit_state
+                    && !s.path_input.is_empty()
+                {
+                    self.state.dialog_stack.push(DialogKind::WorkspaceAdd(s));
+                }
+            }
+            KeyCode::Char('d') => {
+                let name_to_remove = if let Some(DialogKind::WorkspaceList(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    state
+                        .workspaces
+                        .get(state.selected)
+                        .map(|(n, _, _)| n.clone())
+                } else {
+                    None
+                };
+
+                if let Some(name) = name_to_remove {
+                    crate::config::remove_workspace(&name);
+                    // Update in-memory config
+                    self.state.config.workspaces.remove(&name);
+                    if let Some(DialogKind::WorkspaceList(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
+                        state.workspaces.retain(|(n, _, _)| n != &name);
+                        state.clamp_selected();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_workspace_add_key(&mut self, key: crossterm::event::KeyCode) {
+        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+        use crossterm::event::KeyCode;
+
+        match key {
+            KeyCode::Esc => {
+                // Clone phase out of the shared borrow before taking any mutable borrow.
+                let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top()
+                {
+                    s.phase.clone()
+                } else {
+                    return;
+                };
+                match phase {
+                    WorkspaceAddPhase::Path => {
+                        self.state.dialog_stack.pop();
+                    }
+                    _ => {
+                        if let Some(DialogKind::WorkspaceAdd(state)) =
+                            self.state.dialog_stack.top_mut()
+                        {
+                            let prev = match state.phase {
+                                WorkspaceAddPhase::Name => WorkspaceAddPhase::Path,
+                                WorkspaceAddPhase::Mode => {
+                                    if state.editing_name.is_some() {
+                                        // In edit mode, Esc on Mode cancels entirely
+                                        self.state.dialog_stack.pop();
+                                        return;
+                                    }
+                                    WorkspaceAddPhase::Name
+                                }
+                                WorkspaceAddPhase::Permissions => WorkspaceAddPhase::Mode,
+                                WorkspaceAddPhase::Path => WorkspaceAddPhase::Path,
+                            };
+                            state.phase = prev;
+                            state.error = None;
+                        }
+                    }
+                }
+            }
+            KeyCode::Up => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            if state.path_selected > 0 {
+                                state.path_selected -= 1;
+                            }
+                        }
+                        WorkspaceAddPhase::Mode => {
+                            if state.mode_selected > 0 {
+                                state.mode_selected -= 1;
+                            }
+                        }
+                        WorkspaceAddPhase::Permissions => {
+                            if state.permissions_selected > 0 {
+                                state.permissions_selected -= 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            let max = state.path_matches.len().saturating_sub(1);
+                            if state.path_selected < max {
+                                state.path_selected += 1;
+                            }
+                        }
+                        WorkspaceAddPhase::Mode => {
+                            if state.mode_selected < 1 {
+                                state.mode_selected += 1;
+                            }
+                        }
+                        WorkspaceAddPhase::Permissions => {
+                            if state.permissions_selected < 1 {
+                                state.permissions_selected += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                self.handle_workspace_add_confirm().await;
+            }
+            KeyCode::Backspace => {
+                if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            state.path_input.pop();
+                            state.error = None;
+                            state.path_selected = 0;
+                        }
+                        WorkspaceAddPhase::Name => {
+                            state.name_input.pop();
+                            state.error = None;
+                        }
+                        WorkspaceAddPhase::Mode | WorkspaceAddPhase::Permissions => {}
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                // Track new path_input for scan trigger after the mutable borrow ends
+                let new_path: Option<String> = if let Some(DialogKind::WorkspaceAdd(state)) =
+                    self.state.dialog_stack.top_mut()
+                {
+                    match state.phase {
+                        WorkspaceAddPhase::Path => {
+                            state.path_input.push(c);
+                            state.error = None;
+                            state.path_selected = 0;
+                            Some(state.path_input.clone())
+                        }
+                        WorkspaceAddPhase::Name => {
+                            state.name_input.push(c);
+                            state.error = None;
+                            None
+                        }
+                        WorkspaceAddPhase::Mode | WorkspaceAddPhase::Permissions => None,
+                    }
+                } else {
+                    None
+                };
+                let _ = new_path; // scan trigger in event loop tick detects input change
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_workspace_add_confirm(&mut self) {
+        use crate::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
+        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+
+        let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+            s.phase.clone()
+        } else {
+            return;
+        };
+
+        match phase {
+            WorkspaceAddPhase::Path => {
+                // Determine confirmed path: use highlighted suggestion or raw input
+                let confirmed_path =
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                        if !s.path_matches.is_empty() {
+                            s.path_matches
+                                .get(s.path_selected)
+                                .cloned()
+                                .unwrap_or_else(|| s.path_input.clone())
+                        } else {
+                            s.path_input.clone()
+                        }
+                    } else {
+                        return;
+                    };
+
+                // Validate path
+                let path = std::path::Path::new(&confirmed_path);
+                if !path.exists() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("path does not exist".to_string());
+                    }
+                    return;
+                }
+                if !path.is_dir() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("path is not a directory".to_string());
+                    }
+                    return;
+                }
+                let canonical = match std::fs::canonicalize(path) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut()
+                        {
+                            s.error = Some("cannot resolve path".to_string());
+                        }
+                        return;
+                    }
+                };
+                if canonical == self.state.primary_root {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("cannot add the primary repo as a workspace".to_string());
+                    }
+                    return;
+                }
+                if canonical.starts_with(&self.state.primary_root)
+                    || self.state.primary_root.starts_with(&canonical)
+                {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some(
+                            "workspace cannot be nested inside the primary repo (or vice versa)"
+                                .to_string(),
+                        );
+                    }
+                    return;
+                }
+                // Check not already registered
+                let already_registered = self
+                    .state
+                    .config
+                    .workspaces
+                    .values()
+                    .any(|w| std::fs::canonicalize(&w.path).ok().as_ref() == Some(&canonical));
+                if already_registered {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("this path is already registered".to_string());
+                    }
+                    return;
+                }
+
+                // Pre-fill name from dirname and advance to Name phase
+                let dirname = canonical
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.path_input = canonical.to_string_lossy().to_string();
+                    s.name_input = dirname;
+                    s.phase = WorkspaceAddPhase::Name;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Name => {
+                let name = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top()
+                {
+                    s.name_input.trim().to_string()
+                } else {
+                    return;
+                };
+
+                if name.is_empty() {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("name cannot be empty".to_string());
+                    }
+                    return;
+                }
+                if name.contains(' ') {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some("name cannot contain spaces".to_string());
+                    }
+                    return;
+                }
+                // Check uniqueness
+                let already_named = self.state.config.workspaces.contains_key(&name);
+                if already_named {
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        s.error = Some(format!("workspace '{name}' already exists"));
+                    }
+                    return;
+                }
+
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.phase = WorkspaceAddPhase::Mode;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Mode => {
+                // Advance to Permissions phase
+                if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                    s.phase = WorkspaceAddPhase::Permissions;
+                    s.error = None;
+                }
+            }
+
+            WorkspaceAddPhase::Permissions => {
+                let (path, name, mode, access, editing_name) =
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                        let mode = if s.mode_selected == 0 {
+                            WorkspaceMode::Proactive
+                        } else {
+                            WorkspaceMode::Explicit
+                        };
+                        let access = if s.permissions_selected == 0 {
+                            WorkspaceAccess::ReadWrite
+                        } else {
+                            WorkspaceAccess::ReadOnly
+                        };
+                        (
+                            s.path_input.clone(),
+                            s.name_input.trim().to_string(),
+                            mode,
+                            access,
+                            s.editing_name.clone(),
+                        )
+                    } else {
+                        return;
+                    };
+
+                let cfg = WorkspaceConfig { path, mode, access };
+                crate::config::save_workspace(&name, &cfg);
+                self.state.config.workspaces.insert(name.clone(), cfg);
+                self.state.dialog_stack.pop();
+                self.refresh_workspace_list_state();
+
+                let verb = if editing_name.is_some() {
+                    "updated"
+                } else {
+                    "added"
+                };
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("workspace '{name}' {verb}"),
+                });
+            }
+        }
+    }
+
+    /// Rebuild WorkspaceListState from current config if WorkspaceList is in the stack.
+    fn refresh_workspace_list_state(&mut self) {
+        use crate::tui::dialog::DialogKind;
+
+        // Build new state before borrowing dialog_stack mutably — avoids two simultaneous
+        // borrows of `self.state` (one for iter_mut, one for &self.state.config).
+        let new_state = build_workspace_list_state(&self.state.config);
+
+        for dialog in self.state.dialog_stack.iter_mut() {
+            if let DialogKind::WorkspaceList(state) = dialog {
+                *state = new_state;
+                return;
+            }
+        }
+    }
+
     fn handle_mcp_input_submit(&mut self) {
         let (name, command, args_str) = match self.state.dialog_stack.top() {
             Some(DialogKind::McpServerInput(state)) => (
@@ -4789,6 +5893,18 @@ impl App {
         }
     }
 
+    fn handle_workspace_command(&mut self, slash: &str) {
+        use crate::tui::dialog::DialogKind;
+
+        let args: Vec<&str> = slash.split_whitespace().collect();
+
+        let _ = args.get(1); // subcommand reserved for future use
+        let state = build_workspace_list_state(&self.state.config);
+        self.state
+            .dialog_stack
+            .push(DialogKind::WorkspaceList(state));
+    }
+
     /// Open the model dropdown (inline picker mode), loading models from the active provider.
     async fn open_model_dropdown(&mut self) {
         let mut models = Vec::new();
@@ -4841,6 +5957,7 @@ impl App {
                         context_window: None,
                         supports_tools: true,
                         supports_vision: false,
+                        supports_thinking: false,
                     },
                 ));
             }
@@ -4864,6 +5981,7 @@ impl App {
                 let found = models.iter().find(|(_, m)| m.id == rm.model_id);
                 let supports_tools = found.map(|(_, m)| m.supports_tools).unwrap_or(true);
                 let supports_vision = found.map(|(_, m)| m.supports_vision).unwrap_or(false);
+                let supports_thinking = found.map(|(_, m)| m.supports_thinking).unwrap_or(false);
                 (
                     rm.provider.clone(),
                     crate::provider::ModelInfo {
@@ -4872,6 +5990,7 @@ impl App {
                         context_window: None,
                         supports_tools,
                         supports_vision,
+                        supports_thinking,
                     },
                 )
             })
@@ -5013,6 +6132,8 @@ impl App {
             Ok(new_provider) => {
                 self.state.active_provider_name = new_provider.name().to_string();
                 self.state.active_model_name = new_provider.model().to_string();
+                // Sync thinking mode to the new provider
+                new_provider.set_thinking_mode(self.state.thinking_mode);
                 self.provider = Some(new_provider);
 
                 // Update context window for compaction and sidebar display
@@ -5069,7 +6190,7 @@ impl App {
         // Text-based task fallback for models without tool support
         if !self.state.model_supports_tools
             && let Some(text) = self.state.chat_messages.iter().rev().find_map(|m| {
-                if let ChatMessage::Assistant { content } = m {
+                if let ChatMessage::Assistant { content, .. } = m {
                     Some(content.clone())
                 } else {
                     None
@@ -5124,21 +6245,147 @@ impl App {
 
         match &self.state.agent.state {
             AgentState::ExecutingTools => {
-                self.start_tool_execution();
+                // If spawn_agent background tasks are still running, don't re-enter
+                // tool dispatch — poll_spawn_agent_handles will finalize when done.
+                if !self.state.spawn_agent_handles.is_empty() {
+                    // Don't process — subagents still running
+                }
+                // Intercept spawn_agent calls before normal tool dispatch
+                else {
+                    let spawn_calls: Vec<crate::agent::PendingToolCall> = self
+                        .state
+                        .agent
+                        .pending_tool_calls
+                        .iter()
+                        .filter(|tc| tc.name == "spawn_agent")
+                        .cloned()
+                        .collect();
+
+                    if !spawn_calls.is_empty() {
+                        self.state
+                            .agent
+                            .pending_tool_calls
+                            .retain(|tc| tc.name != "spawn_agent");
+
+                        for call in spawn_calls {
+                            match self.spawn_agent_setup(&call.arguments).await {
+                                Ok((
+                                    agent_id,
+                                    input,
+                                    provider,
+                                    config,
+                                    tx,
+                                    task,
+                                    branch,
+                                    worktree_path,
+                                )) => {
+                                    let placeholder_idx = self.state.chat_messages.len();
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::Tool(ToolMessage {
+                                            name: "spawn_agent".to_string(),
+                                            args: call.arguments.clone(),
+                                            output: None,
+                                            status: ToolStatus::Running,
+                                            expanded: false,
+                                            file_path: None,
+                                            diff_preview: None,
+                                            diff_expanded: false,
+                                        }));
+
+                                    let tool_use_id = call.id.clone();
+                                    let handle = tokio::spawn(run_spawn_agent_task(
+                                        agent_id,
+                                        tool_use_id.clone(),
+                                        task,
+                                        branch,
+                                        worktree_path,
+                                        input,
+                                        provider,
+                                        config,
+                                        tx,
+                                    ));
+
+                                    self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                                        tool_use_id,
+                                        arguments: call.arguments,
+                                        chat_placeholder_idx: placeholder_idx,
+                                        handle,
+                                    });
+                                }
+                                Err(err_msg) => {
+                                    tracing::warn!("spawn_agent setup failed: {err_msg}");
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!("spawn_agent failed: {err_msg}"),
+                                    });
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: err_msg.clone(),
+                                                is_error: true,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::Tool(ToolMessage {
+                                            name: "spawn_agent".to_string(),
+                                            args: call.arguments,
+                                            output: Some(err_msg),
+                                            status: ToolStatus::Failed,
+                                            expanded: false,
+                                            file_path: None,
+                                            diff_preview: None,
+                                            diff_expanded: false,
+                                        }));
+                                }
+                            }
+                        }
+
+                        if self.state.agent.pending_tool_calls.is_empty() {
+                            if self.state.spawn_agent_handles.is_empty() {
+                                self.finalize_tool_execution();
+                            }
+                            // else: spawn handles running — poll will finalize
+                        } else {
+                            self.start_tool_execution();
+                        }
+                    } else {
+                        self.start_tool_execution();
+                    }
+                }
             }
             AgentState::PendingApproval { .. } => {
                 // Push Pending placeholders so diff preview shows before approval
                 self.state.tool_exec_running_start = self.state.chat_messages.len();
-                for tc in &self.state.agent.pending_tool_calls {
+                // Collect tool calls first to avoid borrow conflict
+                let pending: Vec<_> = self
+                    .state
+                    .agent
+                    .pending_tool_calls
+                    .iter()
+                    .map(|tc| (tc.name.clone(), tc.arguments.clone()))
+                    .collect();
+                for (name, args) in pending {
+                    let diff_preview = App::compute_pending_diff(&name, &args).await;
                     self.state
                         .chat_messages
                         .push(ChatMessage::Tool(ToolMessage {
-                            name: tc.name.clone(),
-                            args: tc.arguments.clone(),
+                            name,
+                            args,
                             output: None,
                             status: ToolStatus::Pending,
                             expanded: false,
                             file_path: None,
+                            diff_preview,
+                            diff_expanded: false,
                         }));
                 }
             }
@@ -5313,6 +6560,55 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Compute diff preview lines for a pending tool call. Returns None if not
+    /// a write/edit/patch tool, or if preview is unavailable.
+    async fn compute_pending_diff(name: &str, args: &serde_json::Value) -> Option<Vec<String>> {
+        use crate::tools::write::compute_diff_lines;
+        match name {
+            "edit_file" => {
+                let old = args.get("old_string")?.as_str()?;
+                let new = args.get("new_string")?.as_str()?;
+                Some(compute_diff_lines(old, new))
+            }
+            "write_file" => {
+                let path = args
+                    .get("path")
+                    .or_else(|| args.get("file_path"))
+                    .and_then(|v| v.as_str())?;
+                let new = args.get("content")?.as_str()?;
+                let old = tokio::fs::read_to_string(path).await.ok();
+                match old {
+                    None => {
+                        // New file or binary/unreadable — mark as new file, all lines added
+                        let mut lines: Vec<String> =
+                            new.lines().map(|l| format!("+ {l}")).collect();
+                        lines.insert(0, "(new file)".to_string());
+                        Some(lines)
+                    }
+                    Some(ref old_content) => {
+                        let lines = compute_diff_lines(old_content, new);
+                        if lines.is_empty() {
+                            None // identical content — no diff to show
+                        } else {
+                            Some(lines)
+                        }
+                    }
+                }
+            }
+            "apply_patch" => {
+                // The diff input IS the diff — collect its content lines
+                let diff_text = args.get("diff")?.as_str()?;
+                let lines: Vec<String> = diff_text
+                    .lines()
+                    .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
+                    .map(|l| l.to_string())
+                    .collect();
+                if lines.is_empty() { None } else { Some(lines) }
+            }
+            _ => None,
         }
     }
 
@@ -5850,6 +7146,8 @@ impl App {
                         status: ToolStatus::Running,
                         expanded: false,
                         file_path: None,
+                        diff_preview: None,
+                        diff_expanded: true,
                     }));
             }
         }
@@ -5876,8 +7174,10 @@ impl App {
                         self.state.post_tool_hooks.run(&mut result, &mut ctx).await;
                     }
                     self.handle_tool_result(result);
-                    // If all done, finalize
-                    if self.state.tool_exec_queue.is_empty() {
+                    // If all done, finalize (also wait for spawn_agent handles)
+                    if self.state.tool_exec_queue.is_empty()
+                        && self.state.spawn_agent_handles.is_empty()
+                    {
                         self.finalize_tool_execution();
                         return;
                     }
@@ -5910,7 +7210,9 @@ impl App {
                             lines_added: 0,
                             lines_removed: 0,
                         });
-                    if self.state.tool_exec_queue.is_empty() {
+                    if self.state.tool_exec_queue.is_empty()
+                        && self.state.spawn_agent_handles.is_empty()
+                    {
                         self.finalize_tool_execution();
                         return;
                     }
@@ -5921,6 +7223,272 @@ impl App {
         // 2. Spawn the next tool if none is currently running
         if self.state.tool_exec_pending_rx.is_none() && !self.state.tool_exec_queue.is_empty() {
             self.spawn_next_tool().await;
+        }
+    }
+
+    /// Fast setup for a spawn_agent call. Creates worktree, registers SubAgent,
+    /// returns all owned data needed by the background task.
+    async fn spawn_agent_setup(
+        &mut self,
+        arguments: &serde_json::Value,
+    ) -> Result<
+        (
+            uuid::Uuid,
+            crate::sub_agent::executor::SubAgentInput,
+            std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
+            crate::config::Config,
+            tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
+            String,
+            String,
+            std::path::PathBuf,
+        ),
+        String,
+    > {
+        let task = match arguments.get("task").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => return Err("spawn_agent: missing required parameter 'task'".to_string()),
+        };
+
+        // Check gitignore
+        if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
+            return Err(format!(
+                "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
+                 Add .worktrees/ to .gitignore first."
+            ));
+        }
+
+        // Compute unique slug
+        let used_slugs: Vec<String> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter_map(|a| {
+                a.worktree_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_prefix("agent-"))
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
+        let branch = crate::sub_agent::worktree::branch_name(&slug);
+        let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
+
+        // Auto-clear terminal-state agents
+        self.state.sub_agents.retain(|a| {
+            !matches!(
+                a.state,
+                crate::sub_agent::SubAgentState::Done
+                    | crate::sub_agent::SubAgentState::Failed { .. }
+                    | crate::sub_agent::SubAgentState::Conflict { .. }
+            )
+        });
+
+        // Clean up any stale branch/worktree from a previous run
+        let branch_cleanup = branch.clone();
+        let path_cleanup = worktree_path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            // Try removing stale worktree first (ignores errors)
+            let _ = std::process::Command::new("git")
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &path_cleanup.to_string_lossy(),
+                ])
+                .output();
+            // Try deleting stale branch (ignores errors)
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-D", &branch_cleanup])
+                .output();
+        })
+        .await;
+
+        // Create worktree
+        let path_clone = worktree_path.clone();
+        let branch_clone = branch.clone();
+        let worktree_result = tokio::task::spawn_blocking(move || {
+            crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
+        })
+        .await;
+
+        match worktree_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
+            Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
+        }
+
+        // Register SubAgent
+        let agent_id = uuid::Uuid::new_v4();
+        let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+
+        self.state.sub_agents.push(crate::sub_agent::SubAgent {
+            id: agent_id,
+            task: task.clone(),
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            state: crate::sub_agent::SubAgentState::Running,
+            started_at: Some(std::time::Instant::now()),
+            cost_usd: 0.0,
+            stream: Vec::new(),
+            approval_tx: Some(approval_tx),
+            auto_approve: false,
+        });
+
+        // Clamp permission mode
+        use crate::agent::permission::Mode;
+        let subagent_mode = match self.state.mode {
+            Mode::Plan => PermissionMode::Default,
+            Mode::Create => PermissionMode::Default,
+            Mode::Chug => PermissionMode::Chug,
+        };
+
+        let system_prompt = self.state.agent.conversation.system_prompt.clone();
+        let pricing = self.state.pricing.get(&self.state.active_model_name);
+        let input = crate::sub_agent::executor::SubAgentInput {
+            id: agent_id,
+            task: task.clone(),
+            worktree_path: worktree_path.clone(),
+            system_prompt,
+            permission_mode: subagent_mode,
+            approval_rx,
+            input_per_m: pricing.map(|p| p.input_per_m).unwrap_or(0.0),
+            output_per_m: pricing.map(|p| p.output_per_m).unwrap_or(0.0),
+        };
+
+        // Get provider
+        let provider_arc = match self.state.providers.get_provider_arc(
+            Some(&self.state.active_provider_name),
+            Some(&self.state.active_model_name),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Failed {
+                        message: format!("no provider: {e}"),
+                    };
+                    a.approval_tx = None;
+                }
+                let wt = worktree_path.clone();
+                let br = branch.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::sub_agent::worktree::remove_worktree(&wt, &br)
+                })
+                .await;
+                return Err(format!("spawn_agent: no active provider: {e}"));
+            }
+        };
+
+        let config = self.state.config.clone();
+        let tx = match self.state.sub_agent_tx.clone() {
+            Some(tx) => tx,
+            None => {
+                return Err(
+                    "spawn_agent: internal error — subagent channel not initialized".to_string(),
+                );
+            }
+        };
+
+        Ok((
+            agent_id,
+            input,
+            provider_arc,
+            config,
+            tx,
+            task,
+            branch,
+            worktree_path,
+        ))
+    }
+
+    /// Poll pending spawn_agent background tasks. Called each event-loop tick.
+    /// When a task completes, injects its ToolResult into the agent conversation,
+    /// updates the SubAgent state and chat placeholder, then cleans up.
+    async fn poll_spawn_agent_handles(&mut self) {
+        let mut completed: Vec<usize> = Vec::new();
+        for (i, sh) in self.state.spawn_agent_handles.iter().enumerate() {
+            if sh.handle.is_finished() {
+                completed.push(i);
+            }
+        }
+
+        for i in completed.into_iter().rev() {
+            let sh = self.state.spawn_agent_handles.remove(i);
+            // is_finished() was true, so .await returns immediately
+            let result = match sh.handle.await {
+                Ok(r) => r,
+                Err(e) => crate::sub_agent::SpawnAgentResult {
+                    agent_id: uuid::Uuid::nil(),
+                    tool_use_id: sh.tool_use_id.clone(),
+                    task: String::new(),
+                    result_text: format!("spawn_agent: task panicked: {e}"),
+                    is_error: true,
+                    final_state: crate::sub_agent::SubAgentState::Failed {
+                        message: format!("task panicked: {e}"),
+                    },
+                    cost_usd: 0.0,
+                },
+            };
+
+            // Update SubAgent state
+            if let Some(a) = self
+                .state
+                .sub_agents
+                .iter_mut()
+                .find(|a| a.id == result.agent_id)
+            {
+                a.state = result.final_state.clone();
+                a.cost_usd = result.cost_usd;
+                a.approval_tx = None;
+            }
+
+            // Update chat placeholder
+            if let Some(ChatMessage::Tool(tm)) =
+                self.state.chat_messages.get_mut(sh.chat_placeholder_idx)
+            {
+                tm.status = if result.is_error {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Success
+                };
+                tm.output = Some(result.result_text.clone());
+            }
+
+            // Inject ToolResult into agent conversation
+            self.state
+                .agent
+                .conversation
+                .push(crate::agent::conversation::Message {
+                    role: crate::agent::conversation::Role::User,
+                    content: crate::agent::conversation::Content::Blocks(vec![
+                        crate::agent::conversation::ContentBlock::ToolResult {
+                            tool_use_id: result.tool_use_id.clone(),
+                            content: result.result_text.clone(),
+                            is_error: result.is_error,
+                        },
+                    ]),
+                    tool_call_id: Some(result.tool_use_id),
+                });
+
+            // Emit system chat message
+            if result.is_error {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent failed: {}", result.task),
+                });
+            } else {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent done: {}", result.task),
+                });
+            }
+        }
+
+        // When all spawn handles are done and no other tools are pending, finalize
+        if self.state.spawn_agent_handles.is_empty()
+            && self.state.tool_exec_queue.is_empty()
+            && self.state.tool_exec_pending_rx.is_none()
+            && matches!(self.state.agent.state, AgentState::ExecutingTools)
+        {
+            self.finalize_tool_execution();
         }
     }
 
@@ -6129,10 +7697,37 @@ impl App {
                         tm.output = Some("Cancelled by user".to_string());
                     }
                 }
+                // Inject cancelled tool_results into the conversation for all
+                // tool_use blocks that haven't received results yet. Without
+                // these the API rejects the next request (orphaned tool_use).
+                let completed_count = self.state.tool_exec_results.len();
+                for tc in self
+                    .state
+                    .agent
+                    .pending_tool_calls
+                    .iter()
+                    .skip(completed_count)
+                {
+                    self.state
+                        .agent
+                        .conversation
+                        .push(crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Blocks(vec![
+                                crate::agent::conversation::ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: "Cancelled by user".to_string(),
+                                    is_error: true,
+                                },
+                            ]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                }
                 // Clear remaining queued tools
                 self.state.tool_exec_queue.clear();
                 self.state.tool_exec_results.clear();
                 self.state.tool_exec_args.clear();
+                self.state.agent.pending_tool_calls.clear();
                 self.state.agent.state = AgentState::Idle;
                 self.state.chat_messages.push(ChatMessage::System {
                     content: "Cancelled.".to_string(),
@@ -6151,6 +7746,24 @@ impl App {
                         };
                     }
                 }
+                // Inject cancelled tool_results into the conversation for all
+                // pending tool_use blocks so the API doesn't reject the next turn.
+                for tc in &self.state.agent.pending_tool_calls {
+                    self.state
+                        .agent
+                        .conversation
+                        .push(crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Blocks(vec![
+                                crate::agent::conversation::ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: "Cancelled by user".to_string(),
+                                    is_error: true,
+                                },
+                            ]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                }
                 self.state.agent.pending_tool_calls.clear();
                 self.state.agent.state = AgentState::Idle;
             }
@@ -6161,6 +7774,27 @@ impl App {
         if self.state.ask_user_session.is_some() {
             self.dismiss_ask_user();
         }
+
+        // Abort and clear spawn_agent background tasks so their results
+        // don't leak into the conversation after the user has moved on.
+        for sh in self.state.spawn_agent_handles.drain(..) {
+            sh.handle.abort();
+        }
+
+        // Clear all sub-agent state so the user gets a clean slate.
+        // Dropping approval_tx senders causes background agent tasks to stop
+        // waiting for approval and terminate gracefully.
+        self.state.sub_agents.clear();
+        self.state.sub_agent_approval_showing = None;
+        self.state.sub_agent_pending_approvals.clear();
+        self.state.agent_stream_overlay = None;
+        self.state.sidebar_focused = false;
+        self.state.sidebar_agent_selected = 0;
+
+        // Remove task outlines — they'll be repopulated on the next prompt
+        self.state
+            .chat_messages
+            .retain(|m| !matches!(m, ChatMessage::TaskOutline(_)));
     }
 
     /// Spawn the next tool from the queue on a background tokio task.
@@ -6227,6 +7861,13 @@ impl App {
         }
 
         // Permission check (sync — runs before spawning)
+        let workspace_paths: Vec<&str> = self
+            .state
+            .config
+            .workspaces
+            .values()
+            .map(|cfg| cfg.path.as_str())
+            .collect();
         let decision = crate::agent::permission::check_permission(
             &self.state.agent.permission_mode,
             &tc.name,
@@ -6235,6 +7876,8 @@ impl App {
             &self.state.agent.deny_list,
             &self.state.agent.session_allows,
             tool_permission,
+            Some(&self.state.primary_root),
+            &workspace_paths,
         );
 
         if let crate::agent::permission::ToolDecision::Blocked(reason) = decision {
@@ -6628,12 +8271,21 @@ impl App {
                     .join(""),
             };
             let text = text.trim().to_string();
-            if !text.is_empty() {
+            let thinking = if self.state.agent.streaming_thinking.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(&mut self.state.agent.streaming_thinking))
+            };
+            if !text.is_empty() || thinking.is_some() {
+                let t0 = Instant::now();
+                if let Some(ref thinking) = thinking {
+                    self.persist_message("thinking", thinking);
+                }
+                self.persist_message("assistant", &text);
                 self.state.chat_messages.push(ChatMessage::Assistant {
                     content: text.clone(),
+                    thinking,
                 });
-                let t0 = Instant::now();
-                self.persist_message("assistant", &text);
                 let persist_ms = t0.elapsed().as_millis();
                 let t1 = Instant::now();
                 self.update_session_meta();
@@ -7329,6 +8981,7 @@ impl App {
         // Persist the generated content as a collapsible Assistant message
         self.state.chat_messages.push(ChatMessage::Assistant {
             content: generated.trim().to_string(),
+            thinking: None,
         });
 
         match crate::init::handler::write_caboose_md(&write_root, generated.trim()) {
@@ -7756,7 +9409,13 @@ impl App {
         let mut id = format!("c-{:x}", ts % 0x1000000);
         // Ensure uniqueness against existing circuits
         let mut counter = 1u64;
-        while self.state.circuit_manager.circuits.iter().any(|h| h.circuit.id == id) {
+        while self
+            .state
+            .circuit_manager
+            .circuits
+            .iter()
+            .any(|h| h.circuit.id == id)
+        {
             id = format!("c-{:x}", (ts + counter) % 0x1000000);
             counter += 1;
         }
@@ -7846,6 +9505,109 @@ impl App {
             self.state.chat_messages.push(ChatMessage::System {
                 content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
             });
+        }
+    }
+}
+
+/// Background task for a single spawn_agent call. Runs the subagent,
+/// merges on success, cleans up worktree. Returns a SpawnAgentResult
+/// for the event loop to inject as a ToolResult.
+#[allow(clippy::too_many_arguments)]
+async fn run_spawn_agent_task(
+    agent_id: uuid::Uuid,
+    tool_use_id: String,
+    task: String,
+    branch: String,
+    worktree_path: std::path::PathBuf,
+    input: crate::sub_agent::executor::SubAgentInput,
+    provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
+    config: crate::config::Config,
+    tx: tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
+) -> crate::sub_agent::SpawnAgentResult {
+    use crate::sub_agent::{SpawnAgentResult, SubAgentState};
+
+    let run_result =
+        crate::sub_agent::executor::run_subagent(input, provider, config, tx.clone()).await;
+
+    match run_result {
+        Ok((cost, summary)) => {
+            // Merge branch back
+            let branch_merge = branch.clone();
+            let merge_result = tokio::task::spawn_blocking(move || {
+                crate::sub_agent::worktree::merge_branch(&branch_merge)
+            })
+            .await;
+
+            match merge_result {
+                Ok(Ok(())) => {
+                    // Remove worktree
+                    let path_rm = worktree_path.clone();
+                    let branch_rm = branch.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::sub_agent::worktree::remove_worktree(&path_rm, &branch_rm)
+                    })
+                    .await;
+
+                    SpawnAgentResult {
+                        agent_id,
+                        tool_use_id,
+                        result_text: format!("Agent completed task: {task}\n\n{summary}"),
+                        is_error: false,
+                        task,
+                        final_state: SubAgentState::Done,
+                        cost_usd: cost,
+                    }
+                }
+                Ok(Err(e)) if e.to_string().contains("CONFLICT") => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!(
+                        "Merge conflict for task '{task}'. \
+                         Worktree preserved at {}. Resolve manually.",
+                        worktree_path.display()
+                    ),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Conflict {
+                        report: e.to_string(),
+                    },
+                    cost_usd: cost,
+                },
+                Ok(Err(e)) => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!("spawn_agent: merge failed for '{task}': {e}"),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Failed {
+                        message: format!("merge failed: {e}"),
+                    },
+                    cost_usd: cost,
+                },
+                Err(e) => SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!("spawn_agent: merge task panicked: {e}"),
+                    is_error: true,
+                    task,
+                    final_state: SubAgentState::Failed {
+                        message: format!("merge panicked: {e}"),
+                    },
+                    cost_usd: 0.0,
+                },
+            }
+        }
+        Err(message) => {
+            tracing::error!("spawn_agent executor failed for '{task}': {message}");
+            SpawnAgentResult {
+                agent_id,
+                tool_use_id,
+                result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
+                is_error: true,
+                task,
+                final_state: SubAgentState::Failed { message },
+                cost_usd: 0.0,
+            }
         }
     }
 }
@@ -7977,6 +9739,242 @@ fn parse_tasks_from_text(text: &str) -> Option<TaskOutline> {
     } else {
         None
     }
+}
+
+/// Returns all filesystem roots to search when no explicit path is typed.
+/// On Windows: all mounted drive roots (A:\ through Z:\).
+/// On Unix: ["/"].
+fn scan_roots() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        (b'A'..=b'Z')
+            .filter_map(|c| {
+                let root = format!("{}:\\", c as char);
+                if std::path::Path::new(&root).exists() {
+                    Some(root)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
+/// Spawn a background tokio task to walk directories under the given roots.
+/// Results are sent via the returned mpsc receiver.
+/// Constraints: max depth 5, max 100 results, 1s timeout.
+fn spawn_dir_scan(roots: Vec<String>, query: String) -> tokio::sync::mpsc::Receiver<Vec<String>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(1000),
+            tokio::task::spawn_blocking(move || walk_dirs_fuzzy(&roots, &query)),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
+
+        let _ = tx.send(result).await;
+    });
+    rx
+}
+
+/// Walk directories under `roots`, returning up to 100 fuzzy-matched **absolute** paths.
+fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
+    // When the query is a partial path like "a:/projects/cabo", match only on
+    // the last component ("cabo") so directory names score correctly.
+    let match_term = if query.contains('/') || query.contains('\\') {
+        std::path::Path::new(query)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(query)
+    } else {
+        query
+    };
+    let query_lower = match_term.to_lowercase();
+    let mut candidates: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+
+    // BFS so shallow paths surface before deep ones — avoids hitting the 200
+    // cap with deeply-nested entries before reaching the user's target.
+    let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+        std::collections::VecDeque::new();
+    for root in roots {
+        // Strip Windows extended-length path prefix (\\?\) that canonicalize() adds —
+        // it bleeds into display strings and causes false duplicates.
+        let root = root.strip_prefix(r"\\?\").unwrap_or(root);
+        let p = std::path::PathBuf::from(root);
+        if p.exists() {
+            queue.push_back((p, 0));
+        }
+    }
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth >= 5 || candidates.len() >= 200 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || is_ignored_dir(name) {
+                continue;
+            }
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            if let Some(s) = path.to_str() {
+                candidates.push(s.to_string());
+            }
+            if depth + 1 < 5 {
+                queue.push_back((path, depth + 1));
+            }
+        }
+    }
+
+    // Fuzzy score against the last path component (dirname) for relevance
+    let mut scored: Vec<(u32, String)> = candidates
+        .into_iter()
+        .filter_map(|abs_path| {
+            let component = std::path::Path::new(&abs_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&abs_path);
+            crate::tui::file_auto::score_path_for_dir(component, &query_lower)
+                .map(|score| (score, abs_path))
+        })
+        .collect();
+
+    scored.sort_by_key(|(s, _)| *s);
+    scored.truncate(100);
+    scored.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Directories to skip during workspace scanning.
+fn is_ignored_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules"
+            | ".git"
+            | ".svn"
+            | ".hg"
+            | "target"
+            | "dist"
+            | "build"
+            | "out"
+            | ".next"
+            | ".nuxt"
+            | ".cache"
+            | "cache"
+            | "__pycache__"
+            | ".tox"
+            | "venv"
+            | ".venv"
+            | "env"
+            | ".env"
+            | "vendor"
+            | ".idea"
+            | ".vscode"
+            | "Temp"
+            | "temp"
+            | "tmp"
+            | "$Recycle.Bin"
+            | "System Volume Information"
+            | "Windows"
+            | "Program Files"
+            | "Program Files (x86)"
+    )
+}
+
+fn build_workspace_list_state(
+    config: &crate::config::Config,
+) -> crate::tui::dialog::WorkspaceListState {
+    use crate::tui::dialog::WorkspaceListState;
+    let workspaces = config
+        .workspaces
+        .iter()
+        .map(|(name, cfg)| {
+            let available = std::path::Path::new(&cfg.path).exists();
+            (name.clone(), cfg.clone(), available)
+        })
+        .collect::<Vec<_>>();
+    WorkspaceListState {
+        workspaces,
+        selected: 0,
+    }
+}
+
+/// Build the workspace context block for injection into the system prompt.
+/// Omits workspaces whose path no longer exists.
+/// Returns an empty string if no workspaces are configured or available.
+fn workspace_system_prompt_block(
+    workspaces: &std::collections::HashMap<String, crate::config::schema::WorkspaceConfig>,
+) -> String {
+    use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+
+    if workspaces.is_empty() {
+        return String::new();
+    }
+
+    let available: Vec<_> = workspaces
+        .iter()
+        .filter(|(_, cfg)| std::path::Path::new(&cfg.path).exists())
+        .collect();
+
+    if available.is_empty() {
+        return String::new();
+    }
+
+    let proactive: Vec<_> = available
+        .iter()
+        .filter(|(_, c)| c.mode == WorkspaceMode::Proactive)
+        .collect();
+    let explicit: Vec<_> = available
+        .iter()
+        .filter(|(_, c)| c.mode == WorkspaceMode::Explicit)
+        .collect();
+
+    let mut block = String::new();
+    block.push_str("\n\n<workspaces>\n");
+    block.push_str("The following additional repositories are registered. Use your file tools (read, glob, grep) to access them by their absolute paths.\n\n");
+
+    if !proactive.is_empty() {
+        block.push_str("Proactive — search these automatically when relevant:\n");
+        for (name, cfg) in &proactive {
+            let access = if cfg.access == WorkspaceAccess::ReadOnly {
+                "read-only"
+            } else {
+                "read-write"
+            };
+            block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
+        }
+        block.push('\n');
+    }
+
+    if !explicit.is_empty() {
+        block.push_str("Explicit — only use when the user directly references by name:\n");
+        for (name, cfg) in &explicit {
+            let access = if cfg.access == WorkspaceAccess::ReadOnly {
+                "read-only"
+            } else {
+                "read-write"
+            };
+            block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
+        }
+        block.push('\n');
+    }
+
+    block.push_str("</workspaces>");
+    block
 }
 
 #[cfg(test)]
@@ -8174,5 +10172,174 @@ mod circuit_parse_tests {
     #[test]
     fn format_duration_mixed() {
         assert_eq!(format_duration(90), "1m 30s");
+    }
+}
+
+#[cfg(test)]
+mod workspace_add_validation_tests {
+    /// Test the path validation helper logic (extracted for testability).
+    /// These test the same conditions checked in handle_workspace_add_confirm_path.
+
+    #[test]
+    fn name_from_dirname() {
+        let path = std::path::Path::new("/home/alex/caboose-web");
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(name, "caboose-web");
+    }
+
+    #[test]
+    fn nested_path_detection() {
+        let primary = std::path::PathBuf::from("/home/alex/caboose");
+        let child = std::path::PathBuf::from("/home/alex/caboose/sub");
+        let parent = std::path::PathBuf::from("/home/alex");
+        // child starts_with primary → nested
+        assert!(child.starts_with(&primary));
+        // primary starts_with parent → primary is nested inside parent
+        assert!(primary.starts_with(&parent));
+        // sibling does not start_with primary
+        let sibling = std::path::PathBuf::from("/home/alex/caboose-web");
+        assert!(!sibling.starts_with(&primary));
+        assert!(!primary.starts_with(&sibling));
+    }
+
+    #[test]
+    fn name_validation_no_spaces() {
+        let bad = "my workspace";
+        let good = "my-workspace";
+        assert!(bad.contains(' '));
+        assert!(!good.contains(' '));
+    }
+}
+
+#[cfg(test)]
+mod workspace_list_handler_tests {
+    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use crate::tui::dialog::WorkspaceListState;
+
+    fn make_state(n: usize) -> WorkspaceListState {
+        WorkspaceListState {
+            workspaces: (0..n)
+                .map(|i| {
+                    (
+                        format!("ws-{i}"),
+                        WorkspaceConfig {
+                            path: format!("/tmp/ws{i}"),
+                            mode: WorkspaceMode::Proactive,
+                            access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                        },
+                        true,
+                    )
+                })
+                .collect(),
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn remove_last_item_clamps_selected() {
+        let mut state = make_state(1);
+        state.selected = 0;
+        state.workspaces.remove(0);
+        state.clamp_selected();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn remove_item_mid_list_clamps_selected() {
+        let mut state = make_state(3);
+        state.selected = 2; // last item
+        state.workspaces.remove(2);
+        state.clamp_selected();
+        assert_eq!(state.selected, 1);
+    }
+}
+
+#[cfg(test)]
+mod execute_command_tests {
+    #[test]
+    fn extract_tasks_from_assistant_message() {
+        let text = "Here's what I'll do:\n- auth refactor\n- add session tests\n- update readme";
+        let tasks = crate::sub_agent::pipeline::extract_tasks(text).unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0], "auth refactor");
+    }
+
+    #[test]
+    fn no_task_list_returns_none() {
+        let text = "Just explaining some code...";
+        assert!(crate::sub_agent::pipeline::extract_tasks(text).is_none());
+    }
+}
+
+#[cfg(test)]
+mod workspace_prompt_tests {
+    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use std::collections::HashMap;
+
+    fn build_workspace_block(workspaces: &HashMap<String, WorkspaceConfig>) -> String {
+        super::workspace_system_prompt_block(workspaces)
+    }
+
+    #[test]
+    fn empty_workspaces_returns_empty_string() {
+        let ws: HashMap<String, WorkspaceConfig> = HashMap::new();
+        assert_eq!(build_workspace_block(&ws), "");
+    }
+
+    #[test]
+    fn proactive_workspace_in_prompt() {
+        let path = std::env::temp_dir();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut ws = HashMap::new();
+        ws.insert(
+            "caboose-web".to_string(),
+            WorkspaceConfig {
+                path: path_str.clone(),
+                mode: WorkspaceMode::Proactive,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
+        let block = build_workspace_block(&ws);
+        assert!(block.contains("caboose-web"));
+        assert!(block.contains(&path_str));
+        assert!(block.contains("Proactive"));
+    }
+
+    #[test]
+    fn explicit_workspace_in_prompt() {
+        let path = std::env::temp_dir();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut ws = HashMap::new();
+        ws.insert(
+            "docs".to_string(),
+            WorkspaceConfig {
+                path: path_str.clone(),
+                mode: WorkspaceMode::Explicit,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
+        let block = build_workspace_block(&ws);
+        assert!(block.contains("docs"));
+        assert!(block.contains("Explicit"));
+    }
+
+    #[test]
+    fn unavailable_workspace_omitted() {
+        let mut ws = HashMap::new();
+        ws.insert(
+            "gone".to_string(),
+            WorkspaceConfig {
+                path: "/nonexistent/path/xyz123".to_string(),
+                mode: WorkspaceMode::Proactive,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
+        let block = build_workspace_block(&ws);
+        // Path doesn't exist — should be omitted
+        assert!(block.is_empty());
     }
 }

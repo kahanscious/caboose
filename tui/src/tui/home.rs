@@ -154,9 +154,11 @@ pub fn render(frame: &mut Frame, state: &State) {
         state.mode,
         &state.active_model_name,
         &state.active_provider_name,
+        state.thinking_mode,
+        state.model_supports_thinking,
         &colors,
     );
-    let info_right = crate::tui::input::build_info_right(&colors);
+    let info_right = crate::tui::input::build_info_right(state.model_supports_thinking, &colors);
 
     crate::tui::input::render_input_field(
         frame,

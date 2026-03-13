@@ -6,9 +6,6 @@ use serde_json::Value;
 use crate::agent::tools::ToolResult;
 
 /// Execute a web search.
-///
-/// `provider` — which search backend to use (e.g. "tavily").
-/// `api_key` — the API key for the provider.
 pub async fn execute(input: &Value, provider: &str, api_key: &str) -> Result<ToolResult> {
     let query = match input["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q.trim(),
@@ -96,12 +93,10 @@ async fn execute_tavily(query: &str, api_key: &str) -> Result<ToolResult> {
     let json: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     let mut output = String::new();
 
-    // Include the AI-generated answer if present
     if let Some(answer) = json["answer"].as_str() {
         output.push_str(&format!("**Answer:** {answer}\n\n---\n\n"));
     }
 
-    // Format individual results
     if let Some(results) = json["results"].as_array() {
         if results.is_empty() {
             output.push_str(&format!("No results found for: {query}"));

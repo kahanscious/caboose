@@ -5,9 +5,166 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{FileStats, TaskOutline, TaskStatus};
 use crate::mcp::ServerStatus;
+use crate::sub_agent::{SubAgent, SubAgentState, format_elapsed};
 use crate::tui::theme::Colors;
 
+/// Per-state counts for the agents section header pills.
+pub struct AgentCounts {
+    pub running: usize,
+    pub pending: usize,
+    pub failed: usize,
+}
+
+/// Return the status dot character and a color key for a subagent state.
+/// Color keys: "run" = info (blue), "done" = success (green), "fail" = error (red), "dim" = dim
+pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static str) {
+    match state {
+        SubAgentState::Running => ("\u{25CF}", "run"), // ●
+        SubAgentState::Pending => ("\u{25CB}", "dim"), // ○
+        SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
+        SubAgentState::Done => ("\u{2713}", "done"),   // ✓
+        SubAgentState::Failed { .. } => ("\u{2717}", "fail"), // ✗
+        SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
+    }
+}
+
+/// Count running, pending, and failed agents.
+pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
+    AgentCounts {
+        running: agents
+            .iter()
+            .filter(|a| matches!(a.state, SubAgentState::Running))
+            .count(),
+        pending: agents
+            .iter()
+            .filter(|a| matches!(a.state, SubAgentState::Pending))
+            .count(),
+        failed: agents
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.state,
+                    SubAgentState::Failed { .. } | SubAgentState::Conflict { .. }
+                )
+            })
+            .count(),
+    }
+}
+
+/// Render the agents section into `lines`.
+/// Returns the line offset of the dismiss button within `lines` (if shown).
+pub fn render_agents_section(
+    lines: &mut Vec<Line<'static>>,
+    agents: &[SubAgent],
+    sidebar_width: u16,
+    colors: &Colors,
+    tick: u64,
+) -> Option<usize> {
+    let counts = agent_counts(agents);
+    let mut dismiss_line_offset: Option<usize> = None;
+
+    // Header: "  agents" + pills
+    let mut header_spans: Vec<Span<'static>> = vec![Span::styled(
+        "  agents",
+        Style::default().fg(colors.text_secondary).bold(),
+    )];
+    if counts.running > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CF} {} running", counts.running),
+            Style::default().fg(colors.info),
+        ));
+    }
+    if counts.pending > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CB} {} pending", counts.pending),
+            Style::default().fg(colors.text_dim),
+        ));
+    }
+    if counts.failed > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{2717} {} failed", counts.failed),
+            Style::default().fg(colors.error),
+        ));
+    }
+    // Clickable dismiss when all agents are in terminal state
+    if counts.running == 0 && counts.pending == 0 && !agents.is_empty() {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            "\u{25B8} clear",
+            Style::default().fg(colors.text_muted),
+        ));
+        dismiss_line_offset = Some(lines.len());
+    }
+    lines.push(Line::from(header_spans));
+    lines.push(Line::from(""));
+
+    // Per-agent rows
+    // Layout: "  {dot} {task_name}  {right_status}"
+    // Total width available minus: 2 indent + 1 dot + 1 space + 2 trailing spaces + right_status
+    for agent in agents {
+        let (dot_char, color_key) = agent_status_display(&agent.state);
+        // Blink running/waiting dots in sync (● ↔ ○ every ~10 ticks)
+        let dot: &str = if matches!(color_key, "run" | "warn") {
+            if (tick / 10).is_multiple_of(2) {
+                "\u{25CF}"
+            } else {
+                "\u{25CB}"
+            }
+        } else {
+            dot_char
+        };
+        let dot_color = match color_key {
+            "run" => colors.info,
+            "done" => colors.success,
+            "fail" => colors.error,
+            "warn" => colors.warning,
+            _ => colors.text_dim,
+        };
+
+        let right_status: String = match &agent.state {
+            SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
+            SubAgentState::Pending => "pending".to_string(),
+            SubAgentState::WaitingApproval { tool_name } => format!("waiting: {tool_name}"),
+            SubAgentState::Done => "done".to_string(),
+            SubAgentState::Failed { .. } => "failed".to_string(),
+            SubAgentState::Conflict { .. } => "conflict".to_string(),
+        };
+
+        // Compute max task name width: width - 2 indent - 1 dot - 1 space - 2 gap - right_status
+        let fixed = 2 + 1 + 1 + 2 + right_status.chars().count();
+        let max_task = (sidebar_width as usize).saturating_sub(fixed);
+        let task_chars: usize = agent.task.chars().count();
+        let display_task: String = if task_chars > max_task && max_task > 1 {
+            let truncated: String = agent
+                .task
+                .chars()
+                .take(max_task.saturating_sub(1))
+                .collect();
+            format!("{truncated}\u{2026}")
+        } else {
+            agent.task.clone()
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(dot, Style::default().fg(dot_color)),
+            Span::raw(" "),
+            Span::styled(display_task, Style::default().fg(colors.text)),
+            Span::raw("  "),
+            Span::styled(right_status, Style::default().fg(colors.text_muted)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    dismiss_line_offset
+}
+
 /// Render the sidebar panel.
+/// Returns the absolute screen row of the agents dismiss button, if one is shown.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
@@ -25,7 +182,10 @@ pub fn render(
     tick: u64,
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
     active_watchers: &[crate::scm::watcher::Watcher],
-) {
+    sub_agents: &[SubAgent],
+    files_modified_collapsed: bool,
+    files_modified_header_row: &std::cell::Cell<Option<u16>>,
+) -> Option<u16> {
     let colors = Colors::default();
 
     // Sidebar block with left border only
@@ -128,7 +288,7 @@ pub fn render(
     lines.push(Line::from(""));
 
     // --- Files Modified section ---
-    render_files_modified(&mut lines, modified_files, inner.width, &colors);
+    let files_header_line = render_files_modified(&mut lines, modified_files, inner.width, &colors, files_modified_collapsed);
 
     // --- MCP Servers section ---
     lines.push(Line::from(Span::styled(
@@ -328,6 +488,26 @@ pub fn render(
         }
     }
 
+    // --- Agents section (only when agents exist) ---
+    let mut dismiss_row: Option<u16> = None;
+    if !sub_agents.is_empty() {
+        // Separator before agents section
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                "\u{2500}".repeat(inner.width.saturating_sub(4) as usize)
+            ),
+            Style::default().fg(colors.border),
+        )));
+        lines.push(Line::from(""));
+        if let Some(offset) =
+            render_agents_section(&mut lines, sub_agents, inner.width, &colors, tick)
+        {
+            dismiss_row = Some(inner.y + offset as u16);
+        }
+    }
+
     // Render fixed sections
     let fixed_height = lines.len() as u16;
     let fixed_area = Rect {
@@ -336,6 +516,14 @@ pub fn render(
         width: inner.width,
         height: fixed_height.min(inner.height),
     };
+    // Compute screen row for files modified header click zone
+    let header_screen_y = inner.y + files_header_line as u16;
+    if header_screen_y < inner.y + fixed_area.height {
+        files_modified_header_row.set(Some(header_screen_y));
+    } else {
+        files_modified_header_row.set(None);
+    }
+
     frame.render_widget(Paragraph::new(lines), fixed_area);
 
     // --- Tasks section (scrollable, takes remaining space) ---
@@ -354,6 +542,8 @@ pub fn render(
             render_tasks(frame, tasks_area, outline, tick, &colors);
         }
     }
+
+    dismiss_row
 }
 
 /// Render the tasks section with auto-scroll.
@@ -528,59 +718,72 @@ fn truncate_provider_name(name: &str, max: usize) -> String {
 }
 
 /// Render the "Files Modified" sidebar section.
+/// Returns the logical line index of the header (for click-zone mapping).
 fn render_files_modified(
     lines: &mut Vec<Line>,
     modified_files: &std::collections::HashMap<String, FileStats>,
     sidebar_width: u16,
     colors: &Colors,
-) {
+    collapsed: bool,
+) -> usize {
     // Only show files that were actually written/edited (have additions or deletions)
     let mut write_files: Vec<(&String, &FileStats)> = modified_files
         .iter()
         .filter(|(_, stats)| stats.additions > 0 || stats.deletions > 0)
         .collect();
 
-    lines.push(Line::from(Span::styled(
-        "  Files Modified",
-        Style::default().fg(colors.text_secondary).bold(),
-    )));
+    let file_count = write_files.len();
+    let arrow = if collapsed { "\u{25B6}" } else { "\u{25BC}" }; // ▶ or ▼
+    let header_line_idx = lines.len();
 
-    if write_files.is_empty() {
+    if file_count == 0 {
         lines.push(Line::from(Span::styled(
-            "  None",
-            Style::default().fg(colors.text_dim),
+            format!("  {arrow} Files Modified"),
+            Style::default().fg(colors.text_secondary).bold(),
         )));
-    } else {
-        // Sort by path for stable display
-        write_files.sort_by_key(|(path, _)| path.as_str());
-
-        for (path, stats) in &write_files {
-            // Show just the filename (or last 2 path components if space allows)
-            let display_name = shorten_path(path, sidebar_width.saturating_sub(16) as usize);
-
-            // Format: "  filename  +N -N"
-            let added = format!("+{}", stats.additions);
-            let removed = format!("-{}", stats.deletions);
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {display_name} "),
-                    Style::default().fg(colors.text_secondary),
-                ),
-                Span::styled(added, Style::default().fg(colors.success)),
-                Span::styled(" ", Style::default()),
-                Span::styled(removed, Style::default().fg(colors.error)),
-            ]));
+        if !collapsed {
+            lines.push(Line::from(Span::styled(
+                "    None",
+                Style::default().fg(colors.text_dim),
+            )));
         }
-
-        // Summary line
+    } else {
         let total_added: usize = write_files.iter().map(|(_, s)| s.additions).sum();
         let total_removed: usize = write_files.iter().map(|(_, s)| s.deletions).sum();
-        let file_count = write_files.len();
-        lines.push(Line::from(Span::styled(
-            format!("  {file_count} file(s) +{total_added} -{total_removed}"),
-            Style::default().fg(colors.text_muted),
-        )));
+
+        // Header with count summary
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {arrow} Files Modified "),
+                Style::default().fg(colors.text_secondary).bold(),
+            ),
+            Span::styled(format!("{file_count}"), Style::default().fg(colors.text_muted)),
+            Span::styled(" ", Style::default()),
+            Span::styled(format!("+{total_added}"), Style::default().fg(colors.success)),
+            Span::styled(" ", Style::default()),
+            Span::styled(format!("-{total_removed}"), Style::default().fg(colors.error)),
+        ]));
+
+        if !collapsed {
+            // Sort by path for stable display
+            write_files.sort_by_key(|(path, _)| path.as_str());
+
+            for (path, stats) in &write_files {
+                let display_name = shorten_path(path, sidebar_width.saturating_sub(16) as usize);
+                let added = format!("+{}", stats.additions);
+                let removed = format!("-{}", stats.deletions);
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("    {display_name} "),
+                        Style::default().fg(colors.text_secondary),
+                    ),
+                    Span::styled(added, Style::default().fg(colors.success)),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(removed, Style::default().fg(colors.error)),
+                ]));
+            }
+        }
     }
 
     // Separator
@@ -593,6 +796,8 @@ fn render_files_modified(
         Style::default().fg(colors.border),
     )));
     lines.push(Line::from(""));
+
+    header_line_idx
 }
 
 /// Shorten a file path to fit within `max_width` characters.
@@ -622,6 +827,113 @@ fn shorten_path(path: &str, max_width: usize) -> String {
 
     // Truncate filename
     format!("{}…", &filename[..max_width.saturating_sub(1)])
+}
+
+#[cfg(test)]
+mod agents_section_tests {
+    use super::*;
+    use crate::sub_agent::{SubAgent, SubAgentState, format_elapsed};
+
+    #[test]
+    fn agent_status_dot_running() {
+        let (dot, _color_key) = agent_status_display(&SubAgentState::Running);
+        assert_eq!(dot, "●");
+    }
+
+    #[test]
+    fn agent_status_dot_pending() {
+        let (dot, _) = agent_status_display(&SubAgentState::Pending);
+        assert_eq!(dot, "○");
+    }
+
+    #[test]
+    fn agent_status_dot_done() {
+        let (dot, _) = agent_status_display(&SubAgentState::Done);
+        assert_eq!(dot, "✓");
+    }
+
+    #[test]
+    fn agent_status_dot_failed() {
+        let (dot, _) = agent_status_display(&SubAgentState::Failed {
+            message: "oops".into(),
+        });
+        assert_eq!(dot, "✗");
+    }
+
+    #[test]
+    fn agent_status_dot_conflict() {
+        let (dot, _) = agent_status_display(&SubAgentState::Conflict {
+            report: "conflict".into(),
+        });
+        assert_eq!(dot, "✗");
+    }
+
+    #[test]
+    fn agents_section_counts() {
+        let agents = vec![
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Pending),
+            make_agent(SubAgentState::Done),
+        ];
+        let counts = agent_counts(&agents);
+        assert_eq!(counts.running, 2);
+        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.failed, 0);
+    }
+
+    #[test]
+    fn agent_status_waiting_approval_color_warn() {
+        let (dot, color_key) = agent_status_display(&SubAgentState::WaitingApproval {
+            tool_name: "edit_file".into(),
+        });
+        assert_eq!(dot, "●");
+        assert_eq!(color_key, "warn");
+    }
+
+    #[test]
+    fn dismiss_none_when_agents_running() {
+        let agents = vec![
+            make_agent(SubAgentState::Running),
+            make_agent(SubAgentState::Done),
+        ];
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
+        assert!(result.is_none(), "dismiss should not show when agents still running");
+    }
+
+    #[test]
+    fn dismiss_some_when_all_terminal() {
+        let agents = vec![
+            make_agent(SubAgentState::Done),
+            make_agent(SubAgentState::Failed { message: "err".into() }),
+        ];
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
+        assert!(result.is_some(), "dismiss should show when all agents terminal");
+    }
+
+    #[test]
+    fn dismiss_none_when_no_agents() {
+        let colors = Colors::default();
+        let mut lines = Vec::new();
+        let result = render_agents_section(&mut lines, &[], 40, &colors, 0);
+        assert!(result.is_none());
+    }
+
+    fn make_agent(state: SubAgentState) -> SubAgent {
+        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        a.state = state;
+        a
+    }
+
+    // Suppress unused import warning when format_elapsed is not directly called in tests
+    #[allow(dead_code)]
+    fn _use_format_elapsed() -> String {
+        format_elapsed(0)
+    }
 }
 
 #[cfg(test)]

@@ -168,8 +168,8 @@ impl Colors {
             bg_hover: Color::Rgb(30, 30, 30),     // #1e1e1e
 
             // Borders
-            border: Color::Rgb(42, 42, 42),          // #2a2a2a
-            border_active: Color::Rgb(155, 35, 53),  // #9b2335 — brand accent
+            border: Color::Rgb(42, 42, 42),         // #2a2a2a
+            border_active: Color::Rgb(155, 35, 53), // #9b2335 — brand accent
 
             // Text hierarchy
             text: Color::Rgb(238, 238, 238),           // #eeeeee
@@ -190,8 +190,8 @@ impl Colors {
             info: Color::Rgb(91, 155, 213),    // #5b9bd5
 
             // Brand
-            brand: Color::Rgb(155, 35, 53),          // #9b2335 — classic caboose maroon
-            brand_muted: Color::Rgb(128, 128, 128),  // #808080
+            brand: Color::Rgb(155, 35, 53), // #9b2335 — classic caboose maroon
+            brand_muted: Color::Rgb(128, 128, 128), // #808080
 
             roundhouse: Color::Rgb(168, 85, 247), // #a855f7 — purple
 

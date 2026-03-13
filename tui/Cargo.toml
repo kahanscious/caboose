@@ -1,6 +1,6 @@
 [package]
 name = "caboose"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A terminal-native AI coding agent built in Rust"
 repository = "https://github.com/kahanscious/caboose"

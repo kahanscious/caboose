@@ -13,7 +13,14 @@ impl ToolRenderer for GrepRenderer {
         &["grep"]
     }
 
-    fn render(&self, tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'static>> {
+    fn render(
+        &self,
+        tool: &ToolMessage,
+        colors: &Colors,
+        tick: u64,
+        _diff_expanded: bool,
+        _diff_scroll: usize,
+    ) -> Vec<Line<'static>> {
         render(tool, colors, tick)
     }
 }
