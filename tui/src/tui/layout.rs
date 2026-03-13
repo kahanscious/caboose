@@ -501,12 +501,10 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         // If text hasn't started yet, add assistant header so thinking has context
         if app.agent.streaming_text.is_empty() {
             msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
-            let accent = mode_accent(app.mode, colors);
             lines.push(Line::from(vec![
                 Span::styled("● ", Style::default().fg(colors.text_dim)),
                 Span::styled("Caboose", Style::default().fg(colors.text_secondary).bold()),
             ]));
-            let _ = accent; // suppress unused warning
         }
         let collapsed = !app.expanded_thinking.contains(&usize::MAX);
         thinking_lines.push((lines.len(), usize::MAX));
@@ -732,13 +730,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
 
     // Show animated status indicators for non-idle states
     {
-        const THINKING_PHRASES: &[&str] = &[
-            "Thinking...",
-            "Working...",
-            "Caboosing...",
-            "Chugging along...",
-            "Choo chooing...",
-        ];
+        use crate::tui::chat::THINKING_PHRASES;
         // Rotate phrase every ~2.5 seconds (50 ticks at 20 FPS)
         const PHRASE_TICKS: u64 = 50;
         let phrase_idx = (app.tick / PHRASE_TICKS) as usize;

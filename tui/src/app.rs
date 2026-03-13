@@ -89,7 +89,6 @@ pub struct State {
     /// Messages expanded past truncation threshold.
     pub expanded_messages: std::collections::HashSet<usize>,
     /// Indices of assistant messages whose thinking blocks are expanded.
-    #[allow(dead_code)]
     pub expanded_thinking: std::collections::HashSet<usize>,
     pub pricing: crate::provider::pricing::PricingRegistry,
     pub tool_renderers: crate::tui::tools::ToolRendererRegistry,
@@ -355,7 +354,6 @@ pub enum ChatMessage {
     },
     Assistant {
         content: String,
-        #[allow(dead_code)]
         thinking: Option<String>,
     },
     Tool(ToolMessage),
@@ -8214,12 +8212,12 @@ impl App {
                     .join(""),
             };
             let text = text.trim().to_string();
-            if !text.is_empty() {
-                let thinking = if self.state.agent.streaming_thinking.is_empty() {
-                    None
-                } else {
-                    Some(std::mem::take(&mut self.state.agent.streaming_thinking))
-                };
+            let thinking = if self.state.agent.streaming_thinking.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(&mut self.state.agent.streaming_thinking))
+            };
+            if !text.is_empty() || thinking.is_some() {
                 let t0 = Instant::now();
                 if let Some(ref thinking) = thinking {
                     self.persist_message("thinking", thinking);
