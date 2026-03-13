@@ -4,6 +4,15 @@ use ratatui::prelude::*;
 
 use crate::tui::theme::Colors;
 
+/// Animated thinking phrases shared across the thinking block and status indicator.
+pub const THINKING_PHRASES: &[&str] = &[
+    "Thinking...",
+    "Working...",
+    "Caboosing...",
+    "Chugging along...",
+    "Choo chooing...",
+];
+
 /// Render a user message as styled Lines.
 pub fn render_user_message(
     content: &str,
@@ -637,7 +646,6 @@ fn parse_inline_formatting(text: &str, colors: &Colors) -> Vec<Span<'static>> {
 ///
 /// Collapsed: `▶ Thinking...` (typewriter-animated, text_muted, italic)
 /// Expanded:  `▼ thinking` header + `│ content` lines (text_dim, plain text)
-#[allow(dead_code)]
 pub fn render_thinking_block(
     thinking: &str,
     collapsed: bool,
@@ -647,13 +655,6 @@ pub fn render_thinking_block(
     let mut lines = Vec::new();
 
     if collapsed {
-        const THINKING_PHRASES: &[&str] = &[
-            "Thinking...",
-            "Working...",
-            "Caboosing...",
-            "Chugging along...",
-            "Choo chooing...",
-        ];
         const PHRASE_TICKS: u64 = 50;
         let phrase_idx = (tick / PHRASE_TICKS) as usize;
         let chars_visible = ((tick % PHRASE_TICKS) / 2 + 1) as usize;
