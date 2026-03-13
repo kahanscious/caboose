@@ -92,16 +92,42 @@ pub fn format_elapsed(secs: u64) -> String {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentEvent {
-    StreamLine { id: Uuid, line: SubAgentStreamLine },
-    StateChange { id: Uuid, state: SubAgentState },
-    CostUpdate { id: Uuid, cost_usd: f64 },
-    AgentMerged { id: Uuid, task: String, elapsed_secs: u64, cost_usd: f64 },
-    AgentFailed { id: Uuid, task: String, message: String },
-    AgentConflict { id: Uuid, task: String, worktree_path: PathBuf },
+    StreamLine {
+        id: Uuid,
+        line: SubAgentStreamLine,
+    },
+    StateChange {
+        id: Uuid,
+        state: SubAgentState,
+    },
+    CostUpdate {
+        id: Uuid,
+        cost_usd: f64,
+    },
+    AgentMerged {
+        id: Uuid,
+        task: String,
+        elapsed_secs: u64,
+        cost_usd: f64,
+    },
+    AgentFailed {
+        id: Uuid,
+        task: String,
+        message: String,
+    },
+    AgentConflict {
+        id: Uuid,
+        task: String,
+        worktree_path: PathBuf,
+    },
     /// Subagent needs user approval to proceed.
     /// `id` is the SubAgent's UUID — use it to find the correct `approval_tx`
     /// in `State::sub_agents`.
-    ApprovalRequest { id: Uuid, tool_name: String, arguments: String },
+    ApprovalRequest {
+        id: Uuid,
+        tool_name: String,
+        arguments: String,
+    },
 }
 
 /// Result from a completed spawn_agent background task.
@@ -170,7 +196,9 @@ mod tests {
 
     #[test]
     fn waiting_approval_variant() {
-        let state = SubAgentState::WaitingApproval { tool_name: "write_file".to_string() };
+        let state = SubAgentState::WaitingApproval {
+            tool_name: "write_file".to_string(),
+        };
         assert!(matches!(state, SubAgentState::WaitingApproval { .. }));
     }
 
@@ -199,8 +227,12 @@ mod tests {
     fn task_pipeline_struct() {
         let p = TaskPipeline {
             stages: vec![
-                TaskStage { tasks: vec!["a".into(), "b".into()] },
-                TaskStage { tasks: vec!["c".into()] },
+                TaskStage {
+                    tasks: vec!["a".into(), "b".into()],
+                },
+                TaskStage {
+                    tasks: vec!["c".into()],
+                },
             ],
         };
         assert_eq!(p.stages.len(), 2);

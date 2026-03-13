@@ -19,11 +19,11 @@ pub struct AgentCounts {
 /// Color keys: "run" = info (blue), "done" = success (green), "fail" = error (red), "dim" = dim
 pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static str) {
     match state {
-        SubAgentState::Running => ("\u{25CF}", "run"),   // ●
-        SubAgentState::Pending => ("\u{25CB}", "dim"),   // ○
+        SubAgentState::Running => ("\u{25CF}", "run"), // ●
+        SubAgentState::Pending => ("\u{25CB}", "dim"), // ○
         SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
-        SubAgentState::Done => ("\u{2713}", "done"),     // ✓
-        SubAgentState::Failed { .. } => ("\u{2717}", "fail"),   // ✗
+        SubAgentState::Done => ("\u{2713}", "done"),   // ✓
+        SubAgentState::Failed { .. } => ("\u{2717}", "fail"), // ✗
         SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
     }
 }
@@ -31,12 +31,21 @@ pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static st
 /// Count running, pending, and failed agents.
 pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
     AgentCounts {
-        running: agents.iter().filter(|a| matches!(a.state, SubAgentState::Running)).count(),
-        pending: agents.iter().filter(|a| matches!(a.state, SubAgentState::Pending)).count(),
+        running: agents
+            .iter()
+            .filter(|a| matches!(a.state, SubAgentState::Running))
+            .count(),
+        pending: agents
+            .iter()
+            .filter(|a| matches!(a.state, SubAgentState::Pending))
+            .count(),
         failed: agents
             .iter()
             .filter(|a| {
-                matches!(a.state, SubAgentState::Failed { .. } | SubAgentState::Conflict { .. })
+                matches!(
+                    a.state,
+                    SubAgentState::Failed { .. } | SubAgentState::Conflict { .. }
+                )
             })
             .count(),
     }
@@ -99,7 +108,11 @@ pub fn render_agents_section(
         let (dot_char, color_key) = agent_status_display(&agent.state);
         // Blink running/waiting dots in sync (● ↔ ○ every ~10 ticks)
         let dot: &str = if matches!(color_key, "run" | "warn") {
-            if (tick / 10).is_multiple_of(2) { "\u{25CF}" } else { "\u{25CB}" }
+            if (tick / 10).is_multiple_of(2) {
+                "\u{25CF}"
+            } else {
+                "\u{25CB}"
+            }
         } else {
             dot_char
         };
@@ -125,7 +138,11 @@ pub fn render_agents_section(
         let max_task = (sidebar_width as usize).saturating_sub(fixed);
         let task_chars: usize = agent.task.chars().count();
         let display_task: String = if task_chars > max_task && max_task > 1 {
-            let truncated: String = agent.task.chars().take(max_task.saturating_sub(1)).collect();
+            let truncated: String = agent
+                .task
+                .chars()
+                .take(max_task.saturating_sub(1))
+                .collect();
             format!("{truncated}\u{2026}")
         } else {
             agent.task.clone()
@@ -482,7 +499,9 @@ pub fn render(
             Style::default().fg(colors.border),
         )));
         lines.push(Line::from(""));
-        if let Some(offset) = render_agents_section(&mut lines, sub_agents, inner.width, &colors, tick) {
+        if let Some(offset) =
+            render_agents_section(&mut lines, sub_agents, inner.width, &colors, tick)
+        {
             dismiss_row = Some(inner.y + offset as u16);
         }
     }
@@ -810,13 +829,17 @@ mod agents_section_tests {
 
     #[test]
     fn agent_status_dot_failed() {
-        let (dot, _) = agent_status_display(&SubAgentState::Failed { message: "oops".into() });
+        let (dot, _) = agent_status_display(&SubAgentState::Failed {
+            message: "oops".into(),
+        });
         assert_eq!(dot, "✗");
     }
 
     #[test]
     fn agent_status_dot_conflict() {
-        let (dot, _) = agent_status_display(&SubAgentState::Conflict { report: "conflict".into() });
+        let (dot, _) = agent_status_display(&SubAgentState::Conflict {
+            report: "conflict".into(),
+        });
         assert_eq!(dot, "✗");
     }
 
@@ -842,7 +865,9 @@ mod agents_section_tests {
 
     // Suppress unused import warning when format_elapsed is not directly called in tests
     #[allow(dead_code)]
-    fn _use_format_elapsed() -> String { format_elapsed(0) }
+    fn _use_format_elapsed() -> String {
+        format_elapsed(0)
+    }
 }
 
 #[cfg(test)]

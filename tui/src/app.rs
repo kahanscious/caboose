@@ -332,7 +332,7 @@ pub struct ToolMessage {
     pub status: ToolStatus,
     pub expanded: bool,
     pub file_path: Option<String>,
-    pub diff_preview: Option<Vec<String>>,  // pre-computed diff lines for pending state
+    pub diff_preview: Option<Vec<String>>, // pre-computed diff lines for pending state
     /// Per-message diff expand/collapse state for post-execution diffs.
     /// For pending messages this is unused — pending diff state lives in State.diff_expanded.
     /// For post-execution edit_file / apply_patch, true = diff shown (default), false = collapsed.
@@ -657,8 +657,8 @@ impl App {
         let mut agent = AgentLoop::new(system_prompt, permission_mode);
 
         // Wire primary_root into agent for cross-workspace write detection
-        let primary_root = std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
-            .unwrap_or_default();
+        let primary_root =
+            std::fs::canonicalize(std::env::current_dir().unwrap_or_default()).unwrap_or_default();
         agent.primary_root = primary_root.clone();
         agent.workspace_paths = config.workspaces.values().map(|c| c.path.clone()).collect();
 
@@ -1162,10 +1162,7 @@ impl App {
     pub async fn run(&mut self) -> Result<()> {
         self.terminal.enter()?;
         // Set terminal tab title
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::SetTitle("caboose")
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetTitle("caboose"));
         // Enable bracketed paste for API key input
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
 
@@ -1303,12 +1300,15 @@ impl App {
                             let primary_canon = std::fs::canonicalize(&self.state.primary_root)
                                 .map(|p| p.to_string_lossy().to_string())
                                 .unwrap_or(primary.clone());
-                            state.path_matches = matches.into_iter().filter(|p| {
-                                let canon = std::fs::canonicalize(p)
-                                    .map(|c| c.to_string_lossy().to_string())
-                                    .unwrap_or_else(|_| p.clone());
-                                canon != primary_canon
-                            }).collect();
+                            state.path_matches = matches
+                                .into_iter()
+                                .filter(|p| {
+                                    let canon = std::fs::canonicalize(p)
+                                        .map(|c| c.to_string_lossy().to_string())
+                                        .unwrap_or_else(|_| p.clone());
+                                    canon != primary_canon
+                                })
+                                .collect();
                         }
                         self.state.workspace_scan_rx = None;
                     }
@@ -1450,8 +1450,10 @@ impl App {
                                     self.state.text_selection = None;
                                     // Sidebar border drag to resize
                                     if self.state.sidebar_visible {
-                                        let (tw, _) = crossterm::terminal::size().unwrap_or((80, 24));
-                                        let border_col = tw.saturating_sub(self.state.sidebar_width);
+                                        let (tw, _) =
+                                            crossterm::terminal::size().unwrap_or((80, 24));
+                                        let border_col =
+                                            tw.saturating_sub(self.state.sidebar_width);
                                         if mouse.column >= border_col.saturating_sub(1)
                                             && mouse.column <= border_col + 1
                                         {
@@ -1488,7 +1490,8 @@ impl App {
                                                 )
                                             });
                                             if !self.state.sub_agents.is_empty() {
-                                                let max = self.state.sub_agents.len().saturating_sub(1);
+                                                let max =
+                                                    self.state.sub_agents.len().saturating_sub(1);
                                                 if self.state.sidebar_agent_selected > max {
                                                     self.state.sidebar_agent_selected = max;
                                                 }
@@ -1512,7 +1515,8 @@ impl App {
                                             );
                                             if is_pending {
                                                 // Pending diff state lives on State, not ToolMessage
-                                                self.state.diff_expanded = !self.state.diff_expanded;
+                                                self.state.diff_expanded =
+                                                    !self.state.diff_expanded;
                                             } else if let Some(ChatMessage::Tool(tool_msg)) =
                                                 self.state.chat_messages.get_mut(msg_idx)
                                             {
@@ -1548,7 +1552,8 @@ impl App {
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
                                     if self.state.sidebar_drag.is_some() {
-                                        let (tw, _) = crossterm::terminal::size().unwrap_or((80, 24));
+                                        let (tw, _) =
+                                            crossterm::terminal::size().unwrap_or((80, 24));
                                         let new_width = tw.saturating_sub(mouse.column);
                                         self.state.sidebar_width = new_width.clamp(
                                             crate::tui::layout::SIDEBAR_MIN_WIDTH,
@@ -2039,7 +2044,11 @@ impl App {
                                 content: format!("agent failed: {} — {}", task, message),
                             });
                         }
-                        SubAgentEvent::AgentConflict { task, worktree_path, .. } => {
+                        SubAgentEvent::AgentConflict {
+                            task,
+                            worktree_path,
+                            ..
+                        } => {
                             pending_messages.push(ChatMessage::System {
                                 content: format!(
                                     "conflict: {} — worktree preserved at {}",
@@ -2048,18 +2057,27 @@ impl App {
                                 ),
                             });
                         }
-                        SubAgentEvent::ApprovalRequest { id, tool_name, arguments } => {
-                            if let Some(agent) = self.state.sub_agents.iter_mut().find(|a| a.id == id) {
+                        SubAgentEvent::ApprovalRequest {
+                            id,
+                            tool_name,
+                            arguments,
+                        } => {
+                            if let Some(agent) =
+                                self.state.sub_agents.iter_mut().find(|a| a.id == id)
+                            {
                                 if agent.auto_approve {
                                     // Auto-approve: send true immediately, stay Running
                                     if let Some(ref tx) = agent.approval_tx {
                                         let _ = tx.send(true);
                                     }
                                 } else {
-                                    agent.state = crate::sub_agent::SubAgentState::WaitingApproval {
-                                        tool_name: tool_name.clone(),
-                                    };
-                                    self.state.sub_agent_pending_approvals.push_back((id, tool_name, arguments));
+                                    agent.state =
+                                        crate::sub_agent::SubAgentState::WaitingApproval {
+                                            tool_name: tool_name.clone(),
+                                        };
+                                    self.state
+                                        .sub_agent_pending_approvals
+                                        .push_back((id, tool_name, arguments));
                                 }
                             }
                         }
@@ -2068,9 +2086,7 @@ impl App {
 
                 // Apply agent updates
                 for (id, state_opt, line_opt, cost_opt) in agent_updates {
-                    if let Some(agent) =
-                        self.state.sub_agents.iter_mut().find(|a| a.id == id)
-                    {
+                    if let Some(agent) = self.state.sub_agents.iter_mut().find(|a| a.id == id) {
                         if let Some(state) = state_opt {
                             if matches!(state, crate::sub_agent::SubAgentState::Running) {
                                 agent.started_at = Some(std::time::Instant::now());
@@ -2112,9 +2128,7 @@ impl App {
                     .state
                     .roundhouse_session
                     .as_ref()
-                    .is_some_and(|rh| {
-                        rh.phase == crate::roundhouse::RoundhousePhase::Executing
-                    })
+                    .is_some_and(|rh| rh.phase == crate::roundhouse::RoundhousePhase::Executing)
                 && let Some(ref mut rh) = self.state.roundhouse_session
             {
                 rh.phase = crate::roundhouse::RoundhousePhase::Complete;
@@ -2174,8 +2188,15 @@ impl App {
             return;
         }
 
-        // Escape cancels active agent operations before any UI dismissal
-        if key == KeyCode::Esc && !matches!(self.state.agent.state, AgentState::Idle) {
+        // Escape cancels active agent operations before any UI dismissal.
+        // Also fires when the main agent is idle but sub-agents/tasks/approvals
+        // are still active — the user expects a clean slate after Escape.
+        if key == KeyCode::Esc
+            && (!matches!(self.state.agent.state, AgentState::Idle)
+                || !self.state.sub_agents.is_empty()
+                || self.state.sub_agent_approval_showing.is_some()
+                || !self.state.sub_agent_pending_approvals.is_empty())
+        {
             self.cancel_all_operations();
             return;
         }
@@ -2224,11 +2245,8 @@ impl App {
                         self.state.sub_agent_approval_showing.take()
                     {
                         let approved = matches!(key, KeyCode::Char('y') | KeyCode::Char('a'));
-                        if let Some(agent) = self
-                            .state
-                            .sub_agents
-                            .iter_mut()
-                            .find(|a| a.id == agent_id)
+                        if let Some(agent) =
+                            self.state.sub_agents.iter_mut().find(|a| a.id == agent_id)
                         {
                             if matches!(key, KeyCode::Char('a')) {
                                 agent.auto_approve = true;
@@ -5000,8 +5018,8 @@ impl App {
         key: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use crate::tui::dialog::{AgentStreamOverlayState, DialogKind};
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match key {
             KeyCode::Esc => {
@@ -5062,8 +5080,8 @@ impl App {
     }
 
     fn handle_workspace_list_key(&mut self, key: crossterm::event::KeyCode) {
-        use crossterm::event::KeyCode;
         use crate::tui::dialog::{DialogKind, WorkspaceAddState};
+        use crossterm::event::KeyCode;
 
         match key {
             KeyCode::Esc => {
@@ -5085,27 +5103,36 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                self.state.dialog_stack.push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
+                self.state
+                    .dialog_stack
+                    .push(DialogKind::WorkspaceAdd(WorkspaceAddState::default()));
             }
             KeyCode::Char('e') | KeyCode::Enter => {
                 // Edit the selected workspace (mode + permissions only)
-                let edit_state = if let Some(DialogKind::WorkspaceList(state)) =
-                    self.state.dialog_stack.top()
-                {
-                    state.workspaces.get(state.selected).map(|(name, cfg, _)| {
-                        use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
-                        let mode_selected = if cfg.mode == WorkspaceMode::Proactive { 0 } else { 1 };
-                        let permissions_selected = if cfg.access == WorkspaceAccess::ReadWrite { 0 } else { 1 };
-                        WorkspaceAddState::for_edit(
-                            name.clone(),
-                            cfg.path.clone(),
-                            mode_selected,
-                            permissions_selected,
-                        )
-                    })
-                } else {
-                    None
-                };
+                let edit_state =
+                    if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top() {
+                        state.workspaces.get(state.selected).map(|(name, cfg, _)| {
+                            use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+                            let mode_selected = if cfg.mode == WorkspaceMode::Proactive {
+                                0
+                            } else {
+                                1
+                            };
+                            let permissions_selected = if cfg.access == WorkspaceAccess::ReadWrite {
+                                0
+                            } else {
+                                1
+                            };
+                            WorkspaceAddState::for_edit(
+                                name.clone(),
+                                cfg.path.clone(),
+                                mode_selected,
+                                permissions_selected,
+                            )
+                        })
+                    } else {
+                        None
+                    };
                 if let Some(s) = edit_state
                     && !s.path_input.is_empty()
                 {
@@ -5116,7 +5143,10 @@ impl App {
                 let name_to_remove = if let Some(DialogKind::WorkspaceList(state)) =
                     self.state.dialog_stack.top_mut()
                 {
-                    state.workspaces.get(state.selected).map(|(n, _, _)| n.clone())
+                    state
+                        .workspaces
+                        .get(state.selected)
+                        .map(|(n, _, _)| n.clone())
                 } else {
                     None
                 };
@@ -5125,7 +5155,9 @@ impl App {
                     crate::config::remove_workspace(&name);
                     // Update in-memory config
                     self.state.config.workspaces.remove(&name);
-                    if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top_mut() {
+                    if let Some(DialogKind::WorkspaceList(state)) =
+                        self.state.dialog_stack.top_mut()
+                    {
                         state.workspaces.retain(|(n, _, _)| n != &name);
                         state.clamp_selected();
                     }
@@ -5136,13 +5168,14 @@ impl App {
     }
 
     async fn handle_workspace_add_key(&mut self, key: crossterm::event::KeyCode) {
-        use crossterm::event::KeyCode;
         use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+        use crossterm::event::KeyCode;
 
         match key {
             KeyCode::Esc => {
                 // Clone phase out of the shared borrow before taking any mutable borrow.
-                let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top()
+                {
                     s.phase.clone()
                 } else {
                     return;
@@ -5178,13 +5211,19 @@ impl App {
                 if let Some(DialogKind::WorkspaceAdd(state)) = self.state.dialog_stack.top_mut() {
                     match state.phase {
                         WorkspaceAddPhase::Path => {
-                            if state.path_selected > 0 { state.path_selected -= 1; }
+                            if state.path_selected > 0 {
+                                state.path_selected -= 1;
+                            }
                         }
                         WorkspaceAddPhase::Mode => {
-                            if state.mode_selected > 0 { state.mode_selected -= 1; }
+                            if state.mode_selected > 0 {
+                                state.mode_selected -= 1;
+                            }
                         }
                         WorkspaceAddPhase::Permissions => {
-                            if state.permissions_selected > 0 { state.permissions_selected -= 1; }
+                            if state.permissions_selected > 0 {
+                                state.permissions_selected -= 1;
+                            }
                         }
                         _ => {}
                     }
@@ -5195,13 +5234,19 @@ impl App {
                     match state.phase {
                         WorkspaceAddPhase::Path => {
                             let max = state.path_matches.len().saturating_sub(1);
-                            if state.path_selected < max { state.path_selected += 1; }
+                            if state.path_selected < max {
+                                state.path_selected += 1;
+                            }
                         }
                         WorkspaceAddPhase::Mode => {
-                            if state.mode_selected < 1 { state.mode_selected += 1; }
+                            if state.mode_selected < 1 {
+                                state.mode_selected += 1;
+                            }
                         }
                         WorkspaceAddPhase::Permissions => {
-                            if state.permissions_selected < 1 { state.permissions_selected += 1; }
+                            if state.permissions_selected < 1 {
+                                state.permissions_selected += 1;
+                            }
                         }
                         _ => {}
                     }
@@ -5255,8 +5300,8 @@ impl App {
     }
 
     async fn handle_workspace_add_confirm(&mut self) {
-        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
         use crate::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
+        use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
 
         let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
             s.phase.clone()
@@ -5267,17 +5312,19 @@ impl App {
         match phase {
             WorkspaceAddPhase::Path => {
                 // Determine confirmed path: use highlighted suggestion or raw input
-                let confirmed_path = if let Some(DialogKind::WorkspaceAdd(s)) =
-                    self.state.dialog_stack.top()
-                {
-                    if !s.path_matches.is_empty() {
-                        s.path_matches.get(s.path_selected).cloned().unwrap_or_else(|| s.path_input.clone())
+                let confirmed_path =
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                        if !s.path_matches.is_empty() {
+                            s.path_matches
+                                .get(s.path_selected)
+                                .cloned()
+                                .unwrap_or_else(|| s.path_input.clone())
+                        } else {
+                            s.path_input.clone()
+                        }
                     } else {
-                        s.path_input.clone()
-                    }
-                } else {
-                    return;
-                };
+                        return;
+                    };
 
                 // Validate path
                 let path = std::path::Path::new(&confirmed_path);
@@ -5296,7 +5343,8 @@ impl App {
                 let canonical = match std::fs::canonicalize(path) {
                     Ok(p) => p,
                     Err(_) => {
-                        if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
+                        if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut()
+                        {
                             s.error = Some("cannot resolve path".to_string());
                         }
                         return;
@@ -5312,14 +5360,20 @@ impl App {
                     || self.state.primary_root.starts_with(&canonical)
                 {
                     if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
-                        s.error = Some("workspace cannot be nested inside the primary repo (or vice versa)".to_string());
+                        s.error = Some(
+                            "workspace cannot be nested inside the primary repo (or vice versa)"
+                                .to_string(),
+                        );
                     }
                     return;
                 }
                 // Check not already registered
-                let already_registered = self.state.config.workspaces.values().any(|w| {
-                    std::fs::canonicalize(&w.path).ok().as_ref() == Some(&canonical)
-                });
+                let already_registered = self
+                    .state
+                    .config
+                    .workspaces
+                    .values()
+                    .any(|w| std::fs::canonicalize(&w.path).ok().as_ref() == Some(&canonical));
                 if already_registered {
                     if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top_mut() {
                         s.error = Some("this path is already registered".to_string());
@@ -5342,7 +5396,8 @@ impl App {
             }
 
             WorkspaceAddPhase::Name => {
-                let name = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                let name = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top()
+                {
                     s.name_input.trim().to_string()
                 } else {
                     return;
@@ -5384,23 +5439,28 @@ impl App {
             }
 
             WorkspaceAddPhase::Permissions => {
-                let (path, name, mode, access, editing_name) = if let Some(DialogKind::WorkspaceAdd(s)) =
-                    self.state.dialog_stack.top()
-                {
-                    let mode = if s.mode_selected == 0 {
-                        WorkspaceMode::Proactive
+                let (path, name, mode, access, editing_name) =
+                    if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
+                        let mode = if s.mode_selected == 0 {
+                            WorkspaceMode::Proactive
+                        } else {
+                            WorkspaceMode::Explicit
+                        };
+                        let access = if s.permissions_selected == 0 {
+                            WorkspaceAccess::ReadWrite
+                        } else {
+                            WorkspaceAccess::ReadOnly
+                        };
+                        (
+                            s.path_input.clone(),
+                            s.name_input.trim().to_string(),
+                            mode,
+                            access,
+                            s.editing_name.clone(),
+                        )
                     } else {
-                        WorkspaceMode::Explicit
+                        return;
                     };
-                    let access = if s.permissions_selected == 0 {
-                        WorkspaceAccess::ReadWrite
-                    } else {
-                        WorkspaceAccess::ReadOnly
-                    };
-                    (s.path_input.clone(), s.name_input.trim().to_string(), mode, access, s.editing_name.clone())
-                } else {
-                    return;
-                };
 
                 let cfg = WorkspaceConfig { path, mode, access };
                 crate::config::save_workspace(&name, &cfg);
@@ -5408,7 +5468,11 @@ impl App {
                 self.state.dialog_stack.pop();
                 self.refresh_workspace_list_state();
 
-                let verb = if editing_name.is_some() { "updated" } else { "added" };
+                let verb = if editing_name.is_some() {
+                    "updated"
+                } else {
+                    "added"
+                };
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("workspace '{name}' {verb}"),
                 });
@@ -5725,7 +5789,9 @@ impl App {
 
         let _ = args.get(1); // subcommand reserved for future use
         let state = build_workspace_list_state(&self.state.config);
-        self.state.dialog_stack.push(DialogKind::WorkspaceList(state));
+        self.state
+            .dialog_stack
+            .push(DialogKind::WorkspaceList(state));
     }
 
     /// Open the model dropdown (inline picker mode), loading models from the active provider.
@@ -6070,110 +6136,114 @@ impl App {
                 }
                 // Intercept spawn_agent calls before normal tool dispatch
                 else {
-
-                let spawn_calls: Vec<crate::agent::PendingToolCall> = self
-                    .state
-                    .agent
-                    .pending_tool_calls
-                    .iter()
-                    .filter(|tc| tc.name == "spawn_agent")
-                    .cloned()
-                    .collect();
-
-                if !spawn_calls.is_empty() {
-                    self.state
+                    let spawn_calls: Vec<crate::agent::PendingToolCall> = self
+                        .state
                         .agent
                         .pending_tool_calls
-                        .retain(|tc| tc.name != "spawn_agent");
+                        .iter()
+                        .filter(|tc| tc.name == "spawn_agent")
+                        .cloned()
+                        .collect();
 
-                    for call in spawn_calls {
-                        match self.spawn_agent_setup(&call.arguments).await {
-                            Ok((
-                                agent_id,
-                                input,
-                                provider,
-                                config,
-                                tx,
-                                task,
-                                branch,
-                                worktree_path,
-                            )) => {
-                                let placeholder_idx = self.state.chat_messages.len();
-                                self.state.chat_messages.push(ChatMessage::Tool(ToolMessage {
-                                    name: "spawn_agent".to_string(),
-                                    args: call.arguments.clone(),
-                                    output: None,
-                                    status: ToolStatus::Running,
-                                    expanded: false,
-                                    file_path: None,
-                                    diff_preview: None,
-                                    diff_expanded: false,
-                                }));
+                    if !spawn_calls.is_empty() {
+                        self.state
+                            .agent
+                            .pending_tool_calls
+                            .retain(|tc| tc.name != "spawn_agent");
 
-                                let tool_use_id = call.id.clone();
-                                let handle = tokio::spawn(run_spawn_agent_task(
+                        for call in spawn_calls {
+                            match self.spawn_agent_setup(&call.arguments).await {
+                                Ok((
                                     agent_id,
-                                    tool_use_id.clone(),
-                                    task,
-                                    branch,
-                                    worktree_path,
                                     input,
                                     provider,
                                     config,
                                     tx,
-                                ));
+                                    task,
+                                    branch,
+                                    worktree_path,
+                                )) => {
+                                    let placeholder_idx = self.state.chat_messages.len();
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::Tool(ToolMessage {
+                                            name: "spawn_agent".to_string(),
+                                            args: call.arguments.clone(),
+                                            output: None,
+                                            status: ToolStatus::Running,
+                                            expanded: false,
+                                            file_path: None,
+                                            diff_preview: None,
+                                            diff_expanded: false,
+                                        }));
 
-                                self.state.spawn_agent_handles.push(SpawnAgentHandle {
-                                    tool_use_id,
-                                    arguments: call.arguments,
-                                    chat_placeholder_idx: placeholder_idx,
-                                    handle,
-                                });
-                            }
-                            Err(err_msg) => {
-                                tracing::warn!("spawn_agent setup failed: {err_msg}");
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: format!("spawn_agent failed: {err_msg}"),
-                                });
-                                self.state.agent.conversation.push(
-                                    crate::agent::conversation::Message {
-                                        role: crate::agent::conversation::Role::User,
-                                        content:
-                                            crate::agent::conversation::Content::Blocks(vec![
-                                                crate::agent::conversation::ContentBlock::ToolResult {
-                                                    tool_use_id: call.id.clone(),
-                                                    content: err_msg.clone(),
-                                                    is_error: true,
-                                                },
-                                            ]),
-                                        tool_call_id: Some(call.id.clone()),
-                                    },
-                                );
-                                self.state.chat_messages.push(ChatMessage::Tool(ToolMessage {
-                                    name: "spawn_agent".to_string(),
-                                    args: call.arguments,
-                                    output: Some(err_msg),
-                                    status: ToolStatus::Failed,
-                                    expanded: false,
-                                    file_path: None,
-                                    diff_preview: None,
-                                    diff_expanded: false,
-                                }));
+                                    let tool_use_id = call.id.clone();
+                                    let handle = tokio::spawn(run_spawn_agent_task(
+                                        agent_id,
+                                        tool_use_id.clone(),
+                                        task,
+                                        branch,
+                                        worktree_path,
+                                        input,
+                                        provider,
+                                        config,
+                                        tx,
+                                    ));
+
+                                    self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                                        tool_use_id,
+                                        arguments: call.arguments,
+                                        chat_placeholder_idx: placeholder_idx,
+                                        handle,
+                                    });
+                                }
+                                Err(err_msg) => {
+                                    tracing::warn!("spawn_agent setup failed: {err_msg}");
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!("spawn_agent failed: {err_msg}"),
+                                    });
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: err_msg.clone(),
+                                                is_error: true,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::Tool(ToolMessage {
+                                            name: "spawn_agent".to_string(),
+                                            args: call.arguments,
+                                            output: Some(err_msg),
+                                            status: ToolStatus::Failed,
+                                            expanded: false,
+                                            file_path: None,
+                                            diff_preview: None,
+                                            diff_expanded: false,
+                                        }));
+                                }
                             }
                         }
-                    }
 
-                    if self.state.agent.pending_tool_calls.is_empty() {
-                        if self.state.spawn_agent_handles.is_empty() {
-                            self.finalize_tool_execution();
+                        if self.state.agent.pending_tool_calls.is_empty() {
+                            if self.state.spawn_agent_handles.is_empty() {
+                                self.finalize_tool_execution();
+                            }
+                            // else: spawn handles running — poll will finalize
+                        } else {
+                            self.start_tool_execution();
                         }
-                        // else: spawn handles running — poll will finalize
                     } else {
                         self.start_tool_execution();
                     }
-                } else {
-                    self.start_tool_execution();
-                }
                 }
             }
             AgentState::PendingApproval { .. } => {
@@ -6379,10 +6449,7 @@ impl App {
 
     /// Compute diff preview lines for a pending tool call. Returns None if not
     /// a write/edit/patch tool, or if preview is unavailable.
-    async fn compute_pending_diff(
-        name: &str,
-        args: &serde_json::Value,
-    ) -> Option<Vec<String>> {
+    async fn compute_pending_diff(name: &str, args: &serde_json::Value) -> Option<Vec<String>> {
         use crate::tools::write::compute_diff_lines;
         match name {
             "edit_file" => {
@@ -6423,11 +6490,7 @@ impl App {
                     .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
                     .map(|l| l.to_string())
                     .collect();
-                if lines.is_empty() {
-                    None
-                } else {
-                    Some(lines)
-                }
+                if lines.is_empty() { None } else { Some(lines) }
             }
             _ => None,
         }
@@ -7111,7 +7174,12 @@ impl App {
         let _ = tokio::task::spawn_blocking(move || {
             // Try removing stale worktree first (ignores errors)
             let _ = std::process::Command::new("git")
-                .args(["worktree", "remove", "--force", &path_cleanup.to_string_lossy()])
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &path_cleanup.to_string_lossy(),
+                ])
                 .output();
             // Try deleting stale branch (ignores errors)
             let _ = std::process::Command::new("git")
@@ -7130,9 +7198,7 @@ impl App {
 
         match worktree_result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Err(format!("spawn_agent: failed to create worktree: {e}"))
-            }
+            Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
             Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
         }
 
@@ -7181,9 +7247,7 @@ impl App {
         ) {
             Ok(p) => p,
             Err(e) => {
-                if let Some(a) =
-                    self.state.sub_agents.iter_mut().find(|a| a.id == agent_id)
-                {
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
                     a.state = crate::sub_agent::SubAgentState::Failed {
                         message: format!("no provider: {e}"),
                     };
@@ -7205,7 +7269,7 @@ impl App {
             None => {
                 return Err(
                     "spawn_agent: internal error — subagent channel not initialized".to_string(),
-                )
+                );
             }
         };
 
@@ -7517,10 +7581,37 @@ impl App {
                         tm.output = Some("Cancelled by user".to_string());
                     }
                 }
+                // Inject cancelled tool_results into the conversation for all
+                // tool_use blocks that haven't received results yet. Without
+                // these the API rejects the next request (orphaned tool_use).
+                let completed_count = self.state.tool_exec_results.len();
+                for tc in self
+                    .state
+                    .agent
+                    .pending_tool_calls
+                    .iter()
+                    .skip(completed_count)
+                {
+                    self.state
+                        .agent
+                        .conversation
+                        .push(crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Blocks(vec![
+                                crate::agent::conversation::ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: "Cancelled by user".to_string(),
+                                    is_error: true,
+                                },
+                            ]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                }
                 // Clear remaining queued tools
                 self.state.tool_exec_queue.clear();
                 self.state.tool_exec_results.clear();
                 self.state.tool_exec_args.clear();
+                self.state.agent.pending_tool_calls.clear();
                 self.state.agent.state = AgentState::Idle;
                 self.state.chat_messages.push(ChatMessage::System {
                     content: "Cancelled.".to_string(),
@@ -7539,6 +7630,24 @@ impl App {
                         };
                     }
                 }
+                // Inject cancelled tool_results into the conversation for all
+                // pending tool_use blocks so the API doesn't reject the next turn.
+                for tc in &self.state.agent.pending_tool_calls {
+                    self.state
+                        .agent
+                        .conversation
+                        .push(crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Blocks(vec![
+                                crate::agent::conversation::ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: "Cancelled by user".to_string(),
+                                    is_error: true,
+                                },
+                            ]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                }
                 self.state.agent.pending_tool_calls.clear();
                 self.state.agent.state = AgentState::Idle;
             }
@@ -7549,6 +7658,27 @@ impl App {
         if self.state.ask_user_session.is_some() {
             self.dismiss_ask_user();
         }
+
+        // Abort and clear spawn_agent background tasks so their results
+        // don't leak into the conversation after the user has moved on.
+        for sh in self.state.spawn_agent_handles.drain(..) {
+            sh.handle.abort();
+        }
+
+        // Clear all sub-agent state so the user gets a clean slate.
+        // Dropping approval_tx senders causes background agent tasks to stop
+        // waiting for approval and terminate gracefully.
+        self.state.sub_agents.clear();
+        self.state.sub_agent_approval_showing = None;
+        self.state.sub_agent_pending_approvals.clear();
+        self.state.agent_stream_overlay = None;
+        self.state.sidebar_focused = false;
+        self.state.sidebar_agent_selected = 0;
+
+        // Remove task outlines — they'll be repopulated on the next prompt
+        self.state
+            .chat_messages
+            .retain(|m| !matches!(m, ChatMessage::TaskOutline(_)));
     }
 
     /// Spawn the next tool from the queue on a background tokio task.
@@ -9153,7 +9283,13 @@ impl App {
         let mut id = format!("c-{:x}", ts % 0x1000000);
         // Ensure uniqueness against existing circuits
         let mut counter = 1u64;
-        while self.state.circuit_manager.circuits.iter().any(|h| h.circuit.id == id) {
+        while self
+            .state
+            .circuit_manager
+            .circuits
+            .iter()
+            .any(|h| h.circuit.id == id)
+        {
             id = format!("c-{:x}", (ts + counter) % 0x1000000);
             counter += 1;
         }
@@ -9505,17 +9641,12 @@ fn scan_roots() -> Vec<String> {
 /// Spawn a background tokio task to walk directories under the given roots.
 /// Results are sent via the returned mpsc receiver.
 /// Constraints: max depth 5, max 100 results, 1s timeout.
-fn spawn_dir_scan(
-    roots: Vec<String>,
-    query: String,
-) -> tokio::sync::mpsc::Receiver<Vec<String>> {
+fn spawn_dir_scan(roots: Vec<String>, query: String) -> tokio::sync::mpsc::Receiver<Vec<String>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(1000),
-            tokio::task::spawn_blocking(move || {
-                walk_dirs_fuzzy(&roots, &query)
-            }),
+            tokio::task::spawn_blocking(move || walk_dirs_fuzzy(&roots, &query)),
         )
         .await
         .ok()
@@ -9560,13 +9691,21 @@ fn walk_dirs_fuzzy(roots: &[String], query: &str) -> Vec<String> {
         if depth >= 5 || candidates.len() >= 200 {
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() { continue; }
+            if !path.is_dir() {
+                continue;
+            }
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') || is_ignored_dir(name) { continue; }
-            if !seen.insert(path.clone()) { continue; }
+            if name.starts_with('.') || is_ignored_dir(name) {
+                continue;
+            }
+            if !seen.insert(path.clone()) {
+                continue;
+            }
             if let Some(s) = path.to_str() {
                 candidates.push(s.to_string());
             }
@@ -9630,17 +9769,22 @@ fn is_ignored_dir(name: &str) -> bool {
     )
 }
 
-
-fn build_workspace_list_state(config: &crate::config::Config) -> crate::tui::dialog::WorkspaceListState {
+fn build_workspace_list_state(
+    config: &crate::config::Config,
+) -> crate::tui::dialog::WorkspaceListState {
     use crate::tui::dialog::WorkspaceListState;
-    let workspaces = config.workspaces
+    let workspaces = config
+        .workspaces
         .iter()
         .map(|(name, cfg)| {
             let available = std::path::Path::new(&cfg.path).exists();
             (name.clone(), cfg.clone(), available)
         })
         .collect::<Vec<_>>();
-    WorkspaceListState { workspaces, selected: 0 }
+    WorkspaceListState {
+        workspaces,
+        selected: 0,
+    }
 }
 
 /// Build the workspace context block for injection into the system prompt.
@@ -9664,8 +9808,14 @@ fn workspace_system_prompt_block(
         return String::new();
     }
 
-    let proactive: Vec<_> = available.iter().filter(|(_, c)| c.mode == WorkspaceMode::Proactive).collect();
-    let explicit: Vec<_> = available.iter().filter(|(_, c)| c.mode == WorkspaceMode::Explicit).collect();
+    let proactive: Vec<_> = available
+        .iter()
+        .filter(|(_, c)| c.mode == WorkspaceMode::Proactive)
+        .collect();
+    let explicit: Vec<_> = available
+        .iter()
+        .filter(|(_, c)| c.mode == WorkspaceMode::Explicit)
+        .collect();
 
     let mut block = String::new();
     block.push_str("\n\n<workspaces>\n");
@@ -9674,7 +9824,11 @@ fn workspace_system_prompt_block(
     if !proactive.is_empty() {
         block.push_str("Proactive — search these automatically when relevant:\n");
         for (name, cfg) in &proactive {
-            let access = if cfg.access == WorkspaceAccess::ReadOnly { "read-only" } else { "read-write" };
+            let access = if cfg.access == WorkspaceAccess::ReadOnly {
+                "read-only"
+            } else {
+                "read-write"
+            };
             block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
         }
         block.push('\n');
@@ -9683,7 +9837,11 @@ fn workspace_system_prompt_block(
     if !explicit.is_empty() {
         block.push_str("Explicit — only use when the user directly references by name:\n");
         for (name, cfg) in &explicit {
-            let access = if cfg.access == WorkspaceAccess::ReadOnly { "read-only" } else { "read-write" };
+            let access = if cfg.access == WorkspaceAccess::ReadOnly {
+                "read-only"
+            } else {
+                "read-write"
+            };
             block.push_str(&format!("- {name} ({access}): {}\n", cfg.path));
         }
         block.push('\n');
@@ -9899,7 +10057,8 @@ mod workspace_add_validation_tests {
     #[test]
     fn name_from_dirname() {
         let path = std::path::Path::new("/home/alex/caboose-web");
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
@@ -9932,17 +10091,23 @@ mod workspace_add_validation_tests {
 
 #[cfg(test)]
 mod workspace_list_handler_tests {
-    use crate::tui::dialog::{WorkspaceListState};
     use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use crate::tui::dialog::WorkspaceListState;
 
     fn make_state(n: usize) -> WorkspaceListState {
         WorkspaceListState {
             workspaces: (0..n)
-                .map(|i| (
-                    format!("ws-{i}"),
-                    WorkspaceConfig { path: format!("/tmp/ws{i}"), mode: WorkspaceMode::Proactive, access: crate::config::schema::WorkspaceAccess::ReadWrite },
-                    true,
-                ))
+                .map(|i| {
+                    (
+                        format!("ws-{i}"),
+                        WorkspaceConfig {
+                            path: format!("/tmp/ws{i}"),
+                            mode: WorkspaceMode::Proactive,
+                            access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                        },
+                        true,
+                    )
+                })
                 .collect(),
             selected: 0,
         }
@@ -10004,11 +10169,14 @@ mod workspace_prompt_tests {
         let path = std::env::temp_dir();
         let path_str = path.to_string_lossy().into_owned();
         let mut ws = HashMap::new();
-        ws.insert("caboose-web".to_string(), WorkspaceConfig {
-            path: path_str.clone(),
-            mode: WorkspaceMode::Proactive,
-            access: crate::config::schema::WorkspaceAccess::ReadWrite,
-        });
+        ws.insert(
+            "caboose-web".to_string(),
+            WorkspaceConfig {
+                path: path_str.clone(),
+                mode: WorkspaceMode::Proactive,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
         let block = build_workspace_block(&ws);
         assert!(block.contains("caboose-web"));
         assert!(block.contains(&path_str));
@@ -10020,11 +10188,14 @@ mod workspace_prompt_tests {
         let path = std::env::temp_dir();
         let path_str = path.to_string_lossy().into_owned();
         let mut ws = HashMap::new();
-        ws.insert("docs".to_string(), WorkspaceConfig {
-            path: path_str.clone(),
-            mode: WorkspaceMode::Explicit,
-            access: crate::config::schema::WorkspaceAccess::ReadWrite,
-        });
+        ws.insert(
+            "docs".to_string(),
+            WorkspaceConfig {
+                path: path_str.clone(),
+                mode: WorkspaceMode::Explicit,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
         let block = build_workspace_block(&ws);
         assert!(block.contains("docs"));
         assert!(block.contains("Explicit"));
@@ -10033,11 +10204,14 @@ mod workspace_prompt_tests {
     #[test]
     fn unavailable_workspace_omitted() {
         let mut ws = HashMap::new();
-        ws.insert("gone".to_string(), WorkspaceConfig {
-            path: "/nonexistent/path/xyz123".to_string(),
-            mode: WorkspaceMode::Proactive,
-            access: crate::config::schema::WorkspaceAccess::ReadWrite,
-        });
+        ws.insert(
+            "gone".to_string(),
+            WorkspaceConfig {
+                path: "/nonexistent/path/xyz123".to_string(),
+                mode: WorkspaceMode::Proactive,
+                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+            },
+        );
         let block = build_workspace_block(&ws);
         // Path doesn't exist — should be omitted
         assert!(block.is_empty());
