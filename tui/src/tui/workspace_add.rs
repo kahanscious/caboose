@@ -1,5 +1,7 @@
 //! WorkspaceAdd dialog renderer — 3-phase add flow: Path → Name → Mode.
 
+use crate::tui::dialog::{WorkspaceAddPhase, WorkspaceAddState};
+use crate::tui::theme::Colors;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -8,15 +10,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use crate::tui::dialog::{WorkspaceAddPhase, WorkspaceAddState};
-use crate::tui::theme::Colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceAddState) {
     let colors = Colors::active();
     let popup = centered_rect(50, 14, area);
     f.render_widget(Clear, popup);
 
-    let title = if state.editing_name.is_some() { " edit workspace " } else { " add workspace " };
+    let title = if state.editing_name.is_some() {
+        " edit workspace "
+    } else {
+        " add workspace "
+    };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -57,8 +61,7 @@ fn render_path_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new(format!("> {}█", state.path_input))
-            .style(Style::default().fg(colors.text)),
+        Paragraph::new(format!("> {}█", state.path_input)).style(Style::default().fg(colors.text)),
         chunks[1],
     );
 
@@ -66,13 +69,19 @@ fn render_path_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
         let items: Vec<ListItem> = state
             .path_matches
             .iter()
-            .map(|p| ListItem::new(Line::from(Span::styled(
-                format!("  {p}/"),
-                Style::default().fg(colors.text_secondary),
-            ))))
+            .map(|p| {
+                ListItem::new(Line::from(Span::styled(
+                    format!("  {p}/"),
+                    Style::default().fg(colors.text_secondary),
+                )))
+            })
             .collect();
         let mut list_state = ListState::default();
-        list_state.select(if state.path_matches.is_empty() { None } else { Some(state.path_selected) });
+        list_state.select(if state.path_matches.is_empty() {
+            None
+        } else {
+            Some(state.path_selected)
+        });
         let list = List::new(items)
             .highlight_style(
                 Style::default()
@@ -84,7 +93,10 @@ fn render_path_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
     }
 
     let hint_or_error = if let Some(ref err) = state.error {
-        Paragraph::new(Span::styled(err.as_str(), Style::default().fg(colors.error)))
+        Paragraph::new(Span::styled(
+            err.as_str(),
+            Style::default().fg(colors.error),
+        ))
     } else {
         Paragraph::new(" type to filter · ↑↓ select · ↵ confirm")
             .style(Style::default().fg(colors.text_dim))
@@ -108,16 +120,17 @@ fn render_name_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new(format!("> {}█", state.name_input))
-            .style(Style::default().fg(colors.text)),
+        Paragraph::new(format!("> {}█", state.name_input)).style(Style::default().fg(colors.text)),
         chunks[1],
     );
 
     let hint_or_error = if let Some(ref err) = state.error {
-        Paragraph::new(Span::styled(err.as_str(), Style::default().fg(colors.error)))
+        Paragraph::new(Span::styled(
+            err.as_str(),
+            Style::default().fg(colors.error),
+        ))
     } else {
-        Paragraph::new(" ↵ confirm · esc back")
-            .style(Style::default().fg(colors.text_dim))
+        Paragraph::new(" ↵ confirm · esc back").style(Style::default().fg(colors.text_dim))
     };
     f.render_widget(hint_or_error, chunks[3]);
 }
@@ -145,10 +158,12 @@ fn render_mode_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
 
     let items: Vec<ListItem> = options
         .iter()
-        .map(|(name, desc)| ListItem::new(Line::from(vec![
-            Span::styled(format!("  {name:<12} "), Style::default().fg(colors.text)),
-            Span::styled(*desc, Style::default().fg(colors.text_dim)),
-        ])))
+        .map(|(name, desc)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("  {name:<12} "), Style::default().fg(colors.text)),
+                Span::styled(*desc, Style::default().fg(colors.text_dim)),
+            ]))
+        })
         .collect();
 
     let mut list_state = ListState::default();
@@ -174,7 +189,7 @@ fn render_mode_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, color
 fn render_permissions_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState, colors: &Colors) {
     let options = [
         ("read and write", "agent can read and modify files"),
-        ("read only",      "agent can only read files"),
+        ("read only", "agent can only read files"),
     ];
 
     let chunks = Layout::default()
@@ -194,10 +209,12 @@ fn render_permissions_phase(f: &mut Frame, area: Rect, state: &WorkspaceAddState
 
     let items: Vec<ListItem> = options
         .iter()
-        .map(|(name, desc)| ListItem::new(Line::from(vec![
-            Span::styled(format!("  {name:<16} "), Style::default().fg(colors.text)),
-            Span::styled(*desc, Style::default().fg(colors.text_dim)),
-        ])))
+        .map(|(name, desc)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("  {name:<16} "), Style::default().fg(colors.text)),
+                Span::styled(*desc, Style::default().fg(colors.text_dim)),
+            ]))
+        })
         .collect();
 
     let mut list_state = ListState::default();
@@ -228,7 +245,12 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let width = (area.width * percent_x / 100).min(area.width);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect { x, y, width, height: height.min(area.height) }
+    Rect {
+        x,
+        y,
+        width,
+        height: height.min(area.height),
+    }
 }
 
 #[cfg(test)]

@@ -408,7 +408,11 @@ pub fn save_workspace(name: &str, config: &schema::WorkspaceConfig) {
 
 /// Test-friendly variant: writes relative to `base` instead of cwd.
 /// `pub(crate)` (not cfg-gated) so the `#[cfg(test)]` test module can call it.
-pub(crate) fn save_workspace_at(base: &std::path::Path, name: &str, config: &schema::WorkspaceConfig) {
+pub(crate) fn save_workspace_at(
+    base: &std::path::Path,
+    name: &str,
+    config: &schema::WorkspaceConfig,
+) {
     save_workspace_impl(base, name, config);
 }
 
@@ -1132,7 +1136,11 @@ mod workspace_persist_tests {
     fn save_workspace_preserves_existing_fields() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".caboose")).unwrap();
-        std::fs::write(dir.path().join(".caboose/config.toml"), "provider = \"anthropic\"\n").unwrap();
+        std::fs::write(
+            dir.path().join(".caboose/config.toml"),
+            "provider = \"anthropic\"\n",
+        )
+        .unwrap();
         let cfg = schema::WorkspaceConfig {
             path: "/home/alex/caboose-web".to_string(),
             mode: schema::WorkspaceMode::Explicit,

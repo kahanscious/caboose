@@ -13,7 +13,9 @@ pub fn slug(task: &str) -> String {
     let mut prev_dash = false;
     for c in s.chars() {
         if c == '-' {
-            if !prev_dash { result.push(c); }
+            if !prev_dash {
+                result.push(c);
+            }
             prev_dash = true;
         } else {
             result.push(c);
@@ -29,11 +31,15 @@ pub fn slug(task: &str) -> String {
 #[allow(dead_code)]
 pub fn unique_slug(task: &str, existing: &[String]) -> String {
     let base = slug(task);
-    if !existing.contains(&base) { return base; }
+    if !existing.contains(&base) {
+        return base;
+    }
     let mut n = 2u32;
     loop {
         let candidate = format!("{base}-{n}");
-        if !existing.contains(&candidate) { return candidate; }
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
         n += 1;
     }
 }
@@ -64,7 +70,11 @@ pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
     let status = Command::new("git")
         .args(["check-ignore", "-q", ".worktrees"])
         .status()?;
-    if status.success() { Ok(()) } else { Err(WorktreeError::NotIgnored) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(WorktreeError::NotIgnored)
+    }
 }
 
 /// Create a worktree at `path` with new branch `branch` from current HEAD.
@@ -73,8 +83,13 @@ pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["worktree", "add", &path.to_string_lossy(), "-b", branch])
         .output()?;
-    if out.status.success() { Ok(()) }
-    else { Err(WorktreeError::GitFailed(String::from_utf8_lossy(&out.stderr).into())) }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&out.stderr).into(),
+        ))
+    }
 }
 
 /// Merge `branch` into the current branch with `--no-ff`.
@@ -84,9 +99,13 @@ pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["merge", "--no-ff", branch])
         .output()?;
-    if out.status.success() { return Ok(()); }
+    if out.status.success() {
+        return Ok(());
+    }
     let _ = Command::new("git").args(["merge", "--abort"]).status();
-    Err(WorktreeError::GitFailed(String::from_utf8_lossy(&out.stderr).into()))
+    Err(WorktreeError::GitFailed(
+        String::from_utf8_lossy(&out.stderr).into(),
+    ))
 }
 
 /// Remove a worktree and (best-effort) delete its branch.
@@ -96,7 +115,9 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
         .args(["worktree", "remove", &path.to_string_lossy()])
         .output()?;
     if !out.status.success() {
-        return Err(WorktreeError::GitFailed(String::from_utf8_lossy(&out.stderr).into()));
+        return Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&out.stderr).into(),
+        ));
     }
     let _ = Command::new("git").args(["branch", "-d", branch]).status();
     Ok(())
@@ -111,7 +132,9 @@ pub fn current_branch() -> Result<String, WorktreeError> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(WorktreeError::GitFailed(String::from_utf8_lossy(&out.stderr).into()))
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&out.stderr).into(),
+        ))
     }
 }
 
@@ -139,7 +162,10 @@ mod tests {
         let long = "this is a very long task name that exceeds forty chars easily";
         let s = slug(long);
         assert!(s.len() <= 40);
-        assert!(!s.ends_with('-'), "slug must not end in a dash after truncation");
+        assert!(
+            !s.ends_with('-'),
+            "slug must not end in a dash after truncation"
+        );
     }
 
     #[test]
@@ -160,10 +186,7 @@ mod tests {
 
     #[test]
     fn unique_slug_skips_used_counters() {
-        let existing = vec![
-            "auth-refactor".to_string(),
-            "auth-refactor-2".to_string(),
-        ];
+        let existing = vec!["auth-refactor".to_string(), "auth-refactor-2".to_string()];
         assert_eq!(unique_slug("auth refactor", &existing), "auth-refactor-3");
     }
 

@@ -82,7 +82,9 @@ pub fn render(
                 Span::styled(label, Style::default().fg(colors.text)),
                 Span::styled(
                     format!("  {detail}"),
-                    Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(colors.text_dim)
+                        .add_modifier(Modifier::DIM),
                 ),
                 Span::raw("  "),
                 Span::styled(counts, Style::default().fg(colors.text_dim)),
@@ -106,10 +108,7 @@ pub fn render(
                     } else {
                         Style::default().fg(colors.text_dim)
                     };
-                    lines.push(Line::from(Span::styled(
-                        format!("    {line}"),
-                        style,
-                    )));
+                    lines.push(Line::from(Span::styled(format!("    {line}"), style)));
                 }
 
                 let remaining = diff_body.len().saturating_sub(start + show_count);
@@ -131,7 +130,9 @@ pub fn render(
             Span::styled(label, Style::default().fg(colors.text)),
             Span::styled(
                 format!("  {detail}"),
-                Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(colors.text_dim)
+                    .add_modifier(Modifier::DIM),
             ),
         ]));
         lines.push(Line::from(""));
@@ -142,10 +143,18 @@ pub fn render(
     // Check whether this message has a diff body to show / toggle.
     let has_edit_diff = tool.name == "edit_file"
         && tool.status == ToolStatus::Success
-        && tool.args.get("old_string").and_then(|v| v.as_str()).is_some()
-        && tool.args.get("new_string").and_then(|v| v.as_str()).is_some();
-    let has_patch_diff = tool.name == "apply_patch"
-        && tool.args.get("diff").and_then(|v| v.as_str()).is_some();
+        && tool
+            .args
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .is_some()
+        && tool
+            .args
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .is_some();
+    let has_patch_diff =
+        tool.name == "apply_patch" && tool.args.get("diff").and_then(|v| v.as_str()).is_some();
 
     let mut header_spans = vec![
         icon,
@@ -159,20 +168,29 @@ pub fn render(
     ];
 
     if has_edit_diff || has_patch_diff {
-        let glyph = if diff_expanded { "▼ collapse" } else { "▶ expand" };
+        let glyph = if diff_expanded {
+            "▼ collapse"
+        } else {
+            "▶ expand"
+        };
         header_spans.push(Span::raw("  "));
-        header_spans.push(Span::styled(
-            glyph,
-            Style::default().fg(colors.info),
-        ));
+        header_spans.push(Span::styled(glyph, Style::default().fg(colors.info)));
     }
     lines.push(Line::from(header_spans));
 
     // Diff body — only shown when expanded
     if diff_expanded {
         if has_edit_diff {
-            let old = tool.args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-            let new = tool.args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+            let old = tool
+                .args
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new = tool
+                .args
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             render_inline_diff(&mut lines, old, new, colors);
         }
 

@@ -1,5 +1,7 @@
 //! WorkspaceList dialog renderer.
 
+use crate::tui::dialog::WorkspaceListState;
+use crate::tui::theme::Colors;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -8,8 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use crate::tui::dialog::WorkspaceListState;
-use crate::tui::theme::Colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
     let colors = Colors::active();
@@ -50,13 +50,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
             chunks[1],
         );
         f.render_widget(
-            Paragraph::new("  press a to add one")
-                .style(Style::default().fg(colors.text_dim)),
+            Paragraph::new("  press a to add one").style(Style::default().fg(colors.text_dim)),
             chunks[2],
         );
         f.render_widget(
-            Paragraph::new(" a add · esc close")
-                .style(Style::default().fg(colors.text_dim)),
+            Paragraph::new(" a add · esc close").style(Style::default().fg(colors.text_dim)),
             chunks[4],
         );
     } else {
@@ -84,13 +82,16 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
                 };
                 let access_str = match cfg.access {
                     crate::config::schema::WorkspaceAccess::ReadWrite => "rw",
-                    crate::config::schema::WorkspaceAccess::ReadOnly  => "ro",
+                    crate::config::schema::WorkspaceAccess::ReadOnly => "ro",
                 };
                 let display_path = truncate_path(&cfg.path, 12);
                 let line = Line::from(vec![
                     Span::raw(format!("  {name:<16} ")),
                     Span::styled(format!("{mode_str} "), Style::default().fg(colors.text_dim)),
-                    Span::styled(format!("{access_str} "), Style::default().fg(colors.text_secondary)),
+                    Span::styled(
+                        format!("{access_str} "),
+                        Style::default().fg(colors.text_secondary),
+                    ),
                     Span::styled(format!("{avail_marker} "), avail_style),
                     Span::styled(display_path, Style::default().fg(colors.text_secondary)),
                 ]);
@@ -133,7 +134,12 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let width = (area.width * percent_x / 100).min(area.width);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect { x, y, width, height: height.min(area.height) }
+    Rect {
+        x,
+        y,
+        width,
+        height: height.min(area.height),
+    }
 }
 
 #[cfg(test)]
@@ -154,16 +160,24 @@ mod tests {
     fn render_does_not_panic_with_entries() {
         let state = WorkspaceListState {
             workspaces: vec![
-                ("caboose-web".to_string(), WorkspaceConfig {
-                    path: "/home/alex/caboose-web".to_string(),
-                    mode: WorkspaceMode::Proactive,
-                    access: crate::config::schema::WorkspaceAccess::ReadWrite,
-                }, true),
-                ("caboose-docs".to_string(), WorkspaceConfig {
-                    path: "/home/alex/caboose-docs".to_string(),
-                    mode: WorkspaceMode::Explicit,
-                    access: crate::config::schema::WorkspaceAccess::ReadOnly,
-                }, false),
+                (
+                    "caboose-web".to_string(),
+                    WorkspaceConfig {
+                        path: "/home/alex/caboose-web".to_string(),
+                        mode: WorkspaceMode::Proactive,
+                        access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                    },
+                    true,
+                ),
+                (
+                    "caboose-docs".to_string(),
+                    WorkspaceConfig {
+                        path: "/home/alex/caboose-docs".to_string(),
+                        mode: WorkspaceMode::Explicit,
+                        access: crate::config::schema::WorkspaceAccess::ReadOnly,
+                    },
+                    false,
+                ),
             ],
             selected: 0,
         };

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+use super::{StreamLineKind, SubAgentEvent, SubAgentStreamLine};
 use crate::agent::{AgentEvent, AgentLoop, AgentState, permission::PermissionMode};
 use crate::config::Config;
-use super::{SubAgentEvent, SubAgentStreamLine, StreamLineKind};
 
 #[allow(dead_code)]
 pub struct SubAgentInput {
@@ -49,7 +49,8 @@ pub async fn run_subagent(
     let cli_tools_ref = config.tools.as_ref().and_then(|t| t.registry.as_ref());
     let exec_tools_ref = config.tools.as_ref().and_then(|t| t.executable.as_ref());
     let worktree_scm = crate::scm::detection::detect_provider(&input.worktree_path);
-    let tool_registry = crate::tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref, &worktree_scm);
+    let tool_registry =
+        crate::tools::ToolRegistry::new(cli_tools_ref, exec_tools_ref, &worktree_scm);
     let mcp_config = config.mcp.clone().unwrap_or_default();
     let mut mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
     mcp_manager.connect_all().await;
@@ -90,7 +91,9 @@ pub async fn run_subagent(
                         },
                     });
                 }
-                AgentEvent::ToolCall { name, arguments, .. } => {
+                AgentEvent::ToolCall {
+                    name, arguments, ..
+                } => {
                     let text: String = format!("{name}  {arguments}").chars().take(120).collect();
                     let _ = tx.send(SubAgentEvent::StreamLine {
                         id: input.id,
@@ -100,7 +103,10 @@ pub async fn run_subagent(
                         },
                     });
                 }
-                AgentEvent::TurnComplete { input_tokens, output_tokens } => {
+                AgentEvent::TurnComplete {
+                    input_tokens,
+                    output_tokens,
+                } => {
                     let turn_cost = (*input_tokens as f64 * input_price_per_token)
                         + (*output_tokens as f64 * output_price_per_token);
                     total_cost += turn_cost;
