@@ -57,6 +57,18 @@ impl SseAccumulator {
         let mut events = Vec::new();
 
         for choice in &chunk.choices {
+            // Reasoning delta (OpenAI o1/o3, OpenRouter, DeepSeek)
+            let reasoning = choice
+                .delta
+                .reasoning
+                .as_deref()
+                .or(choice.delta.reasoning_content.as_deref());
+            if let Some(text) = reasoning
+                && !text.is_empty()
+            {
+                events.push(StreamEvent::ThinkingDelta(text.to_string()));
+            }
+
             // Text delta
             if let Some(ref content) = choice.delta.content
                 && !content.is_empty()
@@ -259,6 +271,44 @@ mod tests {
             }
             _ => panic!("Expected Done"),
         }
+    }
+
+    #[test]
+    fn reasoning_field_emits_thinking_delta() {
+        let mut acc = SseAccumulator::new();
+        let chunk = r#"{"choices":[{"delta":{"reasoning":"Let me think..."},"finish_reason":null}]}"#;
+        let events = acc.process(chunk);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], StreamEvent::ThinkingDelta(t) if t == "Let me think..."));
+    }
+
+    #[test]
+    fn reasoning_content_field_emits_thinking_delta() {
+        let mut acc = SseAccumulator::new();
+        let chunk =
+            r#"{"choices":[{"delta":{"reasoning_content":"Step 1..."},"finish_reason":null}]}"#;
+        let events = acc.process(chunk);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], StreamEvent::ThinkingDelta(t) if t == "Step 1..."));
+    }
+
+    #[test]
+    fn reasoning_preferred_over_reasoning_content() {
+        let mut acc = SseAccumulator::new();
+        let chunk = r#"{"choices":[{"delta":{"reasoning":"primary","reasoning_content":"fallback"},"finish_reason":null}]}"#;
+        let events = acc.process(chunk);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], StreamEvent::ThinkingDelta(t) if t == "primary"));
+    }
+
+    #[test]
+    fn reasoning_and_content_both_emitted() {
+        let mut acc = SseAccumulator::new();
+        let chunk = r#"{"choices":[{"delta":{"reasoning":"thinking","content":"hello"},"finish_reason":null}]}"#;
+        let events = acc.process(chunk);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], StreamEvent::ThinkingDelta(t) if t == "thinking"));
+        assert!(matches!(&events[1], StreamEvent::TextDelta(t) if t == "hello"));
     }
 
     #[test]

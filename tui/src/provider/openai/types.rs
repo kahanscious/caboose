@@ -79,6 +79,12 @@ pub struct ChunkChoice {
 #[derive(Debug, Deserialize)]
 pub struct ChunkDelta {
     pub content: Option<String>,
+    /// OpenAI reasoning models and OpenRouter `reasoning` field.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// Alias used by some OpenAI-compatible APIs (DeepSeek, vLLM).
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ChunkToolCall>>,
 }
 

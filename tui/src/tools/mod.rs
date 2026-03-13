@@ -200,7 +200,7 @@ impl ToolRegistry {
                 ),
                 tool_def(
                     "todo_write",
-                    "Create or update the task outline displayed to the user. Use for multi-step tasks to show progress. Each call replaces the entire task list.",
+                    "Create or update the task outline displayed to the user. Use for multi-step tasks to show progress. Each call replaces the entire task list. When the user changes topic or says they want to do something else, do NOT call this tool — the old tasks are automatically cleared. Only create new tasks when you have a concrete plan for the user's current request.",
                     serde_json::json!({
                         "type": "object",
                         "properties": {
