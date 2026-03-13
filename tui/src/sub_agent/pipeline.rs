@@ -83,7 +83,9 @@ pub fn parse_pipeline_response(response: &str) -> Option<TaskPipeline> {
 /// Fallback: put all tasks in a single sequential stage.
 #[allow(dead_code)]
 pub fn single_stage_fallback(tasks: Vec<String>) -> TaskPipeline {
-    TaskPipeline { stages: vec![TaskStage { tasks }] }
+    TaskPipeline {
+        stages: vec![TaskStage { tasks }],
+    }
 }
 
 #[cfg(test)]
@@ -128,7 +130,11 @@ mod tests {
         // Nested bullets are NOT separate tasks — only top-level items count
         let text = "Tasks:\n- auth refactor\n  - sub-step A\n  - sub-step B\n- update readme";
         let tasks = extract_tasks(text).unwrap();
-        assert_eq!(tasks.len(), 2, "nested bullets must not be treated as top-level tasks");
+        assert_eq!(
+            tasks.len(),
+            2,
+            "nested bullets must not be treated as top-level tasks"
+        );
         assert_eq!(tasks[0], "auth refactor");
         assert_eq!(tasks[1], "update readme");
     }

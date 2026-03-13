@@ -24,8 +24,16 @@ fn has_diff_toggle(tool: &crate::app::ToolMessage) -> bool {
         crate::app::ToolStatus::Pending => tool.diff_preview.is_some(),
         crate::app::ToolStatus::Success => {
             (tool.name == "edit_file"
-                && tool.args.get("old_string").and_then(|v| v.as_str()).is_some()
-                && tool.args.get("new_string").and_then(|v| v.as_str()).is_some())
+                && tool
+                    .args
+                    .get("old_string")
+                    .and_then(|v| v.as_str())
+                    .is_some()
+                && tool
+                    .args
+                    .get("new_string")
+                    .and_then(|v| v.as_str())
+                    .is_some())
                 || (tool.name == "apply_patch"
                     && tool.args.get("diff").and_then(|v| v.as_str()).is_some())
         }
@@ -383,16 +391,15 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
             ChatMessage::Tool(tool_msg) => {
                 let focused = app.focused_tool == Some(i);
-                let (de, ds) = if tool_msg.status == ToolStatus::Pending
-                    && Some(i) == last_pending_idx
-                {
-                    (app.diff_expanded, app.diff_scroll)
-                } else {
-                    (tool_msg.diff_expanded, 0)
-                };
-                let rendered =
-                    app.tool_renderers
-                        .render(tool_msg, colors, focused, app.tick, de, ds);
+                let (de, ds) =
+                    if tool_msg.status == ToolStatus::Pending && Some(i) == last_pending_idx {
+                        (app.diff_expanded, app.diff_scroll)
+                    } else {
+                        (tool_msg.diff_expanded, 0)
+                    };
+                let rendered = app
+                    .tool_renderers
+                    .render(tool_msg, colors, focused, app.tick, de, ds);
                 // Record the header row for mouse click hit-testing.
                 if has_diff_toggle(tool_msg) {
                     tool_toggle_lines.push((lines.len(), i));
@@ -1661,7 +1668,10 @@ fn render_agent_stream_overlay(
 
     // Body area and footer area
     let body_height = inner.height.saturating_sub(1);
-    let body_area = ratatui::layout::Rect { height: body_height, ..inner };
+    let body_area = ratatui::layout::Rect {
+        height: body_height,
+        ..inner
+    };
     let footer_area = ratatui::layout::Rect {
         y: inner.y + inner.height.saturating_sub(1),
         height: 1,
@@ -1686,12 +1696,8 @@ fn render_agent_stream_overlay(
                 crate::sub_agent::StreamLineKind::ToolResult => {
                     (Style::default().fg(colors.success), "\u{2192} ")
                 }
-                crate::sub_agent::StreamLineKind::Text => {
-                    (Style::default().fg(colors.text), "")
-                }
-                crate::sub_agent::StreamLineKind::Error => {
-                    (Style::default().fg(colors.error), "")
-                }
+                crate::sub_agent::StreamLineKind::Text => (Style::default().fg(colors.text), ""),
+                crate::sub_agent::StreamLineKind::Error => (Style::default().fg(colors.error), ""),
             };
             Line::from(Span::styled(format!("{prefix}{}", line.text), style))
         })
@@ -1713,7 +1719,10 @@ fn render_agent_stream_overlay(
         agent.cost_usd
     );
     frame.render_widget(
-        Paragraph::new(Span::styled(footer_text, Style::default().fg(colors.text_dim))),
+        Paragraph::new(Span::styled(
+            footer_text,
+            Style::default().fg(colors.text_dim),
+        )),
         footer_area,
     );
 }

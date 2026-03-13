@@ -718,10 +718,18 @@ mod tests {
     fn registry_includes_spawn_agent() {
         let registry = ToolRegistry::new(None, None, &crate::scm::detection::ScmProvider::Unknown);
         let defs = registry.definitions();
-        let spawn = defs.iter().find(|d| d.name == "spawn_agent").expect("spawn_agent not found");
+        let spawn = defs
+            .iter()
+            .find(|d| d.name == "spawn_agent")
+            .expect("spawn_agent not found");
         let props = spawn.input_schema.get("properties").unwrap();
         assert!(props.get("task").is_some());
-        let required = spawn.input_schema.get("required").unwrap().as_array().unwrap();
+        let required = spawn
+            .input_schema
+            .get("required")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert!(required.iter().any(|v| v.as_str() == Some("task")));
     }
 

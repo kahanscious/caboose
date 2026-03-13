@@ -427,7 +427,10 @@ mod stream_overlay_tests {
 
     #[test]
     fn agent_stream_overlay_state_default() {
-        let state = AgentStreamOverlayState { scroll_offset: 0, follow: true };
+        let state = AgentStreamOverlayState {
+            scroll_offset: 0,
+            follow: true,
+        };
         assert!(state.follow);
         assert_eq!(state.scroll_offset, 0);
     }
@@ -467,8 +470,24 @@ mod workspace_dialog_tests {
         use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
         let mut state = WorkspaceListState {
             workspaces: vec![
-                ("a".to_string(), WorkspaceConfig { path: "/tmp/a".to_string(), mode: WorkspaceMode::Proactive, access: crate::config::schema::WorkspaceAccess::ReadWrite }, true),
-                ("b".to_string(), WorkspaceConfig { path: "/tmp/b".to_string(), mode: WorkspaceMode::Explicit, access: crate::config::schema::WorkspaceAccess::ReadOnly }, false),
+                (
+                    "a".to_string(),
+                    WorkspaceConfig {
+                        path: "/tmp/a".to_string(),
+                        mode: WorkspaceMode::Proactive,
+                        access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                    },
+                    true,
+                ),
+                (
+                    "b".to_string(),
+                    WorkspaceConfig {
+                        path: "/tmp/b".to_string(),
+                        mode: WorkspaceMode::Explicit,
+                        access: crate::config::schema::WorkspaceAccess::ReadOnly,
+                    },
+                    false,
+                ),
             ],
             selected: 10,
         };
