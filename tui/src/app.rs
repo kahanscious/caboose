@@ -144,7 +144,6 @@ pub struct State {
     /// Click zones for thinking block arrows: (screen_row, message_index).
     /// usize::MAX represents the currently-streaming thinking block.
     /// Populated by the post-render wrapping pass (same pattern as truncation_click_zones).
-    #[allow(dead_code)]
     pub thinking_click_zones: RefCell<Vec<(u16, usize)>>,
     /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
     pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
@@ -1535,6 +1534,26 @@ impl App {
                                             {
                                                 tool_msg.diff_expanded = !tool_msg.diff_expanded;
                                             }
+                                            continue;
+                                        }
+
+                                        // Thinking block click zone logic
+                                        let thinking_zones =
+                                            self.state.thinking_click_zones.borrow();
+                                        let mut thinking_handled = false;
+                                        for &(zone_y, msg_idx) in thinking_zones.iter() {
+                                            if mouse.row == zone_y {
+                                                if self.state.expanded_thinking.contains(&msg_idx) {
+                                                    self.state.expanded_thinking.remove(&msg_idx);
+                                                } else {
+                                                    self.state.expanded_thinking.insert(msg_idx);
+                                                }
+                                                thinking_handled = true;
+                                                break;
+                                            }
+                                        }
+                                        drop(thinking_zones);
+                                        if thinking_handled {
                                             continue;
                                         }
 
