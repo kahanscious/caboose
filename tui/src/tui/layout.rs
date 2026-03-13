@@ -357,6 +357,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     let mut truncation_lines: Vec<(usize, usize)> = Vec::new();
     // Track (logical_line_index, message_index) for diff toggle indicators
     let mut tool_toggle_lines: Vec<(usize, usize)> = Vec::new();
+    // Track (logical_line_index, message_index) for thinking block toggle indicators
+    let mut thinking_lines: Vec<(usize, usize)> = Vec::new();
     // Track message boundaries for connector grouping: 0=other, 1=tool, 2=assistant
     let mut msg_boundaries: Vec<(usize, u8)> = Vec::new();
 
@@ -382,12 +384,32 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let accent = mode_accent(app.mode, colors);
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
-            ChatMessage::Assistant { content, .. } => {
+            ChatMessage::Assistant {
+                content, thinking, ..
+            } => {
+                let mut msg_lines = Vec::new();
+
+                // Thinking block (if present) — rendered above the assistant header
+                if let Some(thinking_text) = thinking {
+                    let thinking_expanded = app.expanded_thinking.contains(&i);
+                    let thinking_rendered = crate::tui::chat::render_thinking_block(
+                        thinking_text,
+                        !thinking_expanded,
+                        colors,
+                        app.tick,
+                    );
+                    // Record logical line index of the arrow for post-render click zone computation
+                    thinking_lines.push((start_idx + msg_lines.len(), i));
+                    msg_lines.extend(thinking_rendered);
+                }
+
+                // Standard assistant rendering (header + truncated text)
                 let expanded = app.expanded_messages.contains(&i);
                 let accent = mode_accent(app.mode, colors);
-                crate::tui::chat::render_assistant_message_truncated(
+                msg_lines.extend(crate::tui::chat::render_assistant_message_truncated(
                     content, colors, expanded, accent,
-                )
+                ));
+                msg_lines
             }
             ChatMessage::Tool(tool_msg) => {
                 let focused = app.focused_tool == Some(i);
@@ -473,29 +495,70 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         lines.extend(msg_lines);
     }
 
+    // Show streaming thinking block (when thinking arrives before text)
+    if matches!(app.agent.state, AgentState::Streaming) && !app.agent.streaming_thinking.is_empty()
+    {
+        // If text hasn't started yet, add assistant header so thinking has context
+        if app.agent.streaming_text.is_empty() {
+            msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
+            let accent = mode_accent(app.mode, colors);
+            lines.push(Line::from(vec![
+                Span::styled("● ", Style::default().fg(colors.text_dim)),
+                Span::styled("Caboose", Style::default().fg(colors.text_secondary).bold()),
+            ]));
+            let _ = accent; // suppress unused warning
+        }
+        let collapsed = !app.expanded_thinking.contains(&usize::MAX);
+        thinking_lines.push((lines.len(), usize::MAX));
+        let thinking_rendered = crate::tui::chat::render_thinking_block(
+            &app.agent.streaming_thinking,
+            collapsed,
+            colors,
+            app.tick,
+        );
+        lines.extend(thinking_rendered);
+    }
+
     // Show streaming text if actively streaming
     if matches!(app.agent.state, AgentState::Streaming) && !app.agent.streaming_text.is_empty() {
-        msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
         let accent = mode_accent(app.mode, colors);
-        let streaming_lines =
-            crate::tui::chat::render_assistant_message(&app.agent.streaming_text, colors, accent);
-        // Remove the trailing blank line and add an animated spinner
-        if !streaming_lines.is_empty() {
-            let mut sl = streaming_lines;
-            // Remove trailing blank separator
-            if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                sl.pop();
+        if app.agent.streaming_thinking.is_empty() {
+            // No thinking — render full assistant message with header (existing behavior)
+            msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
+            let streaming_lines = crate::tui::chat::render_assistant_message(
+                &app.agent.streaming_text,
+                colors,
+                accent,
+            );
+            // Remove the trailing blank line and add an animated spinner
+            if !streaming_lines.is_empty() {
+                let mut sl = streaming_lines;
+                // Remove trailing blank separator
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
             }
-            lines.extend(sl);
-            // Animated spinner on last line (rotates every 5 ticks ~4 Hz)
-            const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
-            let spinner = SPINNER[(app.tick / 5) as usize % SPINNER.len()];
-            let accent = mode_accent(app.mode, colors);
-            lines.push(Line::from(Span::styled(
-                format!("{spinner} "),
-                Style::default().fg(accent),
-            )));
+        } else {
+            // Thinking already rendered header — just render text content without header
+            let parsed =
+                crate::tui::chat::parse_markdown(&app.agent.streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
         }
+        // Animated spinner on last line (rotates every 5 ticks ~4 Hz)
+        const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
+        let spinner = SPINNER[(app.tick / 5) as usize % SPINNER.len()];
+        let accent = mode_accent(app.mode, colors);
+        lines.push(Line::from(Span::styled(
+            format!("{spinner} "),
+            Style::default().fg(accent),
+        )));
     }
 
     // Show Roundhouse streaming text in main window (planning + synthesis)
@@ -712,7 +775,10 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         ];
 
         match &app.agent.state {
-            AgentState::Streaming if app.agent.streaming_text.is_empty() => {
+            AgentState::Streaming
+                if app.agent.streaming_text.is_empty()
+                    && app.agent.streaming_thinking.is_empty() =>
+            {
                 let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -823,6 +889,32 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
         }
         *app.tool_toggle_rects.borrow_mut() = toggle_zones;
+
+        // Compute screen y for each thinking block toggle indicator
+        {
+            let mut thinking_zones: Vec<(u16, usize)> = Vec::new();
+            if !thinking_lines.is_empty() {
+                let mut wr: u16 = 0;
+                let mut ti = thinking_lines.iter().peekable();
+                for (logical_idx, line) in lines.iter().enumerate() {
+                    if let Some(&&(think_logical, msg_idx)) = ti.peek()
+                        && think_logical == logical_idx
+                    {
+                        let screen_y = area.y as i32 + wr as i32 - effective_offset as i32;
+                        if screen_y >= area.y as i32 && screen_y < (area.y + area.height) as i32 {
+                            thinking_zones.push((screen_y as u16, msg_idx));
+                        }
+                        ti.next();
+                        if ti.peek().is_none() {
+                            break;
+                        }
+                    }
+                    let w = line.width().max(1) as u16;
+                    wr += w.div_ceil(area.width);
+                }
+            }
+            *app.thinking_click_zones.borrow_mut() = thinking_zones;
+        }
     }
 
     let max_scroll = total_lines.saturating_sub(area.height);
