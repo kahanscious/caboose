@@ -239,6 +239,22 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "session.fork",
+        name: "Fork Session",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("fork"),
+        available: |state| {
+            state.current_session_id.is_some()
+                && matches!(state.agent.state, crate::agent::AgentState::Idle)
+        },
+        execute: |_state| {
+            // Handled in app.rs — needs access to App methods (persist_message, restore_session)
+            Action::None
+        },
+    });
+
+    registry.register(Command {
         id: "session.list",
         name: "Session History",
         category: Category::Session,

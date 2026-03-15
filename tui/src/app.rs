@@ -1044,6 +1044,17 @@ impl App {
                         continue;
                     }
                 }
+                "fork_context" => {
+                    self.state.agent.conversation.messages.push(
+                        crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Text(msg.content.clone()),
+                            tool_call_id: None,
+                        },
+                    );
+                    i += 1;
+                    continue;
+                }
                 _ => {
                     i += 1;
                     continue;
@@ -3879,6 +3890,11 @@ impl App {
                         // /rewind — open checkpoint picker
                         if slash == "rewind" {
                             self.open_rewind_picker();
+                            return;
+                        }
+                        // /fork — fork current session
+                        if slash == "fork" {
+                            self.handle_fork_command();
                             return;
                         }
                         // /handoff — build handoff summary
@@ -9949,6 +9965,219 @@ impl App {
             items,
         ));
         self.state.input.clear();
+    }
+
+    /// Handle the /fork command — clone current session into a new one with context.
+    fn handle_fork_command(&mut self) {
+        // Guard: need an active session
+        let parent_id = match self.state.current_session_id.clone() {
+            Some(id) => id,
+            None => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No active session to fork.".into(),
+                });
+                return;
+            }
+        };
+
+        // Guard: need messages
+        if self.state.chat_messages.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Cannot fork an empty session.".into(),
+            });
+            return;
+        }
+
+        // Build handoff summary BEFORE switching sessions (needs current state)
+        let user_msgs: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let modified: std::collections::HashMap<String, crate::skills::handoff::HandoffFileStats> =
+            self.state
+                .modified_files
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        crate::skills::handoff::HandoffFileStats {
+                            additions: v.additions,
+                            deletions: v.deletions,
+                        },
+                    )
+                })
+                .collect();
+
+        let open_tasks: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                ChatMessage::TaskOutline(outline) => Some(outline),
+                _ => None,
+            })
+            .map(|outline| {
+                outline
+                    .tasks
+                    .iter()
+                    .filter(|t| !matches!(t.status, TaskStatus::Completed | TaskStatus::Cancelled))
+                    .map(|t| t.content.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let ctx = crate::skills::handoff::HandoffContext {
+            session_id: Some(parent_id.as_str()),
+            session_title: self.state.session_title.as_deref(),
+            provider_name: Some(self.state.active_provider_name.as_str()),
+            model_name: Some(self.state.active_model_name.as_str()),
+            turn_count: self.state.agent.turn_count,
+            user_messages: user_msgs,
+            modified_files: &modified,
+            tool_counts: &self.state.tool_counts,
+            open_tasks,
+            focus: None,
+        };
+
+        let handoff_summary = crate::skills::handoff::build_handoff_summary(&ctx);
+
+        // Inherit parent title with " (fork)" suffix
+        let fork_title = match &self.state.session_title {
+            Some(t) => Some(format!("{t} (fork)")),
+            None => Some("Untitled (fork)".to_string()),
+        };
+
+        // Count messages for fork metadata
+        let message_count = match self.state.sessions.load_messages(&parent_id) {
+            Ok(msgs) => msgs.len() as u32,
+            Err(_) => 0,
+        };
+
+        // Create new session
+        let model = if self.state.active_model_name == "no key configured" {
+            None
+        } else {
+            Some(self.state.active_model_name.as_str())
+        };
+        let provider = if self.state.active_provider_name == "none" {
+            None
+        } else {
+            Some(self.state.active_provider_name.as_str())
+        };
+        let new_session_id =
+            match self
+                .state
+                .sessions
+                .create(model, provider, Some(&parent_id), Some(message_count))
+            {
+                Ok(session) => session.id,
+                Err(e) => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to create fork session: {e}"),
+                    });
+                    return;
+                }
+            };
+
+        // Copy messages from parent to new session
+        if let Err(e) = self
+            .state
+            .sessions
+            .copy_messages(&parent_id, &new_session_id)
+        {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: format!("Failed to copy messages to fork: {e}"),
+            });
+            return;
+        }
+
+        // Set fork title on the new session
+        let title_session = crate::session::Session {
+            id: new_session_id.clone(),
+            title: fork_title.clone(),
+            model: model.map(|s| s.to_string()),
+            provider: provider.map(|s| s.to_string()),
+            turn_count: 0,
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            parent_session_id: Some(parent_id.clone()),
+            fork_message_count: Some(message_count),
+        };
+        if let Err(e) = self.state.sessions.update(&title_session) {
+            tracing::warn!("Failed to set fork title: {e}");
+        }
+
+        // Reset all session-scoped state (mirrors /new command)
+        self.state.chat_messages.clear();
+        self.state.input.clear();
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
+        self.state.session_title = None;
+        self.state.session_title_source = None;
+        self.state.current_session_id = None;
+        self.state.modified_files.clear();
+        self.state.file_baselines.clear();
+        self.state.tool_counts.clear();
+        self.state.focused_tool = None;
+        self.state.pending_handoff = None;
+        self.state.roundhouse_session = None;
+        self.state.roundhouse_update_rx = None;
+        self.state.roundhouse_synthesis_rx = None;
+        self.state.roundhouse_critique_rx = None;
+        self.state.roundhouse_model_add = false;
+        self.state.agent.cancel();
+        self.state.agent.conversation.messages.clear();
+        self.state.agent.turn_count = 0;
+        self.state.agent.session_allows.clear();
+        self.state.agent.handoff_prompted = false;
+        self.state.dialog_stack.clear();
+
+        // Restore the forked session (loads copied messages)
+        self.restore_session(&new_session_id);
+
+        // Guard: if restore failed
+        if self.state.current_session_id.is_none() {
+            return;
+        }
+
+        // Inject fork context
+        let short_parent_id = if parent_id.len() > 8 {
+            &parent_id[..8]
+        } else {
+            &parent_id
+        };
+        let fork_context = format!("[Forked from session {short_parent_id}]\n\n{handoff_summary}");
+
+        // Persist as fork_context role (not displayed to user)
+        self.persist_message("fork_context", &fork_context);
+
+        // Inject into agent conversation as a User message
+        self.state
+            .agent
+            .conversation
+            .messages
+            .push(crate::agent::conversation::Message {
+                role: crate::agent::conversation::Role::User,
+                content: crate::agent::conversation::Content::Text(fork_context),
+                tool_call_id: None,
+            });
+
+        // Push system notification
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!(
+                "Session forked from {short_parent_id}. You're now in a new branch with full conversation history."
+            ),
+        });
     }
 
     /// Handle the /handoff command — build summary and prompt for new session.
