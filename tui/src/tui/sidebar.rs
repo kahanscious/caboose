@@ -12,6 +12,7 @@ use crate::tui::theme::Colors;
 pub struct AgentCounts {
     pub running: usize,
     pub pending: usize,
+    pub review: usize,
     pub failed: usize,
 }
 
@@ -22,6 +23,7 @@ pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static st
         SubAgentState::Running => ("\u{25CF}", "run"), // ●
         SubAgentState::Pending => ("\u{25CB}", "dim"), // ○
         SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
+        SubAgentState::Review => ("\u{25CF}", "review"), // ● blue
         SubAgentState::Done => ("\u{2713}", "done"),   // ✓
         SubAgentState::Failed { .. } => ("\u{2717}", "fail"), // ✗
         SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
@@ -38,6 +40,10 @@ pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
         pending: agents
             .iter()
             .filter(|a| matches!(a.state, SubAgentState::Pending))
+            .count(),
+        review: agents
+            .iter()
+            .filter(|a| matches!(a.state, SubAgentState::Review))
             .count(),
         failed: agents
             .iter()
@@ -89,8 +95,15 @@ pub fn render_agents_section(
             Style::default().fg(colors.error),
         ));
     }
+    if counts.review > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CF} {} review", counts.review),
+            Style::default().fg(colors.info),
+        ));
+    }
     // Clickable dismiss when all agents are in terminal state
-    if counts.running == 0 && counts.pending == 0 && !agents.is_empty() {
+    if counts.running == 0 && counts.pending == 0 && counts.review == 0 && !agents.is_empty() {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
             "\u{25B8} clear",
@@ -117,7 +130,7 @@ pub fn render_agents_section(
             dot_char
         };
         let dot_color = match color_key {
-            "run" => colors.info,
+            "run" | "review" => colors.info,
             "done" => colors.success,
             "fail" => colors.error,
             "warn" => colors.warning,
@@ -128,6 +141,7 @@ pub fn render_agents_section(
             SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
             SubAgentState::Pending => "pending".to_string(),
             SubAgentState::WaitingApproval { tool_name } => format!("waiting: {tool_name}"),
+            SubAgentState::Review => "review".to_string(),
             SubAgentState::Done => "done".to_string(),
             SubAgentState::Failed { .. } => "failed".to_string(),
             SubAgentState::Conflict { .. } => "conflict".to_string(),

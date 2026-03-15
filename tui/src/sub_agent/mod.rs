@@ -29,9 +29,16 @@ pub enum SubAgentState {
     Pending,
     Running,
     WaitingApproval { tool_name: String },
+    Review,
     Done,
     Failed { message: String },
     Conflict { report: String },
+}
+
+impl SubAgentState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Done | Self::Failed { .. } | Self::Conflict { .. })
+    }
 }
 
 #[allow(dead_code)]
