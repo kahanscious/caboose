@@ -295,6 +295,19 @@ fn format_overlap_details(
     )
 }
 
+/// Format a conflict report as a human-readable text block for the chat.
+pub fn format_conflict_report_text(report: &ConflictReport) -> String {
+    let mut lines = vec!["Conflict Analysis".to_string(), String::new()];
+    for overlap in &report.overlaps {
+        let icon = match overlap.severity {
+            OverlapSeverity::Warn => "  ⚠",
+            OverlapSeverity::Block => "  ✗",
+        };
+        lines.push(format!("{icon} {}", overlap.details));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -211,6 +211,10 @@ pub struct State {
     pub sub_agent_approval_showing: Option<(uuid::Uuid, String, String)>,
     /// Pending spawn_agent background tasks. Polled each event-loop tick.
     pub spawn_agent_handles: Vec<SpawnAgentHandle>,
+    /// Collected AgentChanges from completed agents, used for cross-agent conflict detection.
+    pub agent_changes: Vec<crate::sub_agent::conflict::AgentChanges>,
+    /// Conflict report from the latest cross-agent sweep, if any blocking overlaps were found.
+    pub conflict_report: Option<crate::sub_agent::conflict::ConflictReport>,
     /// Index into sub_agents for the stream overlay. None = closed.
     // TODO: consumed by overlay renderer
     pub agent_stream_overlay: Option<usize>,
@@ -837,6 +841,8 @@ impl App {
                 sub_agent_pending_approvals: std::collections::VecDeque::new(),
                 sub_agent_approval_showing: None,
                 spawn_agent_handles: Vec::new(),
+                agent_changes: Vec::new(),
+                conflict_report: None,
                 agent_stream_overlay: None,
                 sidebar_agent_selected: 0,
                 agents_dismiss_row: Cell::new(None),
@@ -7450,6 +7456,13 @@ impl App {
                 a.approval_tx = None;
             }
 
+            // Stash AgentChanges for Review-state agents
+            if matches!(result.final_state, crate::sub_agent::SubAgentState::Review) {
+                if let Some(changes) = result.changes {
+                    self.state.agent_changes.push(changes);
+                }
+            }
+
             // Update chat placeholder
             if let Some(ChatMessage::Tool(tm)) =
                 self.state.chat_messages.get_mut(sh.chat_placeholder_idx)
@@ -7483,11 +7496,35 @@ impl App {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent failed: {}", result.task),
                 });
+            } else if matches!(
+                result.final_state,
+                crate::sub_agent::SubAgentState::Review
+            ) {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent ready for review: {}", result.task),
+                });
             } else {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent done: {}", result.task),
                 });
             }
+        }
+
+        // Check if all non-terminal agents are in Review — trigger merge sweep
+        let all_in_review = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| !a.state.is_terminal())
+            .all(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review));
+        let review_count = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review))
+            .count();
+        if all_in_review && review_count > 0 {
+            self.merge_reviewed_agents().await;
         }
 
         // When all spawn handles are done and no other tools are pending, finalize
@@ -7497,6 +7534,112 @@ impl App {
             && matches!(self.state.agent.state, AgentState::ExecutingTools)
         {
             self.finalize_tool_execution();
+        }
+    }
+
+    /// Run the conflict detection sweep and merge agents that are ready.
+    /// Called when all non-terminal agents have reached Review state.
+    async fn merge_reviewed_agents(&mut self) {
+        let changes = std::mem::take(&mut self.state.agent_changes);
+
+        if changes.len() <= 1 {
+            // Single agent or no agents — skip cross-agent check, merge directly
+            for agent_change in &changes {
+                self.merge_single_agent(agent_change.agent_id).await;
+            }
+            return;
+        }
+
+        // Run cross-agent check
+        let report = crate::sub_agent::conflict::cross_agent_check(&changes);
+
+        if !report.has_blocking() {
+            // No blocking overlaps — merge all sequentially
+            if !report.overlaps.is_empty() {
+                let warn_text =
+                    crate::sub_agent::conflict::format_conflict_report_text(&report);
+                self.state
+                    .chat_messages
+                    .push(ChatMessage::System { content: warn_text });
+            }
+            for agent_change in &changes {
+                self.merge_single_agent(agent_change.agent_id).await;
+            }
+        } else {
+            // Blocking overlaps — surface report, await user decision
+            let report_text =
+                crate::sub_agent::conflict::format_conflict_report_text(&report);
+            self.state
+                .chat_messages
+                .push(ChatMessage::System { content: report_text });
+
+            // Identify which agents are blocked
+            let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
+                .overlaps
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        o.severity,
+                        crate::sub_agent::conflict::OverlapSeverity::Block
+                    )
+                })
+                .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                .collect();
+
+            // Auto-merge non-blocked agents
+            for agent_change in &changes {
+                if !blocked_ids.contains(&agent_change.agent_id) {
+                    self.merge_single_agent(agent_change.agent_id).await;
+                }
+            }
+
+            // Store report for approval flow
+            self.state.conflict_report = Some(report);
+        }
+    }
+
+    /// Merge a single agent's branch and clean up its worktree.
+    async fn merge_single_agent(&mut self, agent_id: uuid::Uuid) {
+        // Extract data upfront to avoid borrow issues with async
+        let (branch, worktree_path) =
+            match self.state.sub_agents.iter().find(|a| a.id == agent_id) {
+                Some(a) => (a.branch.clone(), a.worktree_path.clone()),
+                None => return,
+            };
+
+        let branch_for_merge = branch.clone();
+        let merge_result = tokio::task::spawn_blocking(move || {
+            crate::sub_agent::worktree::merge_branch(&branch_for_merge)
+        })
+        .await;
+
+        match merge_result {
+            Ok(Ok(())) => {
+                // Clean up worktree
+                let wp = worktree_path;
+                let br = branch;
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::sub_agent::worktree::remove_worktree(&wp, &br)
+                })
+                .await;
+
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Done;
+                }
+            }
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Conflict { report: msg };
+                }
+            }
+            Err(e) => {
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Failed {
+                        message: e.to_string(),
+                    };
+                }
+            }
         }
     }
 
