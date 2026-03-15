@@ -38,7 +38,10 @@ pub enum SubAgentState {
 
 impl SubAgentState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Done | Self::Failed { .. } | Self::Conflict { .. })
+        matches!(
+            self,
+            Self::Done | Self::Failed { .. } | Self::Conflict { .. }
+        )
     }
 }
 
@@ -187,7 +190,12 @@ mod tests {
 
     #[test]
     fn elapsed_secs_zero_when_not_started() {
-        let agent = SubAgent::new("t".into(), "b".into(), std::path::PathBuf::new(), String::new());
+        let agent = SubAgent::new(
+            "t".into(),
+            "b".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert_eq!(agent.elapsed_secs(), 0);
     }
 
@@ -238,13 +246,23 @@ mod tests {
 
     #[test]
     fn sub_agent_auto_approve_defaults_false() {
-        let agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new(), String::new());
+        let agent = SubAgent::new(
+            "task".into(),
+            "branch".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert!(!agent.auto_approve);
     }
 
     #[test]
     fn sub_agent_auto_approve_toggleable() {
-        let mut agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new(), String::new());
+        let mut agent = SubAgent::new(
+            "task".into(),
+            "branch".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert!(!agent.auto_approve);
         agent.auto_approve = true;
         assert!(agent.auto_approve);

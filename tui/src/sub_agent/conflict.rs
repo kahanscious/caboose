@@ -34,7 +34,9 @@ pub struct FileChange {
 pub struct AgentChanges {
     pub agent_id: Uuid,
     pub task: String,
+    #[allow(dead_code)]
     pub branch: String,
+    #[allow(dead_code)]
     pub base_sha: String,
     pub files: Vec<FileChange>,
 }
@@ -59,6 +61,7 @@ pub struct OverlapParticipant {
 /// A detected overlap between agents.
 #[derive(Debug)]
 pub struct Overlap {
+    #[allow(dead_code)]
     pub file: String,
     pub participants: Vec<OverlapParticipant>,
     pub severity: OverlapSeverity,
@@ -173,10 +176,11 @@ pub fn cross_agent_check(all_changes: &[AgentChanges]) -> ConflictReport {
 
             // Also track rename source path for rename-vs-modify detection
             if let ChangeKind::Renamed { ref from } = file.kind {
-                file_map
-                    .entry(from.clone())
-                    .or_default()
-                    .push((agent.agent_id, agent.task.clone(), file));
+                file_map.entry(from.clone()).or_default().push((
+                    agent.agent_id,
+                    agent.task.clone(),
+                    file,
+                ));
             }
         }
     }

@@ -302,7 +302,13 @@ pub fn render(
     lines.push(Line::from(""));
 
     // --- Files Modified section ---
-    let files_header_line = render_files_modified(&mut lines, modified_files, inner.width, &colors, files_modified_collapsed);
+    let files_header_line = render_files_modified(
+        &mut lines,
+        modified_files,
+        inner.width,
+        &colors,
+        files_modified_collapsed,
+    );
 
     // --- MCP Servers section ---
     lines.push(Line::from(Span::styled(
@@ -370,6 +376,11 @@ pub fn render(
                 let dots = ".".repeat(dot_count);
                 format!("Phase: planning{dots}")
             }
+            crate::roundhouse::RoundhousePhase::Critiquing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: critiquing{dots}")
+            }
             crate::roundhouse::RoundhousePhase::Synthesizing => {
                 let dot_count = ((tick / 3) % 4) as usize;
                 let dots = ".".repeat(dot_count);
@@ -436,9 +447,17 @@ pub fn render(
                 // Show per-LLM status rows
                 lines.push(Line::from(""));
 
+                // During the Critiquing phase, show critique status instead of planning status
+                let show_critique = rh.phase == crate::roundhouse::RoundhousePhase::Critiquing;
+
                 // Primary planner
+                let (primary_status_ref, primary_tick_ref) = if show_critique {
+                    (&rh.primary_critique_status, rh.primary_critique_status_tick)
+                } else {
+                    (&rh.primary_status, rh.primary_status_tick)
+                };
                 let (primary_icon, primary_status_text, primary_color) =
-                    planner_status_parts(&rh.primary_status, &colors, tick, rh.primary_status_tick);
+                    planner_status_parts(primary_status_ref, &colors, tick, primary_tick_ref);
                 let primary_name = truncate_provider_name(&rh.primary_provider, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -455,12 +474,13 @@ pub fn render(
 
                 // Secondary planners
                 for secondary in &rh.secondaries {
-                    let (icon, status_text, color) = planner_status_parts(
-                        &secondary.status,
-                        &colors,
-                        tick,
-                        secondary.status_tick,
-                    );
+                    let (sec_status_ref, sec_tick_ref) = if show_critique {
+                        (&secondary.critique_status, secondary.critique_status_tick)
+                    } else {
+                        (&secondary.status, secondary.status_tick)
+                    };
+                    let (icon, status_text, color) =
+                        planner_status_parts(sec_status_ref, &colors, tick, sec_tick_ref);
                     let name = truncate_provider_name(&secondary.provider_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
@@ -771,11 +791,20 @@ fn render_files_modified(
                 format!("  {arrow} Files Modified "),
                 Style::default().fg(colors.text_secondary).bold(),
             ),
-            Span::styled(format!("{file_count}"), Style::default().fg(colors.text_muted)),
+            Span::styled(
+                format!("{file_count}"),
+                Style::default().fg(colors.text_muted),
+            ),
             Span::styled(" ", Style::default()),
-            Span::styled(format!("+{total_added}"), Style::default().fg(colors.success)),
+            Span::styled(
+                format!("+{total_added}"),
+                Style::default().fg(colors.success),
+            ),
             Span::styled(" ", Style::default()),
-            Span::styled(format!("-{total_removed}"), Style::default().fg(colors.error)),
+            Span::styled(
+                format!("-{total_removed}"),
+                Style::default().fg(colors.error),
+            ),
         ]));
 
         if !collapsed {
@@ -914,19 +943,27 @@ mod agents_section_tests {
         let colors = Colors::default();
         let mut lines = Vec::new();
         let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
-        assert!(result.is_none(), "dismiss should not show when agents still running");
+        assert!(
+            result.is_none(),
+            "dismiss should not show when agents still running"
+        );
     }
 
     #[test]
     fn dismiss_some_when_all_terminal() {
         let agents = vec![
             make_agent(SubAgentState::Done),
-            make_agent(SubAgentState::Failed { message: "err".into() }),
+            make_agent(SubAgentState::Failed {
+                message: "err".into(),
+            }),
         ];
         let colors = Colors::default();
         let mut lines = Vec::new();
         let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
-        assert!(result.is_some(), "dismiss should show when all agents terminal");
+        assert!(
+            result.is_some(),
+            "dismiss should show when all agents terminal"
+        );
     }
 
     #[test]
@@ -938,7 +975,12 @@ mod agents_section_tests {
     }
 
     fn make_agent(state: SubAgentState) -> SubAgent {
-        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new(), String::new());
+        let mut a = SubAgent::new(
+            "task".into(),
+            "branch".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         a.state = state;
         a
     }

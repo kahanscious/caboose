@@ -147,9 +147,7 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
 /// Get the current HEAD commit SHA.
 #[allow(dead_code)]
 pub fn current_head_sha() -> Result<String, WorktreeError> {
-    let out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()?;
+    let out = Command::new("git").args(["rev-parse", "HEAD"]).output()?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {

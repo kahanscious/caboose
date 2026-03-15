@@ -679,7 +679,10 @@ pub fn render_thinking_block(
                     "\u{25B6} ", // ▶
                     Style::default().fg(colors.text_muted),
                 ),
-                Span::styled("Thought process", Style::default().fg(colors.text_muted).italic()),
+                Span::styled(
+                    "Thought process",
+                    Style::default().fg(colors.text_muted).italic(),
+                ),
             ]));
         }
     } else {

@@ -290,6 +290,7 @@ pub fn render_input_field(
 /// Build the info-line left spans.
 ///
 /// Returns `(accent_color, left_spans)`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_info_left<'a>(
     agent_state_label: Option<&str>,
     quit_confirm: bool,
@@ -367,13 +368,25 @@ pub fn build_info_right(
 
     if model_supports_thinking {
         spans.push(Span::styled("  ", Style::default().fg(colors.text_muted)));
-        spans.push(Span::styled("ctrl+t ", Style::default().fg(colors.text_muted)));
-        spans.push(Span::styled("thinking", Style::default().fg(colors.text_dim)));
+        spans.push(Span::styled(
+            "ctrl+t ",
+            Style::default().fg(colors.text_muted),
+        ));
+        spans.push(Span::styled(
+            "thinking",
+            Style::default().fg(colors.text_dim),
+        ));
     }
 
     spans.push(Span::styled("  ", Style::default().fg(colors.text_muted)));
-    spans.push(Span::styled("ctrl+k ", Style::default().fg(colors.text_muted)));
-    spans.push(Span::styled("commands", Style::default().fg(colors.text_dim)));
+    spans.push(Span::styled(
+        "ctrl+k ",
+        Style::default().fg(colors.text_muted),
+    ));
+    spans.push(Span::styled(
+        "commands",
+        Style::default().fg(colors.text_dim),
+    ));
 
     spans
 }

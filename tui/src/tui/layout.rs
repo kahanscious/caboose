@@ -1829,12 +1829,18 @@ mod tests {
 
     #[test]
     fn sidebar_min_width_reasonable() {
-        assert!(SIDEBAR_MIN_WIDTH >= 15, "sidebar must fit at least a short label");
+        assert!(
+            SIDEBAR_MIN_WIDTH >= 15,
+            "sidebar must fit at least a short label"
+        );
     }
 
     #[test]
     fn sidebar_max_width_bounded() {
-        assert!(SIDEBAR_MAX_WIDTH <= 120, "sidebar should not exceed half a wide terminal");
+        assert!(
+            SIDEBAR_MAX_WIDTH <= 120,
+            "sidebar should not exceed half a wide terminal"
+        );
     }
 
     #[test]

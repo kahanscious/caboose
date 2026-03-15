@@ -194,6 +194,9 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// Per-invocation override for roundhouse critique: `--no-critique` → Some(false),
+    /// `--critique` → Some(true), neither → None (falls back to config).
+    pub roundhouse_critique_override: Option<bool>,
     /// When true, the model picker adds to roundhouse secondaries instead of switching.
     pub roundhouse_model_add: bool,
     /// Receiver for roundhouse planner status updates (parallel planning engine).
@@ -201,6 +204,9 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Receiver for roundhouse critique phase planner updates.
+    pub roundhouse_critique_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Active subagents.
     pub sub_agents: Vec<crate::sub_agent::SubAgent>,
     /// Sender cloned into each subagent executor so they can emit events.
@@ -427,7 +433,12 @@ impl State {
         let prefix = crate::tui::slash_auto::slash_prefix(&input_text);
         match prefix {
             Some(p) => {
-                let count = crate::tui::slash_auto::total_filtered(p, &self.commands, &self.agent_definitions, &self.skills);
+                let count = crate::tui::slash_auto::total_filtered(
+                    p,
+                    &self.commands,
+                    &self.agent_definitions,
+                    &self.skills,
+                );
                 if count == 0 {
                     self.slash_auto = None;
                 } else if let Some(auto) = self.slash_auto.as_mut() {
@@ -581,10 +592,8 @@ impl App {
             .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
         let _ = std::fs::create_dir_all(&project_agents_dir);
         let _ = std::fs::create_dir_all(&global_agents_dir);
-        let agent_definitions = crate::agents::load_agents(
-            Some(&project_agents_dir),
-            Some(&global_agents_dir),
-        );
+        let agent_definitions =
+            crate::agents::load_agents(Some(&project_agents_dir), Some(&global_agents_dir));
 
         // Build system prompt with memory context
         let memory_ctx = memory_store.load_context();
@@ -858,9 +867,11 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                roundhouse_critique_override: None,
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
+                roundhouse_critique_rx: None,
                 sub_agents: Vec::new(),
                 sub_agent_tx: Some(sub_agent_tx),
                 sub_agent_rx: Some(sub_agent_rx),
@@ -1579,10 +1590,15 @@ impl App {
                                         if let Some(dismiss_y) = self.state.agents_dismiss_row.get()
                                             && mouse.row == dismiss_y
                                         {
-                                            self.state.sub_agents.retain(|a| !a.state.is_terminal());
+                                            self.state
+                                                .sub_agents
+                                                .retain(|a| !a.state.is_terminal());
                                             // Clean up stashed changes for dismissed agents
                                             self.state.agent_changes.retain(|c| {
-                                                self.state.sub_agents.iter().any(|a| a.id == c.agent_id)
+                                                self.state
+                                                    .sub_agents
+                                                    .iter()
+                                                    .any(|a| a.id == c.agent_id)
                                             });
                                             self.state.conflict_report = None;
                                             if !self.state.sub_agents.is_empty() {
@@ -1598,10 +1614,12 @@ impl App {
                                         }
 
                                         // Files Modified header click to toggle collapse
-                                        if let Some(header_y) = self.state.files_modified_header_row.get()
+                                        if let Some(header_y) =
+                                            self.state.files_modified_header_row.get()
                                             && mouse.row == header_y
                                         {
-                                            self.state.files_modified_collapsed = !self.state.files_modified_collapsed;
+                                            self.state.files_modified_collapsed =
+                                                !self.state.files_modified_collapsed;
                                             continue;
                                         }
 
@@ -2046,14 +2064,24 @@ impl App {
                                 }
 
                                 if session.all_planners_done() {
-                                    session.phase =
-                                        crate::roundhouse::RoundhousePhase::Synthesizing;
                                     let plan_count = session.successful_plans().len();
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!(
-                                            "All planners complete ({plan_count} plans). Synthesizing..."
-                                        ),
-                                    });
+                                    if session.critique_enabled && !session.secondaries.is_empty() {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Critiquing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Starting critique phase..."
+                                            ),
+                                        });
+                                    } else {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Synthesizing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Synthesizing..."
+                                            ),
+                                        });
+                                    }
                                     all_done = true;
                                 }
                             }
@@ -2063,8 +2091,112 @@ impl App {
                 if cancelled {
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                 } else if all_done {
                     self.state.roundhouse_update_rx = None;
+                    if let Some(ref session) = self.state.roundhouse_session {
+                        if session.phase == crate::roundhouse::RoundhousePhase::Critiquing {
+                            self.start_roundhouse_critique();
+                        } else {
+                            self.start_roundhouse_synthesis();
+                        }
+                    }
+                }
+            }
+
+            // Poll roundhouse critique updates (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_critique_rx {
+                let mut all_critiques_done = false;
+                while let Ok(update) = rx.try_recv() {
+                    match update {
+                        crate::roundhouse::PlannerUpdate::StatusChanged {
+                            planner_index,
+                            status,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                let tick = self.state.tick;
+                                if planner_index == 0 {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        session.primary_critique_streaming_text.clear();
+                                    }
+                                    session.primary_critique_status = status;
+                                    session.primary_critique_status_tick = tick;
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        s.critique_streaming_text.clear();
+                                    }
+                                    s.critique_status = status;
+                                    s.critique_status_tick = tick;
+                                }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::StreamingDelta {
+                            planner_index,
+                            text,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_critique_streaming_text.push_str(&text);
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::TokensUsed { .. } => {
+                            // No-op for now
+                        }
+                        crate::roundhouse::PlannerUpdate::PlanComplete {
+                            planner_index,
+                            result,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                match result {
+                                    Ok(critique_text) => {
+                                        if planner_index == 0 {
+                                            session.primary_critique = Some(critique_text);
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique = Some(critique_text);
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Critique failures are NON-FATAL — just mark as failed
+                                        if planner_index == 0 {
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        }
+                                    }
+                                }
+
+                                if session.all_critiques_done() {
+                                    let critique_count = session.successful_critiques().len();
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All critiques complete ({critique_count} critiques). Synthesizing..."
+                                        ),
+                                    });
+                                    all_critiques_done = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if all_critiques_done {
+                    self.state.roundhouse_critique_rx = None;
                     self.start_roundhouse_synthesis();
                 }
             }
@@ -2100,6 +2232,21 @@ impl App {
                             .map(|(p, t)| (p.as_str(), t.as_str()))
                             .collect();
 
+                        let critique_plans: Vec<(String, String)> = session
+                            .successful_critiques()
+                            .iter()
+                            .map(|(p, t)| (p.to_string(), t.to_string()))
+                            .collect();
+                        let critique_refs: Vec<(&str, &str)> = critique_plans
+                            .iter()
+                            .map(|(p, t)| (p.as_str(), t.as_str()))
+                            .collect();
+                        let critiques_opt = if critique_refs.is_empty() {
+                            None
+                        } else {
+                            Some(critique_refs.as_slice())
+                        };
+
                         session.synthesized_plan = Some(plan_text.clone());
                         session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
 
@@ -2109,6 +2256,7 @@ impl App {
                             &prompt,
                             &individual_refs,
                             &plan_text,
+                            critiques_opt,
                         );
                         match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
                             Ok(path) => {
@@ -2780,6 +2928,16 @@ impl App {
                             self.open_rewind_picker();
                             return;
                         }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
+                        }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
                             self.handle_roundhouse_subcommand(sub.trim());
@@ -2834,12 +2992,11 @@ impl App {
                             let global_agents_dir = dirs::config_dir()
                                 .map(|d| d.join("caboose/agents"))
                                 .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
-                            self.state.agent_definitions =
-                                crate::agents::load_agents_validated(
-                                    Some(&project_agents_dir),
-                                    Some(&global_agents_dir),
-                                    &command_names,
-                                );
+                            self.state.agent_definitions = crate::agents::load_agents_validated(
+                                Some(&project_agents_dir),
+                                Some(&global_agents_dir),
+                                &command_names,
+                            );
 
                             let slash_name = slash.split_whitespace().next().unwrap_or(slash);
                             let args = slash.strip_prefix(slash_name).unwrap_or("").trim();
@@ -2884,9 +3041,8 @@ impl App {
                                         base_sha,
                                     )) => {
                                         let placeholder_idx = self.state.chat_messages.len();
-                                        self.state
-                                            .chat_messages
-                                            .push(ChatMessage::Tool(ToolMessage {
+                                        self.state.chat_messages.push(ChatMessage::Tool(
+                                            ToolMessage {
                                                 name: "spawn_agent".to_string(),
                                                 args: spawn_args.clone(),
                                                 output: None,
@@ -2895,9 +3051,9 @@ impl App {
                                                 file_path: None,
                                                 diff_preview: None,
                                                 diff_expanded: false,
-                                            }));
-                                        let tool_use_id =
-                                            format!("slash-{}", uuid::Uuid::new_v4());
+                                            },
+                                        ));
+                                        let tool_use_id = format!("slash-{}", uuid::Uuid::new_v4());
                                         let handle = tokio::spawn(run_spawn_agent_task(
                                             agent_id,
                                             tool_use_id.clone(),
@@ -3686,6 +3842,16 @@ impl App {
                             self.handle_handoff_command(args).await;
                             return;
                         }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
+                        }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
                             self.handle_roundhouse_subcommand(sub.trim());
@@ -4244,7 +4410,9 @@ impl App {
                             .iter()
                             .chain(recent.iter())
                             .find(|(_, m)| m.id == *model_id)
-                            .map(|(_, m)| (m.supports_tools, m.supports_vision, m.supports_thinking))
+                            .map(|(_, m)| {
+                                (m.supports_tools, m.supports_vision, m.supports_thinking)
+                            })
                     })
                     .unwrap_or((true, false, false));
                 // Build display name for roundhouse before clearing slash_auto
@@ -4853,6 +5021,9 @@ impl App {
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;
+                self.state.roundhouse_update_rx = None;
+                self.state.roundhouse_synthesis_rx = None;
+                self.state.roundhouse_critique_rx = None;
                 self.state.roundhouse_model_add = false;
                 self.state.dialog_stack.pop();
             }
@@ -7423,12 +7594,7 @@ impl App {
 
         // Look up custom agent definition if specified
         let agent_def = if let Some(name) = arguments.get("agent").and_then(|v| v.as_str()) {
-            match self
-                .state
-                .agent_definitions
-                .iter()
-                .find(|a| a.name == name)
-            {
+            match self.state.agent_definitions.iter().find(|a| a.name == name) {
                 Some(def) => Some(def.clone()),
                 None => return Err(format!("spawn_agent: unknown agent '{name}'")),
             }
@@ -7443,9 +7609,9 @@ impl App {
 
         // Auto-clear terminal-state agents
         self.state.sub_agents.retain(|a| !a.state.is_terminal());
-        self.state.agent_changes.retain(|c| {
-            self.state.sub_agents.iter().any(|a| a.id == c.agent_id)
-        });
+        self.state
+            .agent_changes
+            .retain(|c| self.state.sub_agents.iter().any(|a| a.id == c.agent_id));
         self.state.conflict_report = None;
 
         let (branch, worktree_path, base_sha) = if use_worktree {
@@ -7502,9 +7668,7 @@ impl App {
 
             match worktree_result {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    return Err(format!("spawn_agent: failed to create worktree: {e}"))
-                }
+                Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
                 Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
             }
 
@@ -7519,8 +7683,7 @@ impl App {
             (branch, worktree_path, base_sha)
         } else {
             // No worktree — run in current working directory
-            let cwd =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             (String::new(), cwd, String::new())
         };
 
@@ -7554,8 +7717,7 @@ impl App {
         // Build system prompt: custom agent body or inherited
         let system_prompt = if let Some(ref def) = agent_def {
             let mut prompt = def.system_prompt.clone();
-            let ws_block =
-                workspace_system_prompt_block(&self.state.config.workspaces);
+            let ws_block = workspace_system_prompt_block(&self.state.config.workspaces);
             if !ws_block.is_empty() {
                 prompt.push_str(&ws_block);
             }
@@ -7603,10 +7765,11 @@ impl App {
         };
 
         // Get provider
-        let provider_arc = match self.state.providers.get_provider_arc(
-            Some(&self.state.active_provider_name),
-            Some(&model_name),
-        ) {
+        let provider_arc = match self
+            .state
+            .providers
+            .get_provider_arc(Some(&self.state.active_provider_name), Some(&model_name))
+        {
             Ok(p) => p,
             Err(e) => {
                 if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
@@ -7732,10 +7895,7 @@ impl App {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent failed: {}", result.task),
                 });
-            } else if matches!(
-                result.final_state,
-                crate::sub_agent::SubAgentState::Review
-            ) {
+            } else if matches!(result.final_state, crate::sub_agent::SubAgentState::Review) {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent ready for review: {}", result.task),
                 });
@@ -7806,8 +7966,7 @@ impl App {
         if !report.has_blocking() {
             // No blocking overlaps — merge all sequentially
             if !report.overlaps.is_empty() {
-                let warn_text =
-                    crate::sub_agent::conflict::format_conflict_report_text(&report);
+                let warn_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
                 self.state
                     .chat_messages
                     .push(ChatMessage::System { content: warn_text });
@@ -7817,11 +7976,10 @@ impl App {
             }
         } else {
             // Blocking overlaps — surface report, await user decision
-            let report_text =
-                crate::sub_agent::conflict::format_conflict_report_text(&report);
-            self.state
-                .chat_messages
-                .push(ChatMessage::System { content: report_text });
+            let report_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
+            self.state.chat_messages.push(ChatMessage::System {
+                content: report_text,
+            });
 
             // Identify which agents are blocked
             let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
@@ -7851,11 +8009,11 @@ impl App {
     /// Merge a single agent's branch and clean up its worktree.
     async fn merge_single_agent(&mut self, agent_id: uuid::Uuid) {
         // Extract data upfront to avoid borrow issues with async
-        let (branch, worktree_path) =
-            match self.state.sub_agents.iter().find(|a| a.id == agent_id) {
-                Some(a) => (a.branch.clone(), a.worktree_path.clone()),
-                None => return,
-            };
+        let (branch, worktree_path) = match self.state.sub_agents.iter().find(|a| a.id == agent_id)
+        {
+            Some(a) => (a.branch.clone(), a.worktree_path.clone()),
+            None => return,
+        };
 
         // No-worktree agents: skip merge, go straight to Done
         if branch.is_empty() {
@@ -9049,11 +9207,13 @@ impl App {
             Some(&session.primary_model),
         ) {
             let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
             let p = prompt.clone();
             let t = tools.clone();
             tokio::spawn(async move {
                 let result = crate::roundhouse::planner::run_planner(
                     primary_provider,
+                    sys,
                     p,
                     t,
                     timeout,
@@ -9083,12 +9243,14 @@ impl App {
                 .get_provider(Some(&provider_name), Some(&model_name))
             {
                 let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
                 let p = prompt.clone();
                 let t = tools.clone();
                 let idx = i + 1;
                 tokio::spawn(async move {
                     let result = crate::roundhouse::planner::run_planner(
                         provider,
+                        sys,
                         p,
                         t,
                         timeout,
@@ -9107,6 +9269,136 @@ impl App {
                     && let Some(s) = session.secondaries.get_mut(i)
                 {
                     s.status = crate::roundhouse::PlannerStatus::Failed(format!(
+                        "Could not create provider '{provider_name}'"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Spawn parallel critique tasks for Roundhouse mode.
+    /// Each model reviews all plans except its own.
+    fn start_roundhouse_critique(&mut self) {
+        // Extract everything we need from session before releasing the borrow
+        let (prompt, timeout, all_plans, primary_provider_name, primary_model_name, secondaries) = {
+            let session = match self.state.roundhouse_session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let prompt = match session.prompt.clone() {
+                Some(p) => p,
+                None => return,
+            };
+            let timeout = session.config.critique_timeout_secs;
+            let all_plans: Vec<(String, String)> = session
+                .successful_plans()
+                .iter()
+                .map(|(p, t)| (p.to_string(), t.to_string()))
+                .collect();
+            let primary_provider_name = session.primary_provider.clone();
+            let primary_model_name = session.primary_model.clone();
+            let secondaries: Vec<(usize, String, String)> = session
+                .secondaries
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
+                .collect();
+            (
+                prompt,
+                timeout,
+                all_plans,
+                primary_provider_name,
+                primary_model_name,
+                secondaries,
+            )
+        };
+
+        // No tools for critique phase
+        let tools: Vec<crate::provider::ToolDefinition> = Vec::new();
+
+        let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state.roundhouse_critique_rx = Some(update_rx);
+
+        // Build plan refs for critique_system_prompt
+        let plan_refs: Vec<(&str, &str)> = all_plans
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+
+        // Spawn primary critique (index 0)
+        if let Ok(primary_provider) = self
+            .state
+            .providers
+            .get_provider(Some(&primary_provider_name), Some(&primary_model_name))
+        {
+            let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::critique_system_prompt(
+                &prompt,
+                &primary_provider_name,
+                &plan_refs,
+            );
+            let t = tools.clone();
+            tokio::spawn(async move {
+                let result = crate::roundhouse::planner::run_planner(
+                    primary_provider,
+                    sys,
+                    "Review the plans above and provide your critique.".to_string(),
+                    t,
+                    timeout,
+                    tx.clone(),
+                    0,
+                )
+                .await;
+                let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                    planner_index: 0,
+                    result,
+                });
+            });
+        } else {
+            // Mark primary critique as failed
+            if let Some(ref mut session) = self.state.roundhouse_session {
+                session.primary_critique_status = crate::roundhouse::PlannerStatus::Failed(
+                    "Could not create provider for critique".to_string(),
+                );
+            }
+        }
+
+        for (i, provider_name, model_name) in secondaries {
+            if let Ok(provider) = self
+                .state
+                .providers
+                .get_provider(Some(&provider_name), Some(&model_name))
+            {
+                let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::critique_system_prompt(
+                    &prompt,
+                    &provider_name,
+                    &plan_refs,
+                );
+                let t = tools.clone();
+                let idx = i + 1;
+                tokio::spawn(async move {
+                    let result = crate::roundhouse::planner::run_planner(
+                        provider,
+                        sys,
+                        "Review the plans above and provide your critique.".to_string(),
+                        t,
+                        timeout,
+                        tx.clone(),
+                        idx,
+                    )
+                    .await;
+                    let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                        planner_index: idx,
+                        result,
+                    });
+                });
+            } else {
+                // Mark as failed if we can't create the provider
+                if let Some(ref mut session) = self.state.roundhouse_session
+                    && let Some(s) = session.secondaries.get_mut(i)
+                {
+                    s.critique_status = crate::roundhouse::PlannerStatus::Failed(format!(
                         "Could not create provider '{provider_name}'"
                     ));
                 }
@@ -9147,6 +9439,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse cancelled.".to_string(),
@@ -9162,6 +9455,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse session cleared.".to_string(),
@@ -9200,7 +9494,17 @@ impl App {
         }
 
         let prompt = session.prompt.clone().unwrap_or_default();
-        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans);
+        let critiques = session.successful_critiques();
+        let critiques_opt = if critiques.is_empty() {
+            None
+        } else {
+            Some(critiques)
+        };
+        let system = crate::roundhouse::planner::synthesis_system_prompt(
+            &prompt,
+            &plans,
+            critiques_opt.as_deref(),
+        );
 
         let provider = match self.state.providers.get_provider(
             Some(&session.primary_provider),

@@ -80,7 +80,9 @@ impl OpenRouterProvider {
                     .supported_parameters
                     .as_ref()
                     .map(|params| {
-                        params.iter().any(|p| p == "reasoning" || p == "reasoning_content")
+                        params
+                            .iter()
+                            .any(|p| p == "reasoning" || p == "reasoning_content")
                     })
                     .unwrap_or(false),
             });
@@ -425,7 +427,9 @@ impl Provider for OpenRouterProvider {
                         .supported_parameters
                         .as_ref()
                         .map(|params| {
-                            params.iter().any(|p| p == "reasoning" || p == "reasoning_content")
+                            params
+                                .iter()
+                                .any(|p| p == "reasoning" || p == "reasoning_content")
                         })
                         .unwrap_or(false),
                     id: m.id,

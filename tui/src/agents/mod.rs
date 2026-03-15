@@ -15,7 +15,9 @@ pub struct AgentDefinition {
     pub tools: Option<Vec<String>>,
     pub denied_tools: Option<Vec<String>>,
     pub worktree: Option<bool>,
+    #[allow(dead_code)]
     pub source: AgentSource,
+    #[allow(dead_code)]
     pub file_path: PathBuf,
     pub system_prompt: String,
 }
@@ -234,44 +236,50 @@ mod tests {
     #[test]
     fn parse_missing_name_returns_none() {
         let content = "---\ndescription: No name\n---\nBody.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
     fn parse_missing_description_returns_none() {
         let content = "---\nname: foo\n---\nBody.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
     fn parse_both_tools_and_denied_tools_returns_none() {
         let content =
             "---\nname: foo\ndescription: bar\ntools: [read]\ndenied_tools: [write]\n---\nBody.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
     fn parse_invalid_name_returns_none() {
         let content = "---\nname: Code-Reviewer\ndescription: bad name\n---\nBody.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
     fn parse_no_frontmatter_returns_none() {
         let content = "Just a plain markdown file.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
     fn parse_bad_yaml_returns_none() {
         let content = "---\n: invalid yaml [[\n---\nBody.";
-        assert!(parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .is_none());
+        assert!(
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).is_none()
+        );
     }
 
     #[test]
@@ -296,12 +304,9 @@ mod tests {
     #[test]
     fn parse_denied_tools_field() {
         let content = "---\nname: safe-agent\ndescription: No shell\ndenied_tools: [shell, write]\n---\nBe safe.";
-        let def = parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .unwrap();
-        assert_eq!(
-            def.denied_tools,
-            Some(vec!["shell".into(), "write".into()])
-        );
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
+        assert_eq!(def.denied_tools, Some(vec!["shell".into(), "write".into()]));
         assert!(def.tools.is_none());
     }
 
@@ -309,8 +314,8 @@ mod tests {
     fn parse_multiline_body() {
         let content =
             "---\nname: writer\ndescription: Writes code\n---\nLine 1.\n\nLine 2.\n\nLine 3.";
-        let def = parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .unwrap();
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
         assert!(def.system_prompt.contains("Line 1."));
         assert!(def.system_prompt.contains("Line 3."));
     }
@@ -318,8 +323,8 @@ mod tests {
     #[test]
     fn parse_empty_body_allowed() {
         let content = "---\nname: empty\ndescription: No prompt\n---\n";
-        let def = parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .unwrap();
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
         assert_eq!(def.name, "empty");
         assert!(def.system_prompt.is_empty() || def.system_prompt.trim().is_empty());
     }
@@ -328,16 +333,16 @@ mod tests {
     fn parse_worktree_false() {
         let content =
             "---\nname: reader\ndescription: Read only\nworktree: false\n---\nRead stuff.";
-        let def = parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .unwrap();
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
         assert_eq!(def.worktree, Some(false));
     }
 
     #[test]
     fn parse_worktree_default_is_none() {
         let content = "---\nname: default\ndescription: Default worktree\n---\nBody.";
-        let def = parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project)
-            .unwrap();
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
         assert!(def.worktree.is_none());
     }
 
@@ -467,10 +472,7 @@ mod tests {
 
     #[test]
     fn resolve_model_shorthands() {
-        assert_eq!(
-            resolve_model_shorthand("sonnet"),
-            Some("claude-sonnet-4-6")
-        );
+        assert_eq!(resolve_model_shorthand("sonnet"), Some("claude-sonnet-4-6"));
         assert_eq!(resolve_model_shorthand("opus"), Some("claude-opus-4-6"));
         assert_eq!(
             resolve_model_shorthand("haiku"),

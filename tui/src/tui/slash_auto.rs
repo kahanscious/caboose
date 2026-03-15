@@ -213,7 +213,11 @@ pub fn filtered_entries<'a>(
     registry: &'a CommandRegistry,
     agents: &'a [crate::agents::AgentDefinition],
     skills: &'a [crate::skills::Skill],
-) -> (Vec<SlashEntry<'a>>, Vec<SlashEntry<'a>>, Vec<SlashEntry<'a>>) {
+) -> (
+    Vec<SlashEntry<'a>>,
+    Vec<SlashEntry<'a>>,
+    Vec<SlashEntry<'a>>,
+) {
     let prefix_lower = prefix.to_lowercase();
 
     let mut cmds: Vec<SlashEntry<'a>> = registry

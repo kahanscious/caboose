@@ -225,6 +225,7 @@ pub fn build_default_registry() -> CommandRegistry {
             state.roundhouse_session = None;
             state.roundhouse_update_rx = None;
             state.roundhouse_synthesis_rx = None;
+            state.roundhouse_critique_rx = None;
             state.roundhouse_model_add = false;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
@@ -447,9 +448,34 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
+            let critique_enabled = state.roundhouse_critique_override.unwrap_or_else(|| {
+                state
+                    .config
+                    .roundhouse
+                    .as_ref()
+                    .and_then(|r| r.critique)
+                    .unwrap_or(true)
+            });
+            let mut rh_config = crate::roundhouse::RoundhouseConfig::default();
+            if let Some(ref schema) = state.config.roundhouse {
+                if let Some(t) = schema.planning_timeout {
+                    rh_config.planning_timeout_secs = t;
+                }
+                if let Some(b) = schema.per_llm_token_budget {
+                    rh_config.per_llm_token_budget = Some(b);
+                }
+                if let Some(t) = schema.critique_timeout {
+                    rh_config.critique_timeout_secs = t;
+                }
+                if let Some(c) = schema.critique {
+                    rh_config.critique_enabled = c;
+                }
+            }
             state.roundhouse_session = Some(crate::roundhouse::RoundhouseSession::new(
                 primary_id,
                 primary_model,
+                critique_enabled,
+                rh_config,
             ));
 
             let picker = super::dialog::RoundhousePickerState {
