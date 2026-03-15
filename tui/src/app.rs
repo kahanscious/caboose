@@ -1072,7 +1072,7 @@ impl App {
             } else {
                 Some(self.state.active_provider_name.as_str())
             };
-            match self.state.sessions.create(model, provider) {
+            match self.state.sessions.create(model, provider, None, None) {
                 Ok(session) => {
                     self.state.agent.init_cold_store(&session.id);
                     self.state.current_session_id = Some(session.id);
@@ -1105,6 +1105,8 @@ impl App {
                     .map(|p| p.to_string_lossy().to_string()),
                 created_at: chrono::Utc::now(), // not updated — SQL UPDATE doesn't touch it
                 updated_at: chrono::Utc::now(),
+                parent_session_id: None,
+                fork_message_count: None,
             };
             if let Err(e) = self.state.sessions.update(&session) {
                 tracing::warn!("Failed to update session: {e}");

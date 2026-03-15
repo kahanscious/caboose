@@ -18,6 +18,8 @@ pub struct Session {
     pub cwd: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub parent_session_id: Option<String>,
+    pub fork_message_count: Option<u32>,
 }
 
 /// Manages session lifecycle.
@@ -32,7 +34,13 @@ impl SessionManager {
     }
 
     /// Create a new session and persist it.
-    pub fn create(&self, model: Option<&str>, provider: Option<&str>) -> Result<Session> {
+    pub fn create(
+        &self,
+        model: Option<&str>,
+        provider: Option<&str>,
+        parent_session_id: Option<&str>,
+        fork_message_count: Option<u32>,
+    ) -> Result<Session> {
         let now = chrono::Utc::now();
         let cwd = std::env::current_dir()
             .ok()
@@ -46,9 +54,17 @@ impl SessionManager {
             cwd,
             created_at: now,
             updated_at: now,
+            parent_session_id: parent_session_id.map(|s| s.to_string()),
+            fork_message_count,
         };
         self.storage.insert_session(&session)?;
         Ok(session)
+    }
+
+    /// Copy messages from one session to another.
+    #[allow(dead_code)]
+    pub fn copy_messages(&self, from_session_id: &str, to_session_id: &str) -> Result<u32> {
+        self.storage.copy_messages(from_session_id, to_session_id)
     }
 
     /// Update session metadata.
