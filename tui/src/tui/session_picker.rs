@@ -239,6 +239,7 @@ mod tests {
             updated_at: now,
             parent_session_id: None,
             fork_message_count: None,
+            pins: vec![],
         }
     }
 

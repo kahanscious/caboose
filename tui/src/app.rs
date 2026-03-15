@@ -1118,6 +1118,7 @@ impl App {
                 updated_at: chrono::Utc::now(),
                 parent_session_id: None,
                 fork_message_count: None,
+                pins: vec![],
             };
             if let Err(e) = self.state.sessions.update(&session) {
                 tracing::warn!("Failed to update session: {e}");
@@ -10112,6 +10113,7 @@ impl App {
             updated_at: chrono::Utc::now(),
             parent_session_id: Some(parent_id.clone()),
             fork_message_count: Some(message_count),
+            pins: vec![],
         };
         if let Err(e) = self.state.sessions.update(&title_session) {
             tracing::warn!("Failed to set fork title: {e}");
