@@ -273,6 +273,46 @@ pub fn planning_system_prompt(user_prompt: &str) -> String {
     )
 }
 
+/// Build the critique prompt for a model to review other models' plans.
+///
+/// Each model critiques all plans except its own (matched by `own_provider`).
+#[allow(dead_code)]
+pub fn critique_system_prompt(
+    user_prompt: &str,
+    own_provider: &str,
+    all_plans: &[(&str, &str)],
+) -> String {
+    let mut prompt = format!(
+        "You are a critical reviewer in a multi-LLM planning session. \
+         The original user request was:\n\n{user_prompt}\n\n\
+         The following plans were produced by other models. \
+         Review each plan and identify:\n\
+         1. **Risks** — what could go wrong or break\n\
+         2. **Gaps** — what's missing or incomplete\n\
+         3. **Conflicts** — where plans contradict each other\n\
+         4. **Improvements** — concrete suggestions to strengthen each plan\n\n"
+    );
+
+    let mut included = 0;
+    for (provider, plan) in all_plans {
+        if *provider == own_provider {
+            continue;
+        }
+        included += 1;
+        prompt.push_str(&format!("--- Plan from {provider} ---\n{plan}\n\n"));
+    }
+
+    if included == 0 {
+        prompt.push_str("(No other plans available for review.)\n\n");
+    }
+
+    prompt.push_str(
+        "Provide a structured critique covering Risks, Gaps, Conflicts, and Improvements. \
+         Be specific and actionable.",
+    );
+    prompt
+}
+
 /// Build the synthesis prompt given to the primary LLM
 pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> String {
     let mut prompt = format!(
@@ -345,6 +385,39 @@ mod tests {
         assert!(prompt.contains("openai"));
         assert!(prompt.contains("gemini"));
         assert!(prompt.contains("build a feature"));
+    }
+
+    #[test]
+    fn test_critique_prompt_excludes_own_plan() {
+        let plans = vec![
+            ("openai", "OpenAI plan text"),
+            ("gemini", "Gemini plan text"),
+            ("anthropic", "Anthropic plan text"),
+        ];
+        let prompt = critique_system_prompt("build a feature", "gemini", &plans);
+        // Should include other plans but not gemini's own
+        assert!(prompt.contains("OpenAI plan text"));
+        assert!(prompt.contains("Anthropic plan text"));
+        assert!(!prompt.contains("Gemini plan text"));
+        assert!(prompt.contains("openai"));
+        assert!(prompt.contains("anthropic"));
+        // Provider name "gemini" appears in the system instruction text,
+        // but the plan block "--- Plan from gemini ---" should not appear
+        assert!(!prompt.contains("--- Plan from gemini ---"));
+    }
+
+    #[test]
+    fn test_critique_prompt_with_all_plans() {
+        let plans = vec![("openai", "Plan A"), ("gemini", "Plan B")];
+        let prompt = critique_system_prompt("add login", "anthropic", &plans);
+        // All plans included since own_provider doesn't match any
+        assert!(prompt.contains("Plan A"));
+        assert!(prompt.contains("Plan B"));
+        // Contains required keywords
+        assert!(prompt.contains("Risks"));
+        assert!(prompt.contains("Gaps"));
+        assert!(prompt.contains("Conflicts"));
+        assert!(prompt.contains("Improvements"));
     }
 
     #[test]
