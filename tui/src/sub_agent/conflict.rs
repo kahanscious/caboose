@@ -305,6 +305,10 @@ pub fn format_conflict_report_text(report: &ConflictReport) -> String {
         };
         lines.push(format!("{icon} {}", overlap.details));
     }
+    if report.has_blocking() {
+        lines.push(String::new());
+        lines.push("Approve merge? [y/n]".to_string());
+    }
     lines.join("\n")
 }
 

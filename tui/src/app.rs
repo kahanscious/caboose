@@ -2380,6 +2380,53 @@ impl App {
             }
         }
 
+        // Conflict report approval — intercept y/n when blocking overlaps are pending
+        if self.state.conflict_report.is_some() {
+            match key {
+                KeyCode::Char('y') => {
+                    let report = self.state.conflict_report.take().unwrap();
+                    let blocked_ids: Vec<uuid::Uuid> = report
+                        .overlaps
+                        .iter()
+                        .filter(|o| {
+                            matches!(
+                                o.severity,
+                                crate::sub_agent::conflict::OverlapSeverity::Block
+                            )
+                        })
+                        .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                        .collect();
+                    for id in blocked_ids {
+                        self.merge_single_agent(id).await;
+                    }
+                    return;
+                }
+                KeyCode::Char('n') => {
+                    let report = self.state.conflict_report.take().unwrap();
+                    let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
+                        .overlaps
+                        .iter()
+                        .filter(|o| {
+                            matches!(
+                                o.severity,
+                                crate::sub_agent::conflict::OverlapSeverity::Block
+                            )
+                        })
+                        .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                        .collect();
+                    for agent in &mut self.state.sub_agents {
+                        if blocked_ids.contains(&agent.id) {
+                            agent.state = crate::sub_agent::SubAgentState::Conflict {
+                                report: "overlapping edits — skipped by user".to_string(),
+                            };
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Inline approval bar — intercept y/n/a before dialog dispatch
         if matches!(self.state.agent.state, AgentState::PendingApproval { .. }) {
             match key {
