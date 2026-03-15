@@ -289,8 +289,14 @@ pub fn render_input_field(
         height: 1,
     };
 
-    let mut right_spans = vec![Span::raw("  ")];
+    let right_width: usize = info_right.iter().map(|s| s.width()).sum();
+    let right_padding = (area.width as usize).saturating_sub(right_width + 2);
+    let mut right_spans = vec![Span::styled(
+        " ".repeat(right_padding),
+        Style::default().bg(colors.bg_primary),
+    )];
     right_spans.extend(info_right);
+    right_spans.push(Span::raw("  "));
 
     let info_right_line = Paragraph::new(Line::from(right_spans))
         .style(Style::default().bg(colors.bg_primary).fg(colors.text_dim));
