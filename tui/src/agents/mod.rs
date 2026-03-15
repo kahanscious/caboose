@@ -100,10 +100,10 @@ pub fn scan_directory(dir: &std::path::Path, source: AgentSource) -> Vec<AgentDe
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Some(def) = parse_agent_file(&content, &path, source.clone()) {
-                agents.push(def);
-            }
+        if let Ok(content) = std::fs::read_to_string(&path)
+            && let Some(def) = parse_agent_file(&content, &path, source.clone())
+        {
+            agents.push(def);
         }
     }
     agents.sort_by(|a, b| a.name.cmp(&b.name));
@@ -138,7 +138,6 @@ pub fn load_agents(
 }
 
 /// Load agents and filter out any whose names collide with built-in client commands.
-#[allow(dead_code)]
 pub fn load_agents_validated(
     project_dir: Option<&std::path::Path>,
     global_dir: Option<&std::path::Path>,
@@ -161,7 +160,6 @@ pub fn load_agents_validated(
 }
 
 /// Build the agent awareness block for system prompt injection.
-#[allow(dead_code)]
 pub fn build_agent_awareness_block(agents: &[AgentDefinition]) -> String {
     if agents.is_empty() {
         return String::new();
@@ -182,7 +180,6 @@ pub fn build_agent_awareness_block(agents: &[AgentDefinition]) -> String {
 
 /// Resolve a model shorthand to a full model ID.
 /// Returns None for unknown shorthands (caller should fall back to current model).
-#[allow(dead_code)]
 pub fn resolve_model_shorthand(model: &str) -> Option<&'static str> {
     match model {
         "sonnet" => Some("claude-sonnet-4-6"),

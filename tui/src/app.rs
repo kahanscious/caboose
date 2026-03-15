@@ -80,6 +80,8 @@ pub struct State {
     pub file_auto: Option<crate::tui::file_auto::FileAutoState>,
     /// All loaded skills (built-in + user).
     pub skills: Vec<crate::skills::Skill>,
+    /// All loaded custom agent definitions.
+    pub agent_definitions: Vec<crate::agents::AgentDefinition>,
     /// Current active session ID (for persistence).
     pub current_session_id: Option<String>,
     /// Memory store for cross-session persistence.
@@ -425,7 +427,7 @@ impl State {
         let prefix = crate::tui::slash_auto::slash_prefix(&input_text);
         match prefix {
             Some(p) => {
-                let count = crate::tui::slash_auto::total_filtered(p, &self.commands, &self.skills);
+                let count = crate::tui::slash_auto::total_filtered(p, &self.commands, &self.agent_definitions, &self.skills);
                 if count == 0 {
                     self.slash_auto = None;
                 } else if let Some(auto) = self.slash_auto.as_mut() {
@@ -572,6 +574,16 @@ impl App {
         let skills =
             crate::skills::loader::load_all_skills(std::path::Path::new("."), &skills_disabled);
 
+        // Load custom agent definitions
+        let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
+        let global_agents_dir = dirs::config_dir()
+            .map(|d| d.join("caboose/agents"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+        let agent_definitions = crate::agents::load_agents(
+            Some(&project_agents_dir),
+            Some(&global_agents_dir),
+        );
+
         // Build system prompt with memory context
         let memory_ctx = memory_store.load_context();
         let base_prompt = config
@@ -649,6 +661,17 @@ impl App {
         let system_prompt = if skills_awareness && !skills.is_empty() {
             let mut prompt = system_prompt;
             prompt.push_str(&crate::skills::awareness::build_awareness_block(&skills));
+            prompt
+        } else {
+            system_prompt
+        };
+
+        // Inject agent awareness block into system prompt
+        let system_prompt = if !agent_definitions.is_empty() {
+            let mut prompt = system_prompt;
+            prompt.push_str(&crate::agents::build_agent_awareness_block(
+                &agent_definitions,
+            ));
             prompt
         } else {
             system_prompt
@@ -777,6 +800,7 @@ impl App {
                 slash_auto: None,
                 file_auto: None,
                 skills,
+                agent_definitions,
                 current_session_id: None,
                 memory: memory_store,
                 history: crate::tui::input_history::InputHistory::load(),
@@ -2594,6 +2618,7 @@ impl App {
                 &input_text,
                 selected,
                 &self.state.commands,
+                &self.state.agent_definitions,
                 &self.state.skills,
             );
             match key {
@@ -2608,6 +2633,7 @@ impl App {
                     let count = crate::tui::slash_auto::total_filtered(
                         prefix,
                         &self.state.commands,
+                        &self.state.agent_definitions,
                         &self.state.skills,
                     );
                     if let Some(auto) = self.state.slash_auto.as_mut()
@@ -2784,7 +2810,7 @@ impl App {
 
                         // Try skill resolution after command registry check
                         {
-                            // Reload skills from disk before resolution (picks up external changes)
+                            // Reload skills and agents from disk before resolution (picks up external changes)
                             let skills_disabled = self
                                 .state
                                 .config
@@ -2796,6 +2822,22 @@ impl App {
                                 std::path::Path::new("."),
                                 &skills_disabled,
                             );
+                            let command_names: Vec<&str> = self
+                                .state
+                                .commands
+                                .slash_commands()
+                                .filter_map(|c| c.slash)
+                                .collect();
+                            let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
+                            let global_agents_dir = dirs::config_dir()
+                                .map(|d| d.join("caboose/agents"))
+                                .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+                            self.state.agent_definitions =
+                                crate::agents::load_agents_validated(
+                                    Some(&project_agents_dir),
+                                    Some(&global_agents_dir),
+                                    &command_names,
+                                );
 
                             let slash_name = slash.split_whitespace().next().unwrap_or(slash);
                             let args = slash.strip_prefix(slash_name).unwrap_or("").trim();
@@ -2808,8 +2850,79 @@ impl App {
                             let resolution = crate::skills::resolver::resolve_slash_name(
                                 slash_name,
                                 &command_names,
+                                &self.state.agent_definitions,
                                 &self.state.skills,
                             );
+                            if let crate::skills::SlashResolution::Agent(agent_def) = resolution {
+                                // Invoke agent via spawn_agent with the remaining args as the task
+                                let task_text = if args.is_empty() {
+                                    format!("Run agent: {}", agent_def.name)
+                                } else {
+                                    args.to_string()
+                                };
+                                let spawn_args = serde_json::json!({
+                                    "task": task_text,
+                                    "agent": agent_def.name,
+                                });
+                                if !self.require_provider() {
+                                    return;
+                                }
+                                self.state.dialog_stack.base = Screen::Chat;
+                                self.state.dialog_stack.clear();
+                                match self.spawn_agent_setup(&spawn_args).await {
+                                    Ok((
+                                        agent_id,
+                                        input,
+                                        provider,
+                                        config,
+                                        tx,
+                                        task,
+                                        branch,
+                                        worktree_path,
+                                        base_sha,
+                                    )) => {
+                                        let placeholder_idx = self.state.chat_messages.len();
+                                        self.state
+                                            .chat_messages
+                                            .push(ChatMessage::Tool(ToolMessage {
+                                                name: "spawn_agent".to_string(),
+                                                args: spawn_args.clone(),
+                                                output: None,
+                                                status: ToolStatus::Running,
+                                                expanded: false,
+                                                file_path: None,
+                                                diff_preview: None,
+                                                diff_expanded: false,
+                                            }));
+                                        let tool_use_id =
+                                            format!("slash-{}", uuid::Uuid::new_v4());
+                                        let handle = tokio::spawn(run_spawn_agent_task(
+                                            agent_id,
+                                            tool_use_id.clone(),
+                                            task,
+                                            branch,
+                                            worktree_path,
+                                            base_sha,
+                                            input,
+                                            provider,
+                                            config,
+                                            tx,
+                                        ));
+                                        self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                                            tool_use_id,
+                                            arguments: spawn_args,
+                                            chat_placeholder_idx: placeholder_idx,
+                                            handle,
+                                        });
+                                    }
+                                    Err(err_msg) => {
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!("Agent failed: {err_msg}"),
+                                        });
+                                    }
+                                }
+                                return;
+                            }
                             if let crate::skills::SlashResolution::Skill(skill) = resolution {
                                 let cwd = std::env::current_dir()
                                     .unwrap_or_default()
@@ -3091,6 +3204,7 @@ impl App {
                 &input_text,
                 selected,
                 &self.state.commands,
+                &self.state.agent_definitions,
                 &self.state.skills,
             );
             match key {
@@ -3105,6 +3219,7 @@ impl App {
                     let count = crate::tui::slash_auto::total_filtered(
                         prefix,
                         &self.state.commands,
+                        &self.state.agent_definitions,
                         &self.state.skills,
                     );
                     if let Some(auto) = self.state.slash_auto.as_mut()
@@ -4503,6 +4618,7 @@ impl App {
                 let count = crate::tui::slash_auto::total_filtered(
                     prefix,
                     &self.state.commands,
+                    &self.state.agent_definitions,
                     &self.state.skills,
                 );
                 if let Some(auto) = self.state.slash_auto.as_mut()
@@ -7303,30 +7419,25 @@ impl App {
             None => return Err("spawn_agent: missing required parameter 'task'".to_string()),
         };
 
-        // Check gitignore
-        if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
-            return Err(format!(
-                "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
-                 Add .worktrees/ to .gitignore first."
-            ));
-        }
+        // Look up custom agent definition if specified
+        let agent_def = if let Some(name) = arguments.get("agent").and_then(|v| v.as_str()) {
+            match self
+                .state
+                .agent_definitions
+                .iter()
+                .find(|a| a.name == name)
+            {
+                Some(def) => Some(def.clone()),
+                None => return Err(format!("spawn_agent: unknown agent '{name}'")),
+            }
+        } else {
+            None
+        };
 
-        // Compute unique slug
-        let used_slugs: Vec<String> = self
-            .state
-            .sub_agents
-            .iter()
-            .filter_map(|a| {
-                a.worktree_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(|n| n.strip_prefix("agent-"))
-                    .map(|s| s.to_string())
-            })
-            .collect();
-        let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
-        let branch = crate::sub_agent::worktree::branch_name(&slug);
-        let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
+        let use_worktree = agent_def
+            .as_ref()
+            .map(|d| d.worktree.unwrap_or(true))
+            .unwrap_or(true);
 
         // Auto-clear terminal-state agents
         self.state.sub_agents.retain(|a| !a.state.is_terminal());
@@ -7335,47 +7446,81 @@ impl App {
         });
         self.state.conflict_report = None;
 
-        // Clean up any stale branch/worktree from a previous run
-        let branch_cleanup = branch.clone();
-        let path_cleanup = worktree_path.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            // Try removing stale worktree first (ignores errors)
-            let _ = std::process::Command::new("git")
-                .args([
-                    "worktree",
-                    "remove",
-                    "--force",
-                    &path_cleanup.to_string_lossy(),
-                ])
-                .output();
-            // Try deleting stale branch (ignores errors)
-            let _ = std::process::Command::new("git")
-                .args(["branch", "-D", &branch_cleanup])
-                .output();
-        })
-        .await;
+        let (branch, worktree_path, base_sha) = if use_worktree {
+            // Check gitignore
+            if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
+                return Err(format!(
+                    "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
+                     Add .worktrees/ to .gitignore first."
+                ));
+            }
 
-        // Create worktree
-        let path_clone = worktree_path.clone();
-        let branch_clone = branch.clone();
-        let worktree_result = tokio::task::spawn_blocking(move || {
-            crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
-        })
-        .await;
+            // Compute unique slug
+            let used_slugs: Vec<String> = self
+                .state
+                .sub_agents
+                .iter()
+                .filter_map(|a| {
+                    a.worktree_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .and_then(|n| n.strip_prefix("agent-"))
+                        .map(|s| s.to_string())
+                })
+                .collect();
+            let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
+            let branch = crate::sub_agent::worktree::branch_name(&slug);
+            let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
 
-        match worktree_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
-            Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
-        }
+            // Clean up any stale branch/worktree from a previous run
+            let branch_cleanup = branch.clone();
+            let path_cleanup = worktree_path.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("git")
+                    .args([
+                        "worktree",
+                        "remove",
+                        "--force",
+                        &path_cleanup.to_string_lossy(),
+                    ])
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["branch", "-D", &branch_cleanup])
+                    .output();
+            })
+            .await;
 
-        // Capture HEAD SHA before any agent work begins
-        let base_sha = tokio::task::spawn_blocking(|| {
-            crate::sub_agent::worktree::current_head_sha()
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-        .await
-        .unwrap_or_else(|_| "unknown".to_string());
+            // Create worktree
+            let path_clone = worktree_path.clone();
+            let branch_clone = branch.clone();
+            let worktree_result = tokio::task::spawn_blocking(move || {
+                crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
+            })
+            .await;
+
+            match worktree_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    return Err(format!("spawn_agent: failed to create worktree: {e}"))
+                }
+                Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
+            }
+
+            // Capture HEAD SHA before any agent work begins
+            let base_sha = tokio::task::spawn_blocking(|| {
+                crate::sub_agent::worktree::current_head_sha()
+                    .unwrap_or_else(|_| "unknown".to_string())
+            })
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+
+            (branch, worktree_path, base_sha)
+        } else {
+            // No worktree — run in current working directory
+            let cwd =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            (String::new(), cwd, String::new())
+        };
 
         // Register SubAgent
         let agent_id = uuid::Uuid::new_v4();
@@ -7404,8 +7549,44 @@ impl App {
             Mode::Chug => PermissionMode::Chug,
         };
 
-        let system_prompt = self.state.agent.conversation.system_prompt.clone();
-        let pricing = self.state.pricing.get(&self.state.active_model_name);
+        // Build system prompt: custom agent body or inherited
+        let system_prompt = if let Some(ref def) = agent_def {
+            let mut prompt = def.system_prompt.clone();
+            let ws_block =
+                workspace_system_prompt_block(&self.state.config.workspaces);
+            if !ws_block.is_empty() {
+                prompt.push_str(&ws_block);
+            }
+            prompt.push_str(
+                "\n\nYou are a specialized sub-agent. Focus only on your assigned task. \
+                 Do not modify files outside your task scope.",
+            );
+            prompt
+        } else {
+            self.state.agent.conversation.system_prompt.clone()
+        };
+
+        // Resolve model for custom agents
+        let model_name = if let Some(ref def) = agent_def {
+            if let Some(ref model_str) = def.model {
+                match crate::agents::resolve_model_shorthand(model_str) {
+                    Some(resolved) => resolved.to_string(),
+                    None => {
+                        eprintln!(
+                            "warning: agent '{}' has unknown model '{}', using current model",
+                            def.name, model_str
+                        );
+                        self.state.active_model_name.clone()
+                    }
+                }
+            } else {
+                self.state.active_model_name.clone()
+            }
+        } else {
+            self.state.active_model_name.clone()
+        };
+
+        let pricing = self.state.pricing.get(&model_name);
         let input = crate::sub_agent::executor::SubAgentInput {
             id: agent_id,
             task: task.clone(),
@@ -7415,12 +7596,14 @@ impl App {
             approval_rx,
             input_per_m: pricing.map(|p| p.input_per_m).unwrap_or(0.0),
             output_per_m: pricing.map(|p| p.output_per_m).unwrap_or(0.0),
+            allowed_tools: agent_def.as_ref().and_then(|d| d.tools.clone()),
+            denied_tools: agent_def.as_ref().and_then(|d| d.denied_tools.clone()),
         };
 
         // Get provider
         let provider_arc = match self.state.providers.get_provider_arc(
             Some(&self.state.active_provider_name),
-            Some(&self.state.active_model_name),
+            Some(&model_name),
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -7506,10 +7689,10 @@ impl App {
             }
 
             // Stash AgentChanges for Review-state agents
-            if matches!(result.final_state, crate::sub_agent::SubAgentState::Review) {
-                if let Some(changes) = result.changes {
-                    self.state.agent_changes.push(changes);
-                }
+            if matches!(result.final_state, crate::sub_agent::SubAgentState::Review)
+                && let Some(changes) = result.changes
+            {
+                self.state.agent_changes.push(changes);
             }
 
             // Update chat placeholder
@@ -7524,21 +7707,23 @@ impl App {
                 tm.output = Some(result.result_text.clone());
             }
 
-            // Inject ToolResult into agent conversation
-            self.state
-                .agent
-                .conversation
-                .push(crate::agent::conversation::Message {
-                    role: crate::agent::conversation::Role::User,
-                    content: crate::agent::conversation::Content::Blocks(vec![
-                        crate::agent::conversation::ContentBlock::ToolResult {
-                            tool_use_id: result.tool_use_id.clone(),
-                            content: result.result_text.clone(),
-                            is_error: result.is_error,
-                        },
-                    ]),
-                    tool_call_id: Some(result.tool_use_id),
-                });
+            // Inject ToolResult into agent conversation (skip for slash-invoked agents)
+            if !result.tool_use_id.starts_with("slash-") {
+                self.state
+                    .agent
+                    .conversation
+                    .push(crate::agent::conversation::Message {
+                        role: crate::agent::conversation::Role::User,
+                        content: crate::agent::conversation::Content::Blocks(vec![
+                            crate::agent::conversation::ContentBlock::ToolResult {
+                                tool_use_id: result.tool_use_id.clone(),
+                                content: result.result_text.clone(),
+                                is_error: result.is_error,
+                            },
+                        ]),
+                        tool_call_id: Some(result.tool_use_id),
+                    });
+            }
 
             // Emit system chat message
             if result.is_error {
@@ -7590,6 +7775,20 @@ impl App {
     /// Called when all non-terminal agents have reached Review state.
     async fn merge_reviewed_agents(&mut self) {
         let changes = std::mem::take(&mut self.state.agent_changes);
+
+        // No-worktree agents won't have changes entries — move them to Done directly
+        let no_worktree_ids: Vec<uuid::Uuid> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| {
+                matches!(a.state, crate::sub_agent::SubAgentState::Review) && a.branch.is_empty()
+            })
+            .map(|a| a.id)
+            .collect();
+        for id in no_worktree_ids {
+            self.merge_single_agent(id).await;
+        }
 
         if changes.len() <= 1 {
             // Single agent or no agents — skip cross-agent check, merge directly
@@ -7655,6 +7854,14 @@ impl App {
                 Some(a) => (a.branch.clone(), a.worktree_path.clone()),
                 None => return,
             };
+
+        // No-worktree agents: skip merge, go straight to Done
+        if branch.is_empty() {
+            if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                a.state = crate::sub_agent::SubAgentState::Done;
+            }
+            return;
+        }
 
         let branch_for_merge = branch.clone();
         let merge_result = tokio::task::spawn_blocking(move || {

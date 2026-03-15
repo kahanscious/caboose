@@ -19,6 +19,10 @@ pub struct SubAgentInput {
     pub input_per_m: f64,
     /// Per-million-token output price (from PricingRegistry). 0.0 if model has no pricing.
     pub output_per_m: f64,
+    /// If set, only these built-in tools are allowed (allowlist).
+    pub allowed_tools: Option<Vec<String>>,
+    /// If set, these built-in tools are removed (denylist).
+    pub denied_tools: Option<Vec<String>>,
 }
 
 /// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
@@ -57,6 +61,15 @@ pub async fn run_subagent(
     let mut tool_defs = tool_registry.definitions().to_vec();
     // Remove spawn_agent from subagent's tools — no recursive spawning
     tool_defs.retain(|d| d.name != "spawn_agent");
+    // Apply custom agent tool restrictions (built-in tools only).
+    // IMPORTANT: This must run BEFORE mcp tool_definitions are extended,
+    // so MCP tools are always available regardless of agent config.
+    if let Some(ref allowed) = input.allowed_tools {
+        tool_defs.retain(|d| allowed.iter().any(|t| t == &d.name));
+    }
+    if let Some(ref denied) = input.denied_tools {
+        tool_defs.retain(|d| !denied.iter().any(|t| t == &d.name));
+    }
     tool_defs.extend(mcp_manager.tool_definitions());
 
     // Inject working directory into the task message
@@ -268,6 +281,8 @@ mod tests {
             approval_rx: rx,
             input_per_m: 0.0,
             output_per_m: 0.0,
+            allowed_tools: None,
+            denied_tools: None,
         };
         assert_eq!(input.task, "implement auth");
         assert_eq!(input.id, id);

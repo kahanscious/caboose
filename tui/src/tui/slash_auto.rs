@@ -172,6 +172,7 @@ impl SlashAutoState {
 /// A unified entry for the autocomplete dropdown.
 pub enum SlashEntry<'a> {
     Command(&'a Command),
+    Agent(&'a crate::agents::AgentDefinition),
     Skill(&'a crate::skills::Skill),
 }
 
@@ -179,6 +180,7 @@ impl<'a> SlashEntry<'a> {
     pub fn slash_name(&self) -> &str {
         match self {
             SlashEntry::Command(c) => c.slash.unwrap_or(""),
+            SlashEntry::Agent(a) => &a.name,
             SlashEntry::Skill(s) => &s.name,
         }
     }
@@ -186,6 +188,7 @@ impl<'a> SlashEntry<'a> {
     pub fn display_name(&self) -> &str {
         match self {
             SlashEntry::Command(c) => c.name,
+            SlashEntry::Agent(a) => &a.description,
             SlashEntry::Skill(s) => &s.description,
         }
     }
@@ -203,13 +206,14 @@ pub fn slash_prefix(input: &str) -> Option<&str> {
     Some(after_slash.split_whitespace().next().unwrap_or(after_slash))
 }
 
-/// Filter and return matching slash entries, split into (commands, skills).
-/// Both lists are alphabetized by slash name. Prefix-matched against `prefix`.
+/// Filter and return matching slash entries, split into (commands, agents, skills).
+/// All lists are alphabetized by slash name. Prefix-matched against `prefix`.
 pub fn filtered_entries<'a>(
     prefix: &str,
     registry: &'a CommandRegistry,
+    agents: &'a [crate::agents::AgentDefinition],
     skills: &'a [crate::skills::Skill],
-) -> (Vec<SlashEntry<'a>>, Vec<SlashEntry<'a>>) {
+) -> (Vec<SlashEntry<'a>>, Vec<SlashEntry<'a>>, Vec<SlashEntry<'a>>) {
     let prefix_lower = prefix.to_lowercase();
 
     let mut cmds: Vec<SlashEntry<'a>> = registry
@@ -223,6 +227,13 @@ pub fn filtered_entries<'a>(
         .collect();
     cmds.sort_by(|a, b| a.slash_name().cmp(b.slash_name()));
 
+    let mut agent_entries: Vec<SlashEntry<'a>> = agents
+        .iter()
+        .filter(|a| a.name.to_lowercase().starts_with(&prefix_lower))
+        .map(SlashEntry::Agent)
+        .collect();
+    agent_entries.sort_by(|a, b| a.slash_name().cmp(b.slash_name()));
+
     let mut skill_entries: Vec<SlashEntry<'a>> = skills
         .iter()
         .filter(|s| s.name.to_lowercase().starts_with(&prefix_lower))
@@ -230,17 +241,18 @@ pub fn filtered_entries<'a>(
         .collect();
     skill_entries.sort_by(|a, b| a.slash_name().cmp(b.slash_name()));
 
-    (cmds, skill_entries)
+    (cmds, agent_entries, skill_entries)
 }
 
-/// Total number of filtered entries (commands + skills).
+/// Total number of filtered entries (commands + agents + skills).
 pub fn total_filtered(
     prefix: &str,
     registry: &CommandRegistry,
+    agents: &[crate::agents::AgentDefinition],
     skills: &[crate::skills::Skill],
 ) -> usize {
-    let (cmds, skill_entries) = filtered_entries(prefix, registry, skills);
-    cmds.len() + skill_entries.len()
+    let (cmds, agent_entries, skill_entries) = filtered_entries(prefix, registry, agents, skills);
+    cmds.len() + agent_entries.len() + skill_entries.len()
 }
 
 /// Result from slash autocomplete key handling.
@@ -260,6 +272,7 @@ pub fn handle_slash_key(
     input: &str,
     selected: usize,
     registry: &CommandRegistry,
+    agents: &[crate::agents::AgentDefinition],
     skills: &[crate::skills::Skill],
 ) -> (SlashKeyResult, Option<String>) {
     let prefix = slash_prefix(input).unwrap_or("");
@@ -270,8 +283,13 @@ pub fn handle_slash_key(
         KeyCode::Esc => (SlashKeyResult::Consumed, None),
         KeyCode::Tab | KeyCode::Enter => {
             // Find the entry at `selected` index and complete
-            let (cmds, skill_entries) = filtered_entries(prefix, registry, skills);
-            let all: Vec<&SlashEntry> = cmds.iter().chain(skill_entries.iter()).collect();
+            let (cmds, agent_entries, skill_entries) =
+                filtered_entries(prefix, registry, agents, skills);
+            let all: Vec<&SlashEntry> = cmds
+                .iter()
+                .chain(agent_entries.iter())
+                .chain(skill_entries.iter())
+                .collect();
             if let Some(entry) = all.get(selected) {
                 let completed = format!("/{}", entry.slash_name());
                 (SlashKeyResult::Consumed, Some(completed))
@@ -1048,6 +1066,7 @@ pub fn render_slash_autocomplete(
     state: &SlashAutoState,
     input: &str,
     registry: &CommandRegistry,
+    agents: &[crate::agents::AgentDefinition],
     skills: &[crate::skills::Skill],
     colors: &crate::tui::theme::Colors,
     above: bool,
@@ -1060,8 +1079,9 @@ pub fn render_slash_autocomplete(
                 Some(p) => p,
                 None => return,
             };
-            let (cmds, skill_entries) = filtered_entries(prefix, registry, skills);
-            if cmds.is_empty() && skill_entries.is_empty() {
+            let (cmds, agent_entries, skill_entries) =
+                filtered_entries(prefix, registry, agents, skills);
+            if cmds.is_empty() && agent_entries.is_empty() && skill_entries.is_empty() {
                 return;
             }
 
@@ -1076,6 +1096,20 @@ pub fn render_slash_autocomplete(
                 ))));
                 item_idx += 1;
                 for entry in &cmds {
+                    let line = format_entry_line(entry, anchor.width, colors);
+                    items.push(ListItem::new(line));
+                    selectable_indices.push(item_idx);
+                    item_idx += 1;
+                }
+            }
+
+            if !agent_entries.is_empty() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    " Agents",
+                    Style::default().fg(colors.text_dim).bold(),
+                ))));
+                item_idx += 1;
+                for entry in &agent_entries {
                     let line = format_entry_line(entry, anchor.width, colors);
                     items.push(ListItem::new(line));
                     selectable_indices.push(item_idx);
@@ -1384,19 +1418,19 @@ mod tests {
         }];
 
         // "mo" should match "model" command and "mocha" skill
-        let (cmds, sk) = filtered_entries("mo", &registry, &skills);
+        let (cmds, _agents, sk) = filtered_entries("mo", &registry, &[], &skills);
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].slash_name(), "model");
         assert_eq!(sk.len(), 1);
         assert_eq!(sk[0].slash_name(), "mocha");
 
         // "" matches everything
-        let (cmds, sk) = filtered_entries("", &registry, &skills);
+        let (cmds, _agents, sk) = filtered_entries("", &registry, &[], &skills);
         assert_eq!(cmds.len(), 2);
         assert_eq!(sk.len(), 1);
 
         // "z" matches nothing
-        let (cmds, sk) = filtered_entries("z", &registry, &skills);
+        let (cmds, _agents, sk) = filtered_entries("z", &registry, &[], &skills);
         assert_eq!(cmds.len(), 0);
         assert_eq!(sk.len(), 0);
     }
@@ -1423,7 +1457,7 @@ mod tests {
             execute: |_| crate::tui::command::Action::None,
         });
 
-        let (cmds, _) = filtered_entries("", &registry, &[]);
+        let (cmds, _, _) = filtered_entries("", &registry, &[], &[]);
         assert_eq!(cmds[0].slash_name(), "compact");
         assert_eq!(cmds[1].slash_name(), "quit");
     }
@@ -1441,7 +1475,7 @@ mod tests {
             execute: |_| crate::tui::command::Action::None,
         });
 
-        let (result, completion) = handle_slash_key(KeyCode::Tab, "/mo", 0, &registry, &[]);
+        let (result, completion) = handle_slash_key(KeyCode::Tab, "/mo", 0, &registry, &[], &[]);
         assert!(matches!(result, SlashKeyResult::Consumed));
         assert_eq!(completion, Some("/model".to_string()));
     }
@@ -1449,7 +1483,7 @@ mod tests {
     #[test]
     fn handle_slash_key_esc_consumed() {
         let registry = CommandRegistry::new();
-        let (result, completion) = handle_slash_key(KeyCode::Esc, "/", 0, &registry, &[]);
+        let (result, completion) = handle_slash_key(KeyCode::Esc, "/", 0, &registry, &[], &[]);
         assert!(matches!(result, SlashKeyResult::Consumed));
         assert!(completion.is_none());
     }
@@ -1457,7 +1491,7 @@ mod tests {
     #[test]
     fn handle_slash_key_char_falls_through() {
         let registry = CommandRegistry::new();
-        let (result, _) = handle_slash_key(KeyCode::Char('a'), "/", 0, &registry, &[]);
+        let (result, _) = handle_slash_key(KeyCode::Char('a'), "/", 0, &registry, &[], &[]);
         assert!(matches!(result, SlashKeyResult::Fallthrough));
     }
 

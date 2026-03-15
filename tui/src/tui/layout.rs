@@ -1191,6 +1191,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             auto,
             &app.input.content(),
             &app.commands,
+            &app.agent_definitions,
             &app.skills,
             colors,
             true,

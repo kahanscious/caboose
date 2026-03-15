@@ -228,6 +228,7 @@ pub fn render(frame: &mut Frame, state: &State) {
             auto,
             &input_text,
             &state.commands,
+            &state.agent_definitions,
             &state.skills,
             &colors,
             false,
