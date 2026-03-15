@@ -68,4 +68,44 @@ mod tests {
         assert!(doc.contains("Plan A"));
         assert!(doc.contains("Plan B"));
     }
+
+    #[test]
+    fn test_format_plans_document_with_critiques() {
+        let doc = format_plans_document(
+            "build auth",
+            &[("openai", "Plan A"), ("gemini", "Plan B")],
+            "Unified plan here",
+            Some(&[
+                ("openai", "Critique of Plan A"),
+                ("gemini", "Critique of Plan B"),
+            ]),
+        );
+        assert!(doc.contains("## Critiques"));
+        assert!(doc.contains("### openai"));
+        assert!(doc.contains("Critique of Plan A"));
+        assert!(doc.contains("### gemini"));
+        assert!(doc.contains("Critique of Plan B"));
+    }
+
+    #[test]
+    fn test_format_plans_document_without_critiques() {
+        let doc = format_plans_document(
+            "build auth",
+            &[("openai", "Plan A")],
+            "Unified plan here",
+            None,
+        );
+        assert!(!doc.contains("## Critiques"));
+        assert!(doc.contains("## Synthesized Plan"));
+        assert!(doc.contains("## Individual Plans"));
+
+        // Also verify empty slice produces no critiques section
+        let doc2 = format_plans_document(
+            "build auth",
+            &[("openai", "Plan A")],
+            "Unified plan here",
+            Some(&[]),
+        );
+        assert!(!doc2.contains("## Critiques"));
+    }
 }
