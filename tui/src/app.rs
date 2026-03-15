@@ -250,6 +250,10 @@ pub struct State {
     pub diff_expanded: bool,
     /// Scroll offset for the expanded pending diff.
     pub diff_scroll: usize,
+    /// Session-scoped pinned rules injected into system prompt.
+    pub pins: Vec<String>,
+    /// Whether the pins sidebar section is expanded.
+    pub pins_expanded: bool,
 }
 
 /// Status of a tool execution.
@@ -892,6 +896,8 @@ impl App {
                 active_watchers: Vec::new(),
                 diff_expanded: false,
                 diff_scroll: 0,
+                pins: vec![],
+                pins_expanded: false,
             },
             terminal,
             provider,
@@ -939,6 +945,8 @@ impl App {
         };
 
         self.state.current_session_id = Some(session.id.clone());
+        self.state.pins = session.pins.clone();
+        self.state.pins_expanded = false;
         self.state.agent.init_cold_store(&session.id);
         self.state.session_title = session.title.clone();
         self.state.agent.session_allows.clear();
@@ -3896,6 +3904,90 @@ impl App {
                         // /fork — fork current session
                         if slash == "fork" {
                             self.handle_fork_command();
+                            return;
+                        }
+                        // /pin — add a pinned rule
+                        if slash == "pin" || slash.starts_with("pin ") {
+                            let args = slash.strip_prefix("pin").unwrap_or("").trim();
+                            let text = args.to_string();
+                            if text.is_empty() {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: "Usage: /pin <text>".to_string(),
+                                });
+                                return;
+                            }
+                            self.state.pins.push(text.clone());
+                            if let Some(ref sid) = self.state.current_session_id {
+                                let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                            }
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Pinned: {text}"),
+                            });
+                            return;
+                        }
+                        // /pins — list all pinned rules
+                        if slash == "pins" {
+                            if self.state.pins.is_empty() {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: "No pins set.".to_string(),
+                                });
+                            } else {
+                                let list = self
+                                    .state
+                                    .pins
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, p)| format!("  {}. {p}", i + 1))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: format!("Pins:\n{list}"),
+                                });
+                            }
+                            return;
+                        }
+                        // /unpin — remove pin(s)
+                        if slash == "unpin" || slash.starts_with("unpin ") {
+                            let arg = slash.strip_prefix("unpin").unwrap_or("").trim();
+                            if arg.is_empty() {
+                                if self.state.pins.is_empty() {
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: "No pins to remove.".to_string(),
+                                    });
+                                } else {
+                                    let count = self.state.pins.len();
+                                    self.state.pins.clear();
+                                    if let Some(ref sid) = self.state.current_session_id {
+                                        let _ =
+                                            self.state.sessions.update_pins(sid, &self.state.pins);
+                                    }
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!("Removed all {count} pins."),
+                                    });
+                                }
+                            } else if let Ok(n) = arg.parse::<usize>() {
+                                if n == 0 || n > self.state.pins.len() {
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "Pin {n} does not exist. You have {} pins.",
+                                            self.state.pins.len()
+                                        ),
+                                    });
+                                } else {
+                                    let removed = self.state.pins.remove(n - 1);
+                                    if let Some(ref sid) = self.state.current_session_id {
+                                        let _ =
+                                            self.state.sessions.update_pins(sid, &self.state.pins);
+                                    }
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!("Removed pin: {removed}"),
+                                    });
+                                }
+                            } else {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content: "Usage: /unpin or /unpin <number>".to_string(),
+                                });
+                            }
                             return;
                         }
                         // /handoff — build handoff summary

@@ -227,6 +227,8 @@ pub fn build_default_registry() -> CommandRegistry {
             state.roundhouse_synthesis_rx = None;
             state.roundhouse_critique_rx = None;
             state.roundhouse_model_add = false;
+            state.pins.clear();
+            state.pins_expanded = false;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
             state.agent.turn_count = 0;
@@ -252,6 +254,36 @@ pub fn build_default_registry() -> CommandRegistry {
             // Handled in app.rs — needs access to App methods (persist_message, restore_session)
             Action::None
         },
+    });
+
+    registry.register(Command {
+        id: "session.pin",
+        name: "Pin Rule",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("pin"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "session.pins",
+        name: "List Pins",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("pins"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "session.unpin",
+        name: "Remove Pin(s)",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("unpin"),
+        available: |_| true,
+        execute: |_state| Action::None,
     });
 
     registry.register(Command {
