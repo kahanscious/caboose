@@ -572,32 +572,41 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         let accent = colors.roundhouse;
 
         // Primary planner streaming
-        if !rh.primary_streaming_text.is_empty() {
-            let still_streaming = matches!(
-                rh.primary_status,
-                crate::roundhouse::PlannerStatus::Streaming
-                    | crate::roundhouse::PlannerStatus::Thinking
-                    | crate::roundhouse::PlannerStatus::UsingTool(_)
-            );
+        let planner_active = matches!(
+            rh.primary_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if planner_active || !rh.primary_streaming_text.is_empty() {
             msg_boundaries.push((lines.len(), 2u8));
+            // Header: show tool name if using a tool, otherwise "(planning)"
+            let phase_label = match &rh.primary_status {
+                crate::roundhouse::PlannerStatus::UsingTool(tool) => {
+                    format!("reading {tool}")
+                }
+                _ => "(planning)".to_string(),
+            };
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
                     format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
-                Span::styled("(planning)", Style::default().fg(colors.text_muted)),
+                Span::styled(phase_label, Style::default().fg(colors.text_muted)),
             ]));
-            let parsed =
-                crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
-            if !parsed.is_empty() {
-                let mut sl = parsed;
-                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                    sl.pop();
+            if !rh.primary_streaming_text.is_empty() {
+                let parsed =
+                    crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
                 }
-                lines.extend(sl);
             }
-            if still_streaming {
+            if planner_active {
                 const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
                 let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
                 lines.push(Line::from(Span::styled(
@@ -608,13 +617,13 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         }
 
         // Primary critique streaming
-        if !rh.primary_critique_streaming_text.is_empty() {
-            let still_streaming = matches!(
-                rh.primary_critique_status,
-                crate::roundhouse::PlannerStatus::Streaming
-                    | crate::roundhouse::PlannerStatus::Thinking
-                    | crate::roundhouse::PlannerStatus::UsingTool(_)
-            );
+        let critique_active = matches!(
+            rh.primary_critique_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if critique_active || !rh.primary_critique_streaming_text.is_empty() {
             msg_boundaries.push((lines.len(), 2u8));
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
@@ -624,19 +633,21 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 ),
                 Span::styled("(critiquing)", Style::default().fg(colors.text_muted)),
             ]));
-            let parsed = crate::tui::chat::parse_markdown(
-                &rh.primary_critique_streaming_text,
-                colors,
-                accent,
-            );
-            if !parsed.is_empty() {
-                let mut sl = parsed;
-                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                    sl.pop();
+            if !rh.primary_critique_streaming_text.is_empty() {
+                let parsed = crate::tui::chat::parse_markdown(
+                    &rh.primary_critique_streaming_text,
+                    colors,
+                    accent,
+                );
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
                 }
-                lines.extend(sl);
             }
-            if still_streaming {
+            if critique_active {
                 const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
                 let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
                 lines.push(Line::from(Span::styled(
