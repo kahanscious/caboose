@@ -7151,7 +7151,7 @@ impl App {
         }
 
         let prompt = session.prompt.clone().unwrap_or_default();
-        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans);
+        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans, None);
 
         let provider = match self.state.providers.get_provider(
             Some(&session.primary_provider),

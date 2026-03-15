@@ -313,8 +313,15 @@ pub fn critique_system_prompt(
     prompt
 }
 
-/// Build the synthesis prompt given to the primary LLM
-pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> String {
+/// Build the synthesis prompt given to the primary LLM.
+///
+/// When `critiques` are provided, they are included after the plans so the
+/// synthesizer can address identified risks and gaps.
+pub fn synthesis_system_prompt(
+    user_prompt: &str,
+    plans: &[(&str, &str)],
+    critiques: Option<&[(&str, &str)]>,
+) -> String {
     let mut prompt = format!(
         "You are the primary planner in a multi-LLM planning session. \
          Multiple LLMs have independently created plans for the following request. \
@@ -328,10 +335,25 @@ pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> Str
             i + 1
         ));
     }
-    prompt.push_str(
+
+    if let Some(crits) = critiques
+        && !crits.is_empty()
+    {
+        prompt.push_str("--- Critiques ---\n\n");
+        for (provider, critique) in crits {
+            prompt.push_str(&format!("--- Critique from {provider} ---\n{critique}\n\n"));
+        }
+    }
+
+    let synthesis_instruction = if critiques.is_some_and(|c| !c.is_empty()) {
         "Produce a single unified plan that combines the best approaches. \
-         Note where plans disagreed and explain your choices.",
-    );
+         Note where plans disagreed and explain your choices. \
+         Address the risks and gaps identified in the critiques."
+    } else {
+        "Produce a single unified plan that combines the best approaches. \
+         Note where plans disagreed and explain your choices."
+    };
+    prompt.push_str(synthesis_instruction);
     prompt
 }
 
@@ -379,12 +401,37 @@ mod tests {
     #[test]
     fn test_synthesis_prompt_includes_all_plans() {
         let plans = vec![("openai", "Plan A content"), ("gemini", "Plan B content")];
-        let prompt = synthesis_system_prompt("build a feature", &plans);
+        let prompt = synthesis_system_prompt("build a feature", &plans, None);
         assert!(prompt.contains("Plan A content"));
         assert!(prompt.contains("Plan B content"));
         assert!(prompt.contains("openai"));
         assert!(prompt.contains("gemini"));
         assert!(prompt.contains("build a feature"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_includes_critiques() {
+        let plans = vec![("openai", "Plan A")];
+        let critiques = vec![("gemini", "Risk: missing error handling")];
+        let prompt = synthesis_system_prompt("build a feature", &plans, Some(&critiques));
+        assert!(prompt.contains("--- Critiques ---"));
+        assert!(prompt.contains("Critique from gemini"));
+        assert!(prompt.contains("Risk: missing error handling"));
+        assert!(prompt.contains("risks and gaps"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_without_critiques() {
+        let plans = vec![("openai", "Plan A")];
+        // None critiques — no critique section
+        let prompt_none = synthesis_system_prompt("build a feature", &plans, None);
+        assert!(!prompt_none.contains("--- Critiques ---"));
+        assert!(!prompt_none.contains("risks and gaps"));
+
+        // Empty critiques — no critique section
+        let prompt_empty = synthesis_system_prompt("build a feature", &plans, Some(&[]));
+        assert!(!prompt_empty.contains("--- Critiques ---"));
+        assert!(!prompt_empty.contains("risks and gaps"));
     }
 
     #[test]
