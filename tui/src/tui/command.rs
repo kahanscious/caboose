@@ -448,12 +448,14 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
-            let critique_enabled = state
-                .config
-                .roundhouse
-                .as_ref()
-                .and_then(|r| r.critique)
-                .unwrap_or(true);
+            let critique_enabled = state.roundhouse_critique_override.unwrap_or_else(|| {
+                state
+                    .config
+                    .roundhouse
+                    .as_ref()
+                    .and_then(|r| r.critique)
+                    .unwrap_or(true)
+            });
             let mut rh_config = crate::roundhouse::RoundhouseConfig::default();
             if let Some(ref schema) = state.config.roundhouse {
                 if let Some(t) = schema.planning_timeout {

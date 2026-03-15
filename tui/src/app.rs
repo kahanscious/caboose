@@ -157,6 +157,9 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// Per-invocation override for roundhouse critique: `--no-critique` → Some(false),
+    /// `--critique` → Some(true), neither → None (falls back to config).
+    pub roundhouse_critique_override: Option<bool>,
     /// When true, the model picker adds to roundhouse secondaries instead of switching.
     pub roundhouse_model_add: bool,
     /// Receiver for roundhouse planner status updates (parallel planning engine).
@@ -708,6 +711,7 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                roundhouse_critique_override: None,
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
@@ -2275,6 +2279,16 @@ impl App {
                             self.open_rewind_picker();
                             return;
                         }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
+                        }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
                             self.handle_roundhouse_subcommand(sub.trim());
@@ -3039,6 +3053,16 @@ impl App {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
                             self.handle_handoff_command(args).await;
                             return;
+                        }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
                         }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
