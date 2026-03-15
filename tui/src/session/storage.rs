@@ -261,7 +261,6 @@ impl Storage {
     }
 
     /// Copy all messages from one session to another. Returns the number of messages copied.
-    #[allow(dead_code)]
     pub fn copy_messages(&self, from_session_id: &str, to_session_id: &str) -> Result<u32> {
         let count = self.conn.execute(
             "INSERT INTO messages (session_id, role, content, created_at)

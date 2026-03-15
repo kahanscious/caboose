@@ -451,6 +451,10 @@ fn build_session_items<'a>(
         return (items, None);
     }
 
+    // Build a set of session IDs visible in the list so we can detect fork relationships.
+    let visible_ids: std::collections::HashSet<&str> =
+        filtered.iter().map(|e| e.session.id.as_str()).collect();
+
     // Section header
     items.push(ListItem::new(Line::from(Span::styled(
         " Sessions",
@@ -468,6 +472,13 @@ fn build_session_items<'a>(
             .unwrap_or(false);
         let is_confirming = confirm_delete == Some(sel_idx);
 
+        // Show fork indicator when the parent session is visible in the list.
+        let is_fork = session
+            .parent_session_id
+            .as_deref()
+            .map(|pid| visible_ids.contains(pid))
+            .unwrap_or(false);
+
         let title_str = session
             .title
             .as_deref()
@@ -480,6 +491,8 @@ fn build_session_items<'a>(
                 }
             });
 
+        let fork_prefix = if is_fork { "\u{21B3} " } else { "" };
+
         let active_marker = if is_active { "\u{25CF} " } else { "  " };
 
         let suffix = if is_confirming {
@@ -491,7 +504,7 @@ fn build_session_items<'a>(
         };
 
         let avail = (width as usize).saturating_sub(6);
-        let label_left = format!("{active_marker}{title_str}");
+        let label_left = format!("{active_marker}{fork_prefix}{title_str}");
         let pad = avail
             .saturating_sub(label_left.len())
             .saturating_sub(suffix.len())

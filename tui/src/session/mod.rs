@@ -62,7 +62,6 @@ impl SessionManager {
     }
 
     /// Copy messages from one session to another.
-    #[allow(dead_code)]
     pub fn copy_messages(&self, from_session_id: &str, to_session_id: &str) -> Result<u32> {
         self.storage.copy_messages(from_session_id, to_session_id)
     }
