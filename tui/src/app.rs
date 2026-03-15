@@ -574,11 +574,13 @@ impl App {
         let skills =
             crate::skills::loader::load_all_skills(std::path::Path::new("."), &skills_disabled);
 
-        // Load custom agent definitions
+        // Load custom agent definitions (ensure directories exist)
         let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
         let global_agents_dir = dirs::config_dir()
             .map(|d| d.join("caboose/agents"))
             .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+        let _ = std::fs::create_dir_all(&project_agents_dir);
+        let _ = std::fs::create_dir_all(&global_agents_dir);
         let agent_definitions = crate::agents::load_agents(
             Some(&project_agents_dir),
             Some(&global_agents_dir),
