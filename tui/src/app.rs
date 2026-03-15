@@ -1553,14 +1553,12 @@ impl App {
                                         if let Some(dismiss_y) = self.state.agents_dismiss_row.get()
                                             && mouse.row == dismiss_y
                                         {
-                                            self.state.sub_agents.retain(|a| {
-                                                !matches!(
-                                                    a.state,
-                                                    crate::sub_agent::SubAgentState::Done
-                                                        | crate::sub_agent::SubAgentState::Failed { .. }
-                                                        | crate::sub_agent::SubAgentState::Conflict { .. }
-                                                )
+                                            self.state.sub_agents.retain(|a| !a.state.is_terminal());
+                                            // Clean up stashed changes for dismissed agents
+                                            self.state.agent_changes.retain(|c| {
+                                                self.state.sub_agents.iter().any(|a| a.id == c.agent_id)
                                             });
+                                            self.state.conflict_report = None;
                                             if !self.state.sub_agents.is_empty() {
                                                 let max =
                                                     self.state.sub_agents.len().saturating_sub(1);
@@ -7332,6 +7330,10 @@ impl App {
 
         // Auto-clear terminal-state agents
         self.state.sub_agents.retain(|a| !a.state.is_terminal());
+        self.state.agent_changes.retain(|c| {
+            self.state.sub_agents.iter().any(|a| a.id == c.agent_id)
+        });
+        self.state.conflict_report = None;
 
         // Clean up any stale branch/worktree from a previous run
         let branch_cleanup = branch.clone();
