@@ -164,6 +164,10 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Receiver for roundhouse critique phase planner updates.
+    #[allow(dead_code)]
+    pub roundhouse_critique_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// In-session circuit manager.
     #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
@@ -708,6 +712,7 @@ impl App {
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
+                roundhouse_critique_rx: None,
                 circuit_manager: crate::circuits::runner::CircuitManager::new(5),
                 discovered_locals: vec![],
                 local_discovery_rx: None,
@@ -1673,6 +1678,7 @@ impl App {
                 if cancelled {
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                 } else if all_done {
                     self.state.roundhouse_update_rx = None;
                     self.start_roundhouse_synthesis();
@@ -4060,6 +4066,9 @@ impl App {
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;
+                self.state.roundhouse_update_rx = None;
+                self.state.roundhouse_synthesis_rx = None;
+                self.state.roundhouse_critique_rx = None;
                 self.state.roundhouse_model_add = false;
                 self.state.dialog_stack.pop();
             }
@@ -7083,6 +7092,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse cancelled.".to_string(),
@@ -7098,6 +7108,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse session cleared.".to_string(),

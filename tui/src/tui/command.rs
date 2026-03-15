@@ -225,6 +225,7 @@ pub fn build_default_registry() -> CommandRegistry {
             state.roundhouse_session = None;
             state.roundhouse_update_rx = None;
             state.roundhouse_synthesis_rx = None;
+            state.roundhouse_critique_rx = None;
             state.roundhouse_model_add = false;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
