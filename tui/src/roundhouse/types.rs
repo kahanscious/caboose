@@ -47,6 +47,10 @@ pub struct RoundhouseConfig {
     pub planning_timeout_secs: u64, // default 120
     #[allow(dead_code)]
     pub per_llm_token_budget: Option<u64>,
+    #[allow(dead_code)]
+    pub critique_timeout_secs: u64, // default 60
+    #[allow(dead_code)]
+    pub critique_enabled: bool, // default true
 }
 
 impl Default for RoundhouseConfig {
@@ -54,6 +58,22 @@ impl Default for RoundhouseConfig {
         Self {
             planning_timeout_secs: 120,
             per_llm_token_budget: None,
+            critique_timeout_secs: 60,
+            critique_enabled: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_roundhouse_config_defaults() {
+        let config = RoundhouseConfig::default();
+        assert_eq!(config.planning_timeout_secs, 120);
+        assert!(config.per_llm_token_budget.is_none());
+        assert_eq!(config.critique_timeout_secs, 60);
+        assert!(config.critique_enabled);
     }
 }
