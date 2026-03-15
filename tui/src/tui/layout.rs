@@ -227,7 +227,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
         0u16
     };
     let attachment_height = if app.attachments.is_empty() { 0u16 } else { 1 };
-    let input_height = 4 + extra_lines + queue_height + approval_height + attachment_height;
+    let input_height = 5 + extra_lines + queue_height + approval_height + attachment_height;
 
     let v_constraints: Vec<Constraint> = vec![
         Constraint::Length(1),

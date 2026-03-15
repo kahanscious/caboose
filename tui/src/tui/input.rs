@@ -79,7 +79,7 @@ pub fn render_input_field(
     info_right: Vec<Span>,
     colors: &theme::Colors,
 ) {
-    if area.height < 4 || area.width < 4 {
+    if area.height < 5 || area.width < 4 {
         return;
     }
 
@@ -88,7 +88,7 @@ pub fn render_input_field(
 
     let visual_lines = input.visual_line_count(text_width as u16);
     // How many rows for input lines (at least 1, cap to available space minus 2 for padding/info)
-    let max_input_rows = (area.height as usize).saturating_sub(3).max(1);
+    let max_input_rows = (area.height as usize).saturating_sub(4).max(1);
     let visible_rows = visual_lines.min(max_input_rows);
 
     // Visual cursor position for scroll tracking
@@ -137,7 +137,7 @@ pub fn render_input_field(
             break;
         }
         let y = area.y + 1 + vrow_idx as u16;
-        if y >= area.y + area.height.saturating_sub(1) {
+        if y >= area.y + area.height.saturating_sub(2) {
             break;
         }
         let row_area = Rect {
@@ -251,7 +251,7 @@ pub fn render_input_field(
 
     // --- Padding row (between input and info line) ---
     let pad_y = area.y + 1 + visible_rows as u16;
-    if pad_y < area.y + area.height.saturating_sub(1) {
+    if pad_y < area.y + area.height.saturating_sub(2) {
         let pad_area = Rect {
             x: area.x,
             y: pad_y,
@@ -264,27 +264,37 @@ pub fn render_input_field(
         );
     }
 
-    // --- Info line (always last row) ---
-    let info_y = area.y + area.height - 1;
-    let row3 = Rect {
+    // --- Info line row 1: left content (mode, model, provider) — second-to-last row ---
+    let info_left_y = area.y + area.height - 2;
+    let info_left_area = Rect {
         x: area.x,
-        y: info_y,
+        y: info_left_y,
         width: area.width,
         height: 1,
     };
 
-    let left_width: usize = info_left.iter().map(|s| s.width()).sum();
-    let right_width: usize = info_right.iter().map(|s| s.width()).sum();
-    let padding = (area.width as usize).saturating_sub(left_width + right_width + 2);
+    let mut left_spans = vec![Span::raw("  ")];
+    left_spans.extend(info_left);
 
-    let mut info_spans = vec![Span::raw("  ")];
-    info_spans.extend(info_left);
-    info_spans.push(Span::raw(" ".repeat(padding)));
-    info_spans.extend(info_right);
-
-    let info_line = Paragraph::new(Line::from(info_spans))
+    let info_left_line = Paragraph::new(Line::from(left_spans))
         .style(Style::default().bg(colors.bg_primary).fg(colors.text_dim));
-    frame.render_widget(info_line, row3);
+    frame.render_widget(info_left_line, info_left_area);
+
+    // --- Info line row 2: keybind hints — last row ---
+    let info_right_y = area.y + area.height - 1;
+    let info_right_area = Rect {
+        x: area.x,
+        y: info_right_y,
+        width: area.width,
+        height: 1,
+    };
+
+    let mut right_spans = vec![Span::raw("  ")];
+    right_spans.extend(info_right);
+
+    let info_right_line = Paragraph::new(Line::from(right_spans))
+        .style(Style::default().bg(colors.bg_primary).fg(colors.text_dim));
+    frame.render_widget(info_right_line, info_right_area);
 }
 
 /// Build the info-line left spans.
