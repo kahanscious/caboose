@@ -196,6 +196,11 @@ pub fn render(
                 let dots = ".".repeat(dot_count);
                 format!("Phase: planning{dots}")
             }
+            crate::roundhouse::RoundhousePhase::Critiquing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: critiquing{dots}")
+            }
             crate::roundhouse::RoundhousePhase::Synthesizing => {
                 let dot_count = ((tick / 3) % 4) as usize;
                 let dots = ".".repeat(dot_count);

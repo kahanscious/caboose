@@ -31,6 +31,8 @@ pub enum RoundhousePhase {
     SelectingProviders,
     AwaitingPrompt,
     Planning,
+    #[allow(dead_code)]
+    Critiquing,
     Synthesizing,
     Reviewing,
     Executing,

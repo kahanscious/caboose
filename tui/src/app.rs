@@ -1756,13 +1756,10 @@ impl App {
                     .state
                     .roundhouse_session
                     .as_ref()
-                    .is_some_and(|rh| {
-                        rh.phase == crate::roundhouse::RoundhousePhase::Executing
-                    })
+                    .is_some_and(|rh| rh.phase == crate::roundhouse::RoundhousePhase::Executing)
+                && let Some(ref mut rh) = self.state.roundhouse_session
             {
-                if let Some(ref mut rh) = self.state.roundhouse_session {
-                    rh.phase = crate::roundhouse::RoundhousePhase::Complete;
-                }
+                rh.phase = crate::roundhouse::RoundhousePhase::Complete;
             }
 
             if self.state.should_quit {
@@ -7756,7 +7753,13 @@ impl App {
         let mut id = format!("c-{:x}", ts % 0x1000000);
         // Ensure uniqueness against existing circuits
         let mut counter = 1u64;
-        while self.state.circuit_manager.circuits.iter().any(|h| h.circuit.id == id) {
+        while self
+            .state
+            .circuit_manager
+            .circuits
+            .iter()
+            .any(|h| h.circuit.id == id)
+        {
             id = format!("c-{:x}", (ts + counter) % 0x1000000);
             counter += 1;
         }
