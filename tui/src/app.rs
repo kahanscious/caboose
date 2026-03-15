@@ -165,7 +165,6 @@ pub struct State {
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     /// Receiver for roundhouse critique phase planner updates.
-    #[allow(dead_code)]
     pub roundhouse_critique_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// In-session circuit manager.
@@ -1661,14 +1660,24 @@ impl App {
                                 }
 
                                 if session.all_planners_done() {
-                                    session.phase =
-                                        crate::roundhouse::RoundhousePhase::Synthesizing;
                                     let plan_count = session.successful_plans().len();
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!(
-                                            "All planners complete ({plan_count} plans). Synthesizing..."
-                                        ),
-                                    });
+                                    if session.critique_enabled && !session.secondaries.is_empty() {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Critiquing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Starting critique phase..."
+                                            ),
+                                        });
+                                    } else {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Synthesizing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Synthesizing..."
+                                            ),
+                                        });
+                                    }
                                     all_done = true;
                                 }
                             }
@@ -1681,6 +1690,109 @@ impl App {
                     self.state.roundhouse_critique_rx = None;
                 } else if all_done {
                     self.state.roundhouse_update_rx = None;
+                    if let Some(ref session) = self.state.roundhouse_session {
+                        if session.phase == crate::roundhouse::RoundhousePhase::Critiquing {
+                            self.start_roundhouse_critique();
+                        } else {
+                            self.start_roundhouse_synthesis();
+                        }
+                    }
+                }
+            }
+
+            // Poll roundhouse critique updates (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_critique_rx {
+                let mut all_critiques_done = false;
+                while let Ok(update) = rx.try_recv() {
+                    match update {
+                        crate::roundhouse::PlannerUpdate::StatusChanged {
+                            planner_index,
+                            status,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                let tick = self.state.tick;
+                                if planner_index == 0 {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        session.primary_critique_streaming_text.clear();
+                                    }
+                                    session.primary_critique_status = status;
+                                    session.primary_critique_status_tick = tick;
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        s.critique_streaming_text.clear();
+                                    }
+                                    s.critique_status = status;
+                                    s.critique_status_tick = tick;
+                                }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::StreamingDelta {
+                            planner_index,
+                            text,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_critique_streaming_text.push_str(&text);
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::TokensUsed { .. } => {
+                            // No-op for now
+                        }
+                        crate::roundhouse::PlannerUpdate::PlanComplete {
+                            planner_index,
+                            result,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                match result {
+                                    Ok(critique_text) => {
+                                        if planner_index == 0 {
+                                            session.primary_critique = Some(critique_text);
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique = Some(critique_text);
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Critique failures are NON-FATAL — just mark as failed
+                                        if planner_index == 0 {
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        }
+                                    }
+                                }
+
+                                if session.all_critiques_done() {
+                                    let critique_count = session.successful_critiques().len();
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All critiques complete ({critique_count} critiques). Synthesizing..."
+                                        ),
+                                    });
+                                    all_critiques_done = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if all_critiques_done {
+                    self.state.roundhouse_critique_rx = None;
                     self.start_roundhouse_synthesis();
                 }
             }
@@ -1716,6 +1828,21 @@ impl App {
                             .map(|(p, t)| (p.as_str(), t.as_str()))
                             .collect();
 
+                        let critique_plans: Vec<(String, String)> = session
+                            .successful_critiques()
+                            .iter()
+                            .map(|(p, t)| (p.to_string(), t.to_string()))
+                            .collect();
+                        let critique_refs: Vec<(&str, &str)> = critique_plans
+                            .iter()
+                            .map(|(p, t)| (p.as_str(), t.as_str()))
+                            .collect();
+                        let critiques_opt = if critique_refs.is_empty() {
+                            None
+                        } else {
+                            Some(critique_refs.as_slice())
+                        };
+
                         session.synthesized_plan = Some(plan_text.clone());
                         session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
 
@@ -1725,6 +1852,7 @@ impl App {
                             &prompt,
                             &individual_refs,
                             &plan_text,
+                            critiques_opt,
                         );
                         match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
                             Ok(path) => {
@@ -7063,6 +7191,136 @@ impl App {
         }
     }
 
+    /// Spawn parallel critique tasks for Roundhouse mode.
+    /// Each model reviews all plans except its own.
+    fn start_roundhouse_critique(&mut self) {
+        // Extract everything we need from session before releasing the borrow
+        let (prompt, timeout, all_plans, primary_provider_name, primary_model_name, secondaries) = {
+            let session = match self.state.roundhouse_session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let prompt = match session.prompt.clone() {
+                Some(p) => p,
+                None => return,
+            };
+            let timeout = session.config.critique_timeout_secs;
+            let all_plans: Vec<(String, String)> = session
+                .successful_plans()
+                .iter()
+                .map(|(p, t)| (p.to_string(), t.to_string()))
+                .collect();
+            let primary_provider_name = session.primary_provider.clone();
+            let primary_model_name = session.primary_model.clone();
+            let secondaries: Vec<(usize, String, String)> = session
+                .secondaries
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
+                .collect();
+            (
+                prompt,
+                timeout,
+                all_plans,
+                primary_provider_name,
+                primary_model_name,
+                secondaries,
+            )
+        };
+
+        // No tools for critique phase
+        let tools: Vec<crate::provider::ToolDefinition> = Vec::new();
+
+        let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state.roundhouse_critique_rx = Some(update_rx);
+
+        // Build plan refs for critique_system_prompt
+        let plan_refs: Vec<(&str, &str)> = all_plans
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+
+        // Spawn primary critique (index 0)
+        if let Ok(primary_provider) = self
+            .state
+            .providers
+            .get_provider(Some(&primary_provider_name), Some(&primary_model_name))
+        {
+            let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::critique_system_prompt(
+                &prompt,
+                &primary_provider_name,
+                &plan_refs,
+            );
+            let t = tools.clone();
+            tokio::spawn(async move {
+                let result = crate::roundhouse::planner::run_planner(
+                    primary_provider,
+                    sys,
+                    "Review the plans above and provide your critique.".to_string(),
+                    t,
+                    timeout,
+                    tx.clone(),
+                    0,
+                )
+                .await;
+                let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                    planner_index: 0,
+                    result,
+                });
+            });
+        } else {
+            // Mark primary critique as failed
+            if let Some(ref mut session) = self.state.roundhouse_session {
+                session.primary_critique_status = crate::roundhouse::PlannerStatus::Failed(
+                    "Could not create provider for critique".to_string(),
+                );
+            }
+        }
+
+        for (i, provider_name, model_name) in secondaries {
+            if let Ok(provider) = self
+                .state
+                .providers
+                .get_provider(Some(&provider_name), Some(&model_name))
+            {
+                let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::critique_system_prompt(
+                    &prompt,
+                    &provider_name,
+                    &plan_refs,
+                );
+                let t = tools.clone();
+                let idx = i + 1;
+                tokio::spawn(async move {
+                    let result = crate::roundhouse::planner::run_planner(
+                        provider,
+                        sys,
+                        "Review the plans above and provide your critique.".to_string(),
+                        t,
+                        timeout,
+                        tx.clone(),
+                        idx,
+                    )
+                    .await;
+                    let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                        planner_index: idx,
+                        result,
+                    });
+                });
+            } else {
+                // Mark as failed if we can't create the provider
+                if let Some(ref mut session) = self.state.roundhouse_session
+                    && let Some(s) = session.secondaries.get_mut(i)
+                {
+                    s.critique_status = crate::roundhouse::PlannerStatus::Failed(format!(
+                        "Could not create provider '{provider_name}'"
+                    ));
+                }
+            }
+        }
+    }
+
     /// Handle `/roundhouse execute` and `/roundhouse cancel` subcommands.
     fn handle_roundhouse_subcommand(&mut self, sub: &str) {
         match sub {
@@ -7151,7 +7409,17 @@ impl App {
         }
 
         let prompt = session.prompt.clone().unwrap_or_default();
-        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans, None);
+        let critiques = session.successful_critiques();
+        let critiques_opt = if critiques.is_empty() {
+            None
+        } else {
+            Some(critiques)
+        };
+        let system = crate::roundhouse::planner::synthesis_system_prompt(
+            &prompt,
+            &plans,
+            critiques_opt.as_deref(),
+        );
 
         let provider = match self.state.providers.get_provider(
             Some(&session.primary_provider),

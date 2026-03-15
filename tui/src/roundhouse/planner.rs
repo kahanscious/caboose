@@ -276,7 +276,6 @@ pub fn planning_system_prompt(user_prompt: &str) -> String {
 /// Build the critique prompt for a model to review other models' plans.
 ///
 /// Each model critiques all plans except its own (matched by `own_provider`).
-#[allow(dead_code)]
 pub fn critique_system_prompt(
     user_prompt: &str,
     own_provider: &str,

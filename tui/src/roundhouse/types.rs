@@ -23,13 +23,9 @@ pub struct SecondaryPlanner {
     pub token_count: u64,
     #[allow(dead_code)]
     pub cost: f64,
-    #[allow(dead_code)]
     pub critique: Option<String>,
-    #[allow(dead_code)]
     pub critique_status: PlannerStatus,
-    #[allow(dead_code)]
     pub critique_status_tick: u64,
-    #[allow(dead_code)]
     pub critique_streaming_text: String,
 }
 
@@ -39,7 +35,6 @@ pub enum RoundhousePhase {
     SelectingProviders,
     AwaitingPrompt,
     Planning,
-    #[allow(dead_code)]
     Critiquing,
     Synthesizing,
     Reviewing,
@@ -55,10 +50,8 @@ pub struct RoundhouseConfig {
     pub planning_timeout_secs: u64, // default 120
     #[allow(dead_code)]
     pub per_llm_token_budget: Option<u64>,
-    #[allow(dead_code)]
     pub critique_timeout_secs: u64, // default 60
-    #[allow(dead_code)]
-    pub critique_enabled: bool, // default true
+    pub critique_enabled: bool,     // default true
 }
 
 impl Default for RoundhouseConfig {

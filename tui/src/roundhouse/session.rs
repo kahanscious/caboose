@@ -17,15 +17,10 @@ pub struct RoundhouseSession {
     pub plan_file: Option<PathBuf>,
     pub config: RoundhouseConfig,
     pub total_cost: f64,
-    #[allow(dead_code)]
     pub primary_critique: Option<String>,
-    #[allow(dead_code)]
     pub primary_critique_status: PlannerStatus,
-    #[allow(dead_code)]
     pub primary_critique_status_tick: u64,
-    #[allow(dead_code)]
     pub primary_critique_streaming_text: String,
-    #[allow(dead_code)]
     pub critique_enabled: bool,
 }
 
@@ -96,7 +91,6 @@ impl RoundhouseSession {
         primary_done && secondaries_done
     }
 
-    #[allow(dead_code)]
     pub fn all_critiques_done(&self) -> bool {
         let primary_done = matches!(
             self.primary_critique_status,
@@ -111,7 +105,6 @@ impl RoundhouseSession {
         primary_done && secondaries_done
     }
 
-    #[allow(dead_code)]
     pub fn successful_critiques(&self) -> Vec<(&str, &str)> {
         let mut critiques = Vec::new();
         if let Some(ref critique) = self.primary_critique {

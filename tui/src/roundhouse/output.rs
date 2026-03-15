@@ -26,6 +26,7 @@ pub fn format_plans_document(
     prompt: &str,
     individual_plans: &[(&str, &str)],
     synthesized_plan: &str,
+    critiques: Option<&[(&str, &str)]>,
 ) -> String {
     let mut doc = String::new();
     doc.push_str("# Roundhouse Plan\n\n");
@@ -36,6 +37,15 @@ pub fn format_plans_document(
     doc.push_str("## Individual Plans\n\n");
     for (provider, plan) in individual_plans {
         doc.push_str(&format!("### {provider}\n\n{plan}\n\n"));
+    }
+    if let Some(crits) = critiques
+        && !crits.is_empty()
+    {
+        doc.push_str("---\n\n");
+        doc.push_str("## Critiques\n\n");
+        for (provider, critique) in crits {
+            doc.push_str(&format!("### {provider}\n\n{critique}\n\n"));
+        }
     }
     doc
 }
@@ -50,6 +60,7 @@ mod tests {
             "build auth",
             &[("openai", "Plan A"), ("gemini", "Plan B")],
             "Unified plan here",
+            None,
         );
         assert!(doc.contains("# Roundhouse Plan"));
         assert!(doc.contains("build auth"));
