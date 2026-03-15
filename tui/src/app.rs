@@ -6994,11 +6994,13 @@ impl App {
             Some(&session.primary_model),
         ) {
             let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
             let p = prompt.clone();
             let t = tools.clone();
             tokio::spawn(async move {
                 let result = crate::roundhouse::planner::run_planner(
                     primary_provider,
+                    sys,
                     p,
                     t,
                     timeout,
@@ -7028,12 +7030,14 @@ impl App {
                 .get_provider(Some(&provider_name), Some(&model_name))
             {
                 let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
                 let p = prompt.clone();
                 let t = tools.clone();
                 let idx = i + 1;
                 tokio::spawn(async move {
                     let result = crate::roundhouse::planner::run_planner(
                         provider,
+                        sys,
                         p,
                         t,
                         timeout,

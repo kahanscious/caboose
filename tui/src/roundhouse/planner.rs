@@ -77,6 +77,7 @@ async fn execute_read_only_tool(name: &str, input: &Value) -> Result<String, Str
 /// an error as Err(String).
 pub async fn run_planner(
     provider: Box<dyn Provider>,
+    system_prompt: String,
     prompt: String,
     tools: Vec<ToolDefinition>,
     timeout_secs: u64,
@@ -85,7 +86,14 @@ pub async fn run_planner(
 ) -> Result<String, String> {
     let result = tokio::time::timeout(
         Duration::from_secs(timeout_secs),
-        run_planner_inner(&*provider, &prompt, &tools, &update_tx, planner_index),
+        run_planner_inner(
+            &*provider,
+            &system_prompt,
+            &prompt,
+            &tools,
+            &update_tx,
+            planner_index,
+        ),
     )
     .await;
 
@@ -103,13 +111,12 @@ pub async fn run_planner(
 
 async fn run_planner_inner(
     provider: &dyn Provider,
+    system_prompt: &str,
     prompt: &str,
     tools: &[ToolDefinition],
     update_tx: &mpsc::UnboundedSender<PlannerUpdate>,
     planner_index: usize,
 ) -> Result<String, String> {
-    let system_prompt = planning_system_prompt(prompt);
-
     // Build initial messages: system + user prompt
     let mut messages = vec![
         Message {
