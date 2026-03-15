@@ -22,6 +22,7 @@ pub struct RoundhouseSession {
     pub primary_critique_status_tick: u64,
     pub primary_critique_streaming_text: String,
     pub critique_enabled: bool,
+    pub primary_tool_calls: Vec<RoundhouseToolCall>,
 }
 
 impl RoundhouseSession {
@@ -51,6 +52,7 @@ impl RoundhouseSession {
             primary_critique_status_tick: 0,
             primary_critique_streaming_text: String::new(),
             critique_enabled,
+            primary_tool_calls: Vec::new(),
         }
     }
 

@@ -36,6 +36,18 @@ pub enum PlannerUpdate {
         planner_index: usize,
         text: String,
     },
+    ToolStarted {
+        planner_index: usize,
+        tool_name: String,
+        args_summary: String,
+    },
+    ToolCompleted {
+        planner_index: usize,
+        #[allow(dead_code)]
+        tool_name: String,
+        summary: String,
+        is_error: bool,
+    },
     PlanComplete {
         planner_index: usize,
         result: Result<String, String>,
@@ -229,16 +241,75 @@ async fn run_planner_inner(
         // Execute each tool call and build tool_result blocks
         let mut tool_result_blocks = Vec::new();
         for (id, name, arguments) in &tool_calls {
+            let input_val: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+
+            // Build a brief args summary for the "running" state
+            let args_summary = match name.as_str() {
+                "read_file" => input_val
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "glob" => input_val
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "grep" => input_val
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "list_directory" => input_val
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+                _ => name.clone(),
+            };
+
             let _ = update_tx.send(PlannerUpdate::StatusChanged {
                 planner_index,
                 status: super::types::PlannerStatus::UsingTool(name.clone()),
             });
+            let _ = update_tx.send(PlannerUpdate::ToolStarted {
+                planner_index,
+                tool_name: name.clone(),
+                args_summary: args_summary.clone(),
+            });
 
-            let input_val: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
             let (output, is_error) = match execute_read_only_tool(name, &input_val).await {
                 Ok(output) => (output, false),
                 Err(e) => (e, true),
             };
+
+            // Build the completed summary with result details
+            let summary = if is_error {
+                name.clone()
+            } else {
+                match name.as_str() {
+                    "read_file" => {
+                        let line_count = output.lines().count();
+                        format!("{args_summary} ({line_count} lines)")
+                    }
+                    "glob" => {
+                        let match_count = output.lines().count();
+                        format!("{args_summary} ({match_count} matches)")
+                    }
+                    "grep" => {
+                        let match_count = output.lines().count();
+                        format!("{args_summary} ({match_count} results)")
+                    }
+                    "list_directory" => args_summary.clone(),
+                    _ => name.clone(),
+                }
+            };
+            let _ = update_tx.send(PlannerUpdate::ToolCompleted {
+                planner_index,
+                tool_name: name.clone(),
+                summary,
+                is_error,
+            });
 
             tool_result_blocks.push(serde_json::json!({
                 "type": "tool_result",

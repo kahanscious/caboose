@@ -2001,6 +2001,45 @@ impl App {
                                 session.primary_streaming_text.push_str(&text);
                             }
                         }
+                        crate::roundhouse::PlannerUpdate::ToolStarted {
+                            planner_index,
+                            tool_name,
+                            args_summary,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_tool_calls.push(
+                                    crate::roundhouse::RoundhouseToolCall {
+                                        tool_name,
+                                        args_summary,
+                                        status: crate::roundhouse::ToolCallStatus::Running,
+                                        result_summary: None,
+                                    },
+                                );
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::ToolCompleted {
+                            planner_index,
+                            tool_name: _,
+                            summary,
+                            is_error,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                                && let Some(tc) =
+                                    session.primary_tool_calls.iter_mut().rev().find(|tc| {
+                                        tc.status == crate::roundhouse::ToolCallStatus::Running
+                                    })
+                            {
+                                tc.status = if is_error {
+                                    crate::roundhouse::ToolCallStatus::Failed
+                                } else {
+                                    crate::roundhouse::ToolCallStatus::Success
+                                };
+                                tc.result_summary = Some(summary);
+                            }
+                        }
                         crate::roundhouse::PlannerUpdate::TokensUsed {
                             planner_index: _,
                             input_tokens: _,
@@ -2143,6 +2182,10 @@ impl App {
                             {
                                 session.primary_critique_streaming_text.push_str(&text);
                             }
+                        }
+                        crate::roundhouse::PlannerUpdate::ToolStarted { .. }
+                        | crate::roundhouse::PlannerUpdate::ToolCompleted { .. } => {
+                            // Critiques don't use tools, ignore
                         }
                         crate::roundhouse::PlannerUpdate::TokensUsed { .. } => {
                             // No-op for now

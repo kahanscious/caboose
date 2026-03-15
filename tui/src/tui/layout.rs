@@ -595,6 +595,45 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 ),
                 Span::styled(phase_label, Style::default().fg(colors.text_muted)),
             ]));
+            // Render tool calls with running/completed status
+            for tc in &rh.primary_tool_calls {
+                let label = match tc.tool_name.as_str() {
+                    "read_file" => "Read",
+                    "list_directory" => "List",
+                    "glob" => "Glob",
+                    "grep" => "Grep",
+                    _ => tc.tool_name.as_str(),
+                };
+                let (icon_color, summary_text) = match tc.status {
+                    crate::roundhouse::ToolCallStatus::Running => {
+                        let dim = (app.tick / 10) % 2 == 1;
+                        let color = if dim { colors.text_dim } else { colors.warning };
+                        (color, tc.args_summary.clone())
+                    }
+                    crate::roundhouse::ToolCallStatus::Success => (
+                        colors.success,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                    crate::roundhouse::ToolCallStatus::Failed => (
+                        colors.error,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("\u{2022} ", Style::default().fg(icon_color)),
+                    Span::styled(label, Style::default().fg(colors.text)),
+                    Span::styled(
+                        format!("  {summary_text}"),
+                        Style::default()
+                            .fg(colors.text_dim)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ]));
+            }
             if !rh.primary_streaming_text.is_empty() {
                 let parsed =
                     crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);

@@ -44,6 +44,23 @@ pub enum RoundhousePhase {
     Cancelled,
 }
 
+/// Status of a tool call within a Roundhouse planner
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolCallStatus {
+    Running,
+    Success,
+    Failed,
+}
+
+/// A single tool call tracked during Roundhouse planning
+#[derive(Debug, Clone)]
+pub struct RoundhouseToolCall {
+    pub tool_name: String,
+    pub args_summary: String,
+    pub status: ToolCallStatus,
+    pub result_summary: Option<String>,
+}
+
 /// Roundhouse configuration limits
 #[derive(Debug, Clone)]
 pub struct RoundhouseConfig {
