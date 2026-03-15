@@ -267,9 +267,17 @@ pub fn render(
                 // Show per-LLM status rows
                 lines.push(Line::from(""));
 
+                // During the Critiquing phase, show critique status instead of planning status
+                let show_critique = rh.phase == crate::roundhouse::RoundhousePhase::Critiquing;
+
                 // Primary planner
+                let (primary_status_ref, primary_tick_ref) = if show_critique {
+                    (&rh.primary_critique_status, rh.primary_critique_status_tick)
+                } else {
+                    (&rh.primary_status, rh.primary_status_tick)
+                };
                 let (primary_icon, primary_status_text, primary_color) =
-                    planner_status_parts(&rh.primary_status, &colors, tick, rh.primary_status_tick);
+                    planner_status_parts(primary_status_ref, &colors, tick, primary_tick_ref);
                 let primary_name = truncate_provider_name(&rh.primary_provider, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -286,12 +294,13 @@ pub fn render(
 
                 // Secondary planners
                 for secondary in &rh.secondaries {
-                    let (icon, status_text, color) = planner_status_parts(
-                        &secondary.status,
-                        &colors,
-                        tick,
-                        secondary.status_tick,
-                    );
+                    let (sec_status_ref, sec_tick_ref) = if show_critique {
+                        (&secondary.critique_status, secondary.critique_status_tick)
+                    } else {
+                        (&secondary.status, secondary.status_tick)
+                    };
+                    let (icon, status_text, color) =
+                        planner_status_parts(sec_status_ref, &colors, tick, sec_tick_ref);
                     let name = truncate_provider_name(&secondary.provider_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
