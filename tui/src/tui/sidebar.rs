@@ -458,7 +458,7 @@ pub fn render(
                 };
                 let (primary_icon, primary_status_text, primary_color) =
                     planner_status_parts(primary_status_ref, &colors, tick, primary_tick_ref);
-                let primary_name = truncate_provider_name(&rh.primary_provider, 10);
+                let primary_name = truncate_name(&rh.primary_model, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
@@ -481,7 +481,7 @@ pub fn render(
                     };
                     let (icon, status_text, color) =
                         planner_status_parts(sec_status_ref, &colors, tick, sec_tick_ref);
-                    let name = truncate_provider_name(&secondary.provider_name, 10);
+                    let name = truncate_name(&secondary.model_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(format!("{icon} "), Style::default().fg(color)),
@@ -740,13 +740,17 @@ fn typewriter(text: &str, tick: u64, status_tick: u64) -> String {
     chars[..reveal].iter().collect()
 }
 
-/// Truncate or pad a provider name to at most `max` characters.
-fn truncate_provider_name(name: &str, max: usize) -> String {
-    let char_count = name.chars().count();
+/// Truncate or pad a name to at most `max` characters.
+/// If the name contains a `/`, only the part after the last `/` is used.
+/// Any trailing `:free` suffix is stripped before truncation.
+fn truncate_name(name: &str, max: usize) -> String {
+    let short = name.rsplit('/').next().unwrap_or(name);
+    let short = short.strip_suffix(":free").unwrap_or(short);
+    let char_count = short.chars().count();
     if char_count <= max {
-        name.to_string()
+        short.to_string()
     } else {
-        let truncated: String = name.chars().take(max.saturating_sub(1)).collect();
+        let truncated: String = short.chars().take(max.saturating_sub(1)).collect();
         format!("{truncated}…")
     }
 }

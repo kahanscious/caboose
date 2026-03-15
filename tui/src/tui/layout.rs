@@ -383,7 +383,11 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         msg_boundaries.push((start_idx, kind));
         let msg_lines = match msg {
             ChatMessage::User { content, images } => {
-                let accent = mode_accent(app.mode, colors);
+                let accent = if app.roundhouse_session.is_some() {
+                    colors.roundhouse
+                } else {
+                    mode_accent(app.mode, colors)
+                };
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
             ChatMessage::Assistant {
@@ -579,13 +583,52 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
                 Span::styled("(planning)", Style::default().fg(colors.text_muted)),
             ]));
             let parsed =
                 crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+            if !parsed.is_empty() {
+                let mut sl = parsed;
+                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                    sl.pop();
+                }
+                lines.extend(sl);
+            }
+            if still_streaming {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+        }
+
+        // Primary critique streaming
+        if !rh.primary_critique_streaming_text.is_empty() {
+            let still_streaming = matches!(
+                rh.primary_critique_status,
+                crate::roundhouse::PlannerStatus::Streaming
+                    | crate::roundhouse::PlannerStatus::Thinking
+                    | crate::roundhouse::PlannerStatus::UsingTool(_)
+            );
+            msg_boundaries.push((lines.len(), 2u8));
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_model),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled("(critiquing)", Style::default().fg(colors.text_muted)),
+            ]));
+            let parsed = crate::tui::chat::parse_markdown(
+                &rh.primary_critique_streaming_text,
+                colors,
+                accent,
+            );
             if !parsed.is_empty() {
                 let mut sl = parsed;
                 if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
@@ -611,7 +654,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
                 Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
