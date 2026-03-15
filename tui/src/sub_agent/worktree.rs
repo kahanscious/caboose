@@ -123,6 +123,21 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     Ok(())
 }
 
+/// Get the current HEAD commit SHA.
+#[allow(dead_code)]
+pub fn current_head_sha() -> Result<String, WorktreeError> {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&out.stderr).into(),
+        ))
+    }
+}
+
 /// Get the name of the currently checked-out branch.
 #[allow(dead_code)]
 pub fn current_branch() -> Result<String, WorktreeError> {

@@ -7275,14 +7275,7 @@ impl App {
         let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
 
         // Auto-clear terminal-state agents
-        self.state.sub_agents.retain(|a| {
-            !matches!(
-                a.state,
-                crate::sub_agent::SubAgentState::Done
-                    | crate::sub_agent::SubAgentState::Failed { .. }
-                    | crate::sub_agent::SubAgentState::Conflict { .. }
-            )
-        });
+        self.state.sub_agents.retain(|a| !a.state.is_terminal());
 
         // Clean up any stale branch/worktree from a previous run
         let branch_cleanup = branch.clone();
@@ -7318,6 +7311,14 @@ impl App {
             Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
         }
 
+        // Capture HEAD SHA before any agent work begins
+        let base_sha = tokio::task::spawn_blocking(|| {
+            crate::sub_agent::worktree::current_head_sha()
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .await
+        .unwrap_or_else(|_| "unknown".to_string());
+
         // Register SubAgent
         let agent_id = uuid::Uuid::new_v4();
         let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
@@ -7327,6 +7328,7 @@ impl App {
             task: task.clone(),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
+            base_sha,
             state: crate::sub_agent::SubAgentState::Running,
             started_at: Some(std::time::Instant::now()),
             cost_usd: 0.0,

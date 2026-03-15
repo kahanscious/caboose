@@ -938,7 +938,7 @@ mod agents_section_tests {
     }
 
     fn make_agent(state: SubAgentState) -> SubAgent {
-        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new(), String::new());
         a.state = state;
         a
     }
