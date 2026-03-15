@@ -6278,6 +6278,7 @@ impl App {
                                     task,
                                     branch,
                                     worktree_path,
+                                    base_sha,
                                 )) => {
                                     let placeholder_idx = self.state.chat_messages.len();
                                     self.state
@@ -6300,6 +6301,7 @@ impl App {
                                         task,
                                         branch,
                                         worktree_path,
+                                        base_sha,
                                         input,
                                         provider,
                                         config,
@@ -7241,6 +7243,7 @@ impl App {
             String,
             String,
             std::path::PathBuf,
+            String, // base_sha
         ),
         String,
     > {
@@ -7323,6 +7326,7 @@ impl App {
         let agent_id = uuid::Uuid::new_v4();
         let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
 
+        let base_sha_ret = base_sha.clone();
         self.state.sub_agents.push(crate::sub_agent::SubAgent {
             id: agent_id,
             task: task.clone(),
@@ -7400,6 +7404,7 @@ impl App {
             task,
             branch,
             worktree_path,
+            base_sha_ret,
         ))
     }
 
@@ -7429,6 +7434,7 @@ impl App {
                         message: format!("task panicked: {e}"),
                     },
                     cost_usd: 0.0,
+                    changes: None,
                 },
             };
 
@@ -9520,7 +9526,8 @@ async fn run_spawn_agent_task(
     tool_use_id: String,
     task: String,
     branch: String,
-    worktree_path: std::path::PathBuf,
+    _worktree_path: std::path::PathBuf,
+    base_sha: String,
     input: crate::sub_agent::executor::SubAgentInput,
     provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
     config: crate::config::Config,
@@ -9533,70 +9540,35 @@ async fn run_spawn_agent_task(
 
     match run_result {
         Ok((cost, summary)) => {
-            // Merge branch back
-            let branch_merge = branch.clone();
-            let merge_result = tokio::task::spawn_blocking(move || {
-                crate::sub_agent::worktree::merge_branch(&branch_merge)
+            // Collect changes via git diff for conflict detection
+            let diff_output = tokio::task::spawn_blocking({
+                let base = base_sha.clone();
+                let br = branch.clone();
+                move || crate::sub_agent::worktree::run_diff(&base, &br)
             })
             .await;
 
-            match merge_result {
-                Ok(Ok(())) => {
-                    // Remove worktree
-                    let path_rm = worktree_path.clone();
-                    let branch_rm = branch.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        crate::sub_agent::worktree::remove_worktree(&path_rm, &branch_rm)
-                    })
-                    .await;
+            let changes = match diff_output {
+                Ok(Ok(output)) => Some(crate::sub_agent::conflict::AgentChanges {
+                    agent_id,
+                    task: task.clone(),
+                    branch: branch.clone(),
+                    base_sha,
+                    files: crate::sub_agent::conflict::parse_diff_hunks(&output),
+                }),
+                _ => None,
+            };
 
-                    SpawnAgentResult {
-                        agent_id,
-                        tool_use_id,
-                        result_text: format!("Agent completed task: {task}\n\n{summary}"),
-                        is_error: false,
-                        task,
-                        final_state: SubAgentState::Done,
-                        cost_usd: cost,
-                    }
-                }
-                Ok(Err(e)) if e.to_string().contains("CONFLICT") => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!(
-                        "Merge conflict for task '{task}'. \
-                         Worktree preserved at {}. Resolve manually.",
-                        worktree_path.display()
-                    ),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Conflict {
-                        report: e.to_string(),
-                    },
-                    cost_usd: cost,
-                },
-                Ok(Err(e)) => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!("spawn_agent: merge failed for '{task}': {e}"),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Failed {
-                        message: format!("merge failed: {e}"),
-                    },
-                    cost_usd: cost,
-                },
-                Err(e) => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!("spawn_agent: merge task panicked: {e}"),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Failed {
-                        message: format!("merge panicked: {e}"),
-                    },
-                    cost_usd: 0.0,
-                },
+            // Return Review state — merging is handled by the coordination sweep
+            SpawnAgentResult {
+                agent_id,
+                tool_use_id,
+                result_text: format!("Agent completed task: {task}\n\n{summary}"),
+                is_error: false,
+                task,
+                final_state: SubAgentState::Review,
+                cost_usd: cost,
+                changes,
             }
         }
         Err(message) => {
@@ -9609,6 +9581,7 @@ async fn run_spawn_agent_task(
                 task,
                 final_state: SubAgentState::Failed { message },
                 cost_usd: 0.0,
+                changes: None,
             }
         }
     }

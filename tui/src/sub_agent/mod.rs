@@ -151,6 +151,7 @@ pub struct SpawnAgentResult {
     pub is_error: bool,
     pub final_state: SubAgentState,
     pub cost_usd: f64,
+    pub changes: Option<crate::sub_agent::conflict::AgentChanges>,
 }
 
 #[allow(dead_code)]
