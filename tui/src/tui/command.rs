@@ -262,7 +262,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Session,
         keybind: None,
         slash: Some("pin"),
-        available: |_| true,
+        available: |state| state.current_session_id.is_some(),
         execute: |_state| Action::None,
     });
 
@@ -272,7 +272,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Session,
         keybind: None,
         slash: Some("pins"),
-        available: |_| true,
+        available: |state| state.current_session_id.is_some(),
         execute: |_state| Action::None,
     });
 
@@ -282,7 +282,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Session,
         keybind: None,
         slash: Some("unpin"),
-        available: |_| true,
+        available: |state| state.current_session_id.is_some(),
         execute: |_state| Action::None,
     });
 

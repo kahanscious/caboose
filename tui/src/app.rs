@@ -3958,8 +3958,16 @@ impl App {
                             self.handle_fork_command();
                             return;
                         }
-                        // /pin — add a pinned rule
+                        // /pin — add a pinned rule (requires active session)
                         if slash == "pin" || slash.starts_with("pin ") {
+                            if self.state.current_session_id.is_none() {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content:
+                                        "Pins require an active session. Send a message first."
+                                            .to_string(),
+                                });
+                                return;
+                            }
                             let args = slash.strip_prefix("pin").unwrap_or("").trim();
                             let text = args.to_string();
                             if text.is_empty() {
@@ -3978,8 +3986,16 @@ impl App {
                             });
                             return;
                         }
-                        // /pins — list all pinned rules
+                        // /pins — list all pinned rules (requires active session)
                         if slash == "pins" {
+                            if self.state.current_session_id.is_none() {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content:
+                                        "Pins require an active session. Send a message first."
+                                            .to_string(),
+                                });
+                                return;
+                            }
                             if self.state.pins.is_empty() {
                                 self.state.chat_messages.push(ChatMessage::System {
                                     content: "No pins set.".to_string(),
@@ -3999,8 +4015,16 @@ impl App {
                             }
                             return;
                         }
-                        // /unpin — remove pin(s)
+                        // /unpin — remove pin(s) (requires active session)
                         if slash == "unpin" || slash.starts_with("unpin ") {
+                            if self.state.current_session_id.is_none() {
+                                self.state.chat_messages.push(ChatMessage::System {
+                                    content:
+                                        "Pins require an active session. Send a message first."
+                                            .to_string(),
+                                });
+                                return;
+                            }
                             let arg = slash.strip_prefix("unpin").unwrap_or("").trim();
                             if arg.is_empty() {
                                 if self.state.pins.is_empty() {
