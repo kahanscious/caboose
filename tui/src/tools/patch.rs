@@ -25,6 +25,10 @@ pub async fn execute(input: &Value) -> Result<ToolResult> {
 
     // Strip markdown fences if the model wrapped the diff
     let diff_text = strip_fences(raw_diff);
+    let root = input
+        .get("root")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
 
     let files = parse_patch(&diff_text);
     if files.is_empty() {
@@ -53,10 +57,10 @@ pub async fn execute(input: &Value) -> Result<ToolResult> {
     let mut total_removed: usize = 0;
 
     for entry in &files {
-        match apply_file_entry(entry).await {
+        match apply_file_entry(entry, root.as_deref()).await {
             Ok(msg) => {
                 applied.push(msg);
-                modified_paths.push(std::path::PathBuf::from(&entry.file_path));
+                modified_paths.push(resolve_patch_path(&entry.file_path, root.as_deref()));
                 // Count +/- lines from hunks
                 for hunk in &entry.hunks {
                     for line in &hunk.lines {
@@ -119,31 +123,43 @@ pub async fn execute(input: &Value) -> Result<ToolResult> {
 }
 
 /// Apply a single file entry from the patch.
-async fn apply_file_entry(entry: &PatchFileEntry) -> Result<String> {
+async fn apply_file_entry(entry: &PatchFileEntry, root: Option<&std::path::Path>) -> Result<String> {
+    let resolved_path = resolve_patch_path(&entry.file_path, root);
     match entry.status {
         FileStatus::Deleted => {
-            tokio::fs::remove_file(&entry.file_path).await?;
-            Ok(format!("  deleted {}", entry.file_path))
+            tokio::fs::remove_file(&resolved_path).await?;
+            Ok(format!("  deleted {}", resolved_path.display()))
         }
         FileStatus::Added => {
             let content = extract_added_lines(&entry.hunks);
-            if let Some(parent) = std::path::Path::new(&entry.file_path).parent() {
+            if let Some(parent) = resolved_path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            tokio::fs::write(&entry.file_path, &content).await?;
+            tokio::fs::write(&resolved_path, &content).await?;
             Ok(format!(
                 "  created {} ({} bytes)",
-                entry.file_path,
+                resolved_path.display(),
                 content.len()
             ))
         }
         FileStatus::Modified => {
-            let original = tokio::fs::read_to_string(&entry.file_path).await?;
+            let original = tokio::fs::read_to_string(&resolved_path).await?;
             let patched = apply_hunks(&original, &entry.hunks)
                 .ok_or_else(|| anyhow::anyhow!("hunks did not apply cleanly"))?;
-            tokio::fs::write(&entry.file_path, &patched).await?;
-            Ok(format!("  modified {}", entry.file_path))
+            tokio::fs::write(&resolved_path, &patched).await?;
+            Ok(format!("  modified {}", resolved_path.display()))
         }
+    }
+}
+
+fn resolve_patch_path(file_path: &str, root: Option<&std::path::Path>) -> std::path::PathBuf {
+    let path = std::path::Path::new(file_path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Some(root) = root {
+        root.join(path)
+    } else {
+        path.to_path_buf()
     }
 }
 

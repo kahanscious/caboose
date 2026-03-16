@@ -49,3 +49,5 @@ npm-cache/
 
 # OS
 .DS_STORE
+
+/build-tmp

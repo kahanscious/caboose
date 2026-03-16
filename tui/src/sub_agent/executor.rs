@@ -26,13 +26,13 @@ pub struct SubAgentInput {
 
 /// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
 pub async fn run_subagent(
-    mut input: SubAgentInput,
+    input: &mut SubAgentInput,
     provider: Arc<dyn crate::provider::Provider + Send + Sync>,
     config: Config,
     tx: tokio::sync::mpsc::UnboundedSender<SubAgentEvent>,
 ) -> Result<(f64, String), String> {
     let perm_mode = input.permission_mode.clone();
-    let mut agent = AgentLoop::new(input.system_prompt, input.permission_mode);
+    let mut agent = AgentLoop::new(input.system_prompt.clone(), input.permission_mode.clone());
     agent.primary_root = input.worktree_path.clone();
 
     // Wire tools config

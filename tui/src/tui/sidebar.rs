@@ -166,6 +166,7 @@ pub fn render(
     area: Rect,
     input_tokens: u32,
     output_tokens: u32,
+    session_cost: f64,
     context_window: u32,
     turn_count: u32,
     tokens_per_sec: Option<f64>,
@@ -237,12 +238,29 @@ pub fn render(
     )));
 
     // Cost estimate
-    let cost_text = match pricing.estimate_cost(model_id, input_tokens, output_tokens) {
-        Some(cost) => format!("  ${cost:.4}"),
-        None => "  $--".to_string(),
+    let turn_cost = pricing.estimate_cost(model_id, input_tokens, output_tokens);
+    let subagent_cost: f64 = sub_agents.iter().map(|a| a.cost_usd).sum();
+    let total_cost = session_cost + subagent_cost;
+    let cost_text = match turn_cost {
+        Some(cost) => format!("  Turn: ${cost:.4}"),
+        None => "  Turn: $--".to_string(),
     };
     lines.push(Line::from(Span::styled(
         cost_text,
+        Style::default().fg(colors.text_secondary),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  Session: ${session_cost:.4}"),
+        Style::default().fg(colors.text_secondary),
+    )));
+    if subagent_cost > 0.0 {
+        lines.push(Line::from(Span::styled(
+            format!("  Agents: ${subagent_cost:.4}"),
+            Style::default().fg(colors.text_secondary),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("  Total: ${total_cost:.4}"),
         Style::default().fg(colors.text_secondary),
     )));
 

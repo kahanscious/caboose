@@ -79,23 +79,20 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing — suppress logs to stderr in non-interactive mode
-    // unless debug is enabled
+    // Initialize tracing.
+    // In TUI mode, user-facing failures should stay inside the chat UI rather
+    // than leaking raw log lines under the alternate screen. Keep stderr
+    // logging only for debug mode and non-interactive runs.
     let is_interactive = cli.prompt.is_none() && std::io::stdin().is_terminal();
-    let filter = if cli.debug {
-        "debug"
-    } else if is_interactive {
-        // In TUI mode, suppress rmcp/hyper/reqwest info logs — they bleed
-        // through crossterm's alternate screen as raw text.
-        "info,rmcp=warn,hyper=warn,reqwest=warn"
-    } else {
-        "warn"
-    };
-    tracing_subscriber::fmt()
+    let filter = if cli.debug { "debug" } else { "warn" };
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .init();
+        .with_target(false);
+    if cli.debug || !is_interactive {
+        subscriber.with_writer(std::io::stderr).init();
+    } else {
+        subscriber.with_writer(std::io::sink).init();
+    }
 
     // Load config
     let config = config::Config::load()?;

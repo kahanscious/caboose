@@ -34,6 +34,13 @@ pub struct SpawnAgentHandle {
     pub handle: tokio::task::JoinHandle<crate::sub_agent::SpawnAgentResult>,
 }
 
+fn slice_chars(text: &str, start: usize, end: usize) -> String {
+    if start >= end {
+        return String::new();
+    }
+    text.chars().skip(start).take(end - start).collect()
+}
+
 /// UI-visible state, separated so it can be borrowed independently from Terminal.
 pub struct State {
     pub config: Config,
@@ -88,6 +95,13 @@ pub struct State {
     pub memory: crate::memory::MemoryStore,
     /// Input history for Up/Down browsing across sessions.
     pub history: crate::tui::input_history::InputHistory,
+    /// Timestamp of the most recent text insertion into the composer.
+    /// Used to detect multiline paste streams that arrive as raw key events.
+    pub last_text_input_at: Option<Instant>,
+    /// Approximate number of characters inserted in the current rapid-input burst.
+    pub rapid_input_streak: usize,
+    /// Short grace window after paste-like bursts so chunked Enter events don't submit.
+    pub paste_like_mode_until: Option<Instant>,
     /// Messages expanded past truncation threshold.
     pub expanded_messages: std::collections::HashSet<usize>,
     /// Indices of assistant messages whose thinking blocks are expanded.
@@ -156,7 +170,7 @@ pub struct State {
     pub text_selection: Option<TextSelection>,
     /// The Rect of the chat area, set each frame for mouse hit-testing.
     pub chat_area: Cell<Option<ratatui::prelude::Rect>>,
-    /// Plain-text content of rendered chat lines (rebuilt each frame for text extraction).
+    /// Plain-text content of wrapped chat rows (rebuilt each frame for text extraction).
     pub rendered_chat_text: RefCell<Vec<String>>,
     /// Active skill creation session (set by `/create-skill`).
     pub skill_creation: Option<crate::skills::creation::SkillCreationState>,
@@ -822,6 +836,9 @@ impl App {
                 current_session_id: None,
                 memory: memory_store,
                 history: crate::tui::input_history::InputHistory::load(),
+                last_text_input_at: None,
+                rapid_input_streak: 0,
+                paste_like_mode_until: None,
                 expanded_messages: std::collections::HashSet::new(),
                 expanded_thinking: std::collections::HashSet::new(),
                 pricing: crate::provider::pricing::PricingRegistry::new(),
@@ -1202,6 +1219,7 @@ impl App {
         self.state.file_auto = None;
         self.state.text_selection = None;
         self.state.quit_first_press = None;
+        self.reset_text_input_activity();
     }
 
     fn should_insert_text(modifiers: KeyModifiers) -> bool {
@@ -1236,55 +1254,32 @@ impl App {
                 .saturating_sub(self.state.chat_area_height.get())
         };
 
-        let chat_width = chat_area.width as usize;
-        if chat_width == 0 {
-            return String::new();
-        }
-
-        // Map rendered lines to wrapped screen rows, accounting for scroll offset
         let mut result = Vec::new();
-        let mut logical_row: u16 = 0; // absolute wrapped row index
-        for text in rendered.iter() {
-            let wrapped_rows = if text.is_empty() {
-                1
-            } else {
-                text.len().div_ceil(chat_width) as u16
+        for screen_row in start_row..=end_row {
+            if screen_row < chat_area.y || screen_row >= chat_area.y + chat_area.height {
+                continue;
+            }
+            let row_idx = effective_offset as usize + (screen_row - chat_area.y) as usize;
+            let Some(row_text) = rendered.get(row_idx) else {
+                continue;
             };
-            for wrap_idx in 0..wrapped_rows {
-                // Screen row = chat_area.y + (logical_row - effective_offset)
-                if logical_row >= effective_offset {
-                    let screen_row = chat_area.y + (logical_row - effective_offset);
-                    if screen_row >= chat_area.y + chat_area.height {
-                        break;
-                    }
-                    if screen_row >= start_row && screen_row <= end_row {
-                        let line_start = (wrap_idx as usize) * chat_width;
-                        let line_end = (((wrap_idx as usize) + 1) * chat_width).min(text.len());
-                        let row_text = if line_start < text.len() {
-                            &text[line_start..line_end]
-                        } else {
-                            ""
-                        };
 
-                        let col_start = if screen_row == start_row {
-                            (start_col.saturating_sub(chat_area.x)) as usize
-                        } else {
-                            0
-                        };
-                        let col_end = if screen_row == end_row {
-                            (end_col.saturating_sub(chat_area.x)) as usize + 1
-                        } else {
-                            row_text.len()
-                        };
+            let col_start = if screen_row == start_row {
+                (start_col.saturating_sub(chat_area.x)) as usize
+            } else {
+                0
+            };
+            let col_end = if screen_row == end_row {
+                (end_col.saturating_sub(chat_area.x)) as usize + 1
+            } else {
+                row_text.chars().count()
+            };
 
-                        let clamped_start = col_start.min(row_text.len());
-                        let clamped_end = col_end.min(row_text.len());
-                        if clamped_start < clamped_end {
-                            result.push(row_text[clamped_start..clamped_end].to_string());
-                        }
-                    }
-                }
-                logical_row += 1;
+            let slice = slice_chars(row_text, col_start, col_end);
+            if !slice.is_empty() {
+                result.push(slice);
+            } else if start_row != end_row {
+                result.push(String::new());
             }
         }
 
@@ -2650,37 +2645,37 @@ impl App {
             match key {
                 KeyCode::Char('y') => {
                     let report = self.state.conflict_report.take().unwrap();
-                    let blocked_ids: Vec<uuid::Uuid> = report
+                    let pending_ids: std::collections::HashSet<uuid::Uuid> = report
                         .overlaps
                         .iter()
                         .filter(|o| {
                             matches!(
-                                o.severity,
-                                crate::sub_agent::conflict::OverlapSeverity::Block
+                                o.resolution,
+                                crate::sub_agent::conflict::OverlapResolution::RequiresReview
                             )
                         })
                         .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
                         .collect();
-                    for id in blocked_ids {
+                    for id in pending_ids {
                         self.merge_single_agent(id).await;
                     }
                     return;
                 }
                 KeyCode::Char('n') => {
                     let report = self.state.conflict_report.take().unwrap();
-                    let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
+                    let pending_ids: std::collections::HashSet<uuid::Uuid> = report
                         .overlaps
                         .iter()
                         .filter(|o| {
                             matches!(
-                                o.severity,
-                                crate::sub_agent::conflict::OverlapSeverity::Block
+                                o.resolution,
+                                crate::sub_agent::conflict::OverlapResolution::RequiresReview
                             )
                         })
                         .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
                         .collect();
                     for agent in &mut self.state.sub_agents {
-                        if blocked_ids.contains(&agent.id) {
+                        if pending_ids.contains(&agent.id) {
                             agent.state = crate::sub_agent::SubAgentState::Conflict;
                         }
                     }
@@ -2750,6 +2745,7 @@ impl App {
                         self.state.dialog_stack.pop()
                     {
                         self.state.input.push_str(&text);
+                        self.record_text_input_activity(text.len().max(16));
                     }
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
@@ -2960,13 +2956,20 @@ impl App {
             | (KeyCode::Enter, KeyModifiers::ALT)
             | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                 self.state.input.insert_newline();
+                self.reset_text_input_activity();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
+                if self.should_treat_enter_as_paste_newline() {
+                    self.state.input.insert_newline();
+                    self.record_text_input_activity(1);
+                    return;
+                }
                 if !self.state.input.is_empty() {
                     let mut message = self.state.input.content();
                     self.state.history.push(message.clone());
                     self.state.history.save();
                     self.state.input.clear();
+                    self.reset_text_input_activity();
 
                     // Handle slash commands via registry
                     let trimmed = message.trim();
@@ -3342,6 +3345,7 @@ impl App {
             (KeyCode::Char(c), m) if Self::should_insert_text(m) => {
                 self.state.history.reset();
                 self.state.input.insert_char(c);
+                self.record_text_input_activity(c.len_utf8());
                 self.state.update_slash_auto();
                 self.state.update_file_auto();
             }
@@ -3732,8 +3736,14 @@ impl App {
             | (KeyCode::Enter, KeyModifiers::ALT)
             | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                 self.state.input.insert_newline();
+                self.reset_text_input_activity();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
+                if self.should_treat_enter_as_paste_newline() {
+                    self.state.input.insert_newline();
+                    self.record_text_input_activity(1);
+                    return;
+                }
                 if !self.state.input.is_empty()
                     && !matches!(self.state.agent.state, AgentState::Idle)
                     && self.state.message_queue.len() < 3
@@ -3742,6 +3752,7 @@ impl App {
                     let content = self.state.input.content().to_string();
                     self.state.history.push(content.clone());
                     self.state.input.clear();
+                    self.reset_text_input_activity();
                     self.state.slash_auto = None;
                     self.state.file_auto = None;
 
@@ -3753,6 +3764,7 @@ impl App {
                 } else if !self.state.input.is_empty()
                     && matches!(self.state.agent.state, AgentState::Idle)
                 {
+                    self.reset_text_input_activity();
                     // Skill creation conversational phases
                     if let Some(ref creation) = self.state.skill_creation {
                         match creation.phase {
@@ -4241,6 +4253,7 @@ impl App {
                 self.state.focused_tool = None;
                 self.state.history.reset();
                 self.state.input.insert_char(c);
+                self.record_text_input_activity(c.len_utf8());
                 self.state.update_slash_auto();
                 self.state.update_file_auto();
             }
@@ -6266,9 +6279,56 @@ impl App {
                     });
                 } else {
                     self.state.input.push_str(text);
+                    self.record_text_input_activity(text.len().max(16));
                 }
             }
         }
+    }
+
+    fn record_text_input_activity(&mut self, inserted_len: usize) {
+        const RAPID_INPUT_GAP_MS: u64 = 180;
+        const PASTE_LIKE_THRESHOLD: usize = 24;
+        const PASTE_LIKE_GRACE_MS: u64 = 900;
+
+        let now = Instant::now();
+        let within_burst = self
+            .state
+            .last_text_input_at
+            .is_some_and(|t| now.duration_since(t) <= Duration::from_millis(RAPID_INPUT_GAP_MS));
+        if within_burst {
+            self.state.rapid_input_streak += inserted_len.max(1);
+        } else {
+            self.state.rapid_input_streak = inserted_len.max(1);
+        }
+        self.state.last_text_input_at = Some(now);
+        if self.state.rapid_input_streak >= PASTE_LIKE_THRESHOLD {
+            self.state.paste_like_mode_until =
+                Some(now + Duration::from_millis(PASTE_LIKE_GRACE_MS));
+        }
+    }
+
+    fn reset_text_input_activity(&mut self) {
+        self.state.last_text_input_at = None;
+        self.state.rapid_input_streak = 0;
+        self.state.paste_like_mode_until = None;
+    }
+
+    fn should_treat_enter_as_paste_newline(&self) -> bool {
+        const PASTE_LIKE_RECENT_MS: u64 = 250;
+        const PASTE_LIKE_ENTER_THRESHOLD: usize = 12;
+
+        if self
+            .state
+            .paste_like_mode_until
+            .is_some_and(|until| Instant::now() <= until)
+        {
+            return true;
+        }
+
+        self.state
+            .last_text_input_at
+            .is_some_and(|t| Instant::now().duration_since(t) <= Duration::from_millis(PASTE_LIKE_RECENT_MS))
+            && self.state.rapid_input_streak >= PASTE_LIKE_ENTER_THRESHOLD
     }
 
     /// Handle `/mcp` slash command with subcommands: list, restart.
@@ -7842,6 +7902,7 @@ impl App {
             task: task.clone(),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
+            base_sha: base_sha.clone(),
             state: crate::sub_agent::SubAgentState::Running,
             started_at: Some(std::time::Instant::now()),
             cost_usd: 0.0,
@@ -7975,6 +8036,7 @@ impl App {
                     task: String::new(),
                     result_text: format!("spawn_agent: task panicked: {e}"),
                     is_error: true,
+                    produced_changes: false,
                     final_state: crate::sub_agent::SubAgentState::Failed,
                     cost_usd: 0.0,
                     changes: None,
@@ -8035,6 +8097,10 @@ impl App {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent failed: {}", result.task),
                 });
+            } else if !result.produced_changes {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent produced no changes: {}", result.task),
+                });
             } else if matches!(result.final_state, crate::sub_agent::SubAgentState::Review) {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent ready for review: {}", result.task),
@@ -8046,21 +8112,48 @@ impl App {
             }
         }
 
-        // Check if all non-terminal agents are in Review — trigger merge sweep
-        let all_in_review = self
-            .state
-            .sub_agents
-            .iter()
-            .filter(|a| !a.state.is_terminal())
-            .all(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review));
         let review_count = self
             .state
             .sub_agents
             .iter()
             .filter(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review))
             .count();
-        if all_in_review && review_count > 0 {
+        let has_live_subagents = self.state.sub_agents.iter().any(|a| {
+            matches!(
+                a.state,
+                crate::sub_agent::SubAgentState::Running
+                    | crate::sub_agent::SubAgentState::WaitingApproval { .. }
+            )
+        });
+        if !has_live_subagents && review_count > 0 && self.state.conflict_report.is_none() {
             self.merge_reviewed_agents().await;
+            let unresolved_review_ids: Vec<uuid::Uuid> = self
+                .state
+                .sub_agents
+                .iter()
+                .filter(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review))
+                .map(|a| a.id)
+                .collect();
+            if !unresolved_review_ids.is_empty() && self.state.conflict_report.is_none() {
+                let tasks = self
+                    .state
+                    .sub_agents
+                    .iter()
+                    .filter(|a| unresolved_review_ids.contains(&a.id))
+                    .map(|a| a.task.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                for agent in &mut self.state.sub_agents {
+                    if unresolved_review_ids.contains(&agent.id) {
+                        agent.state = crate::sub_agent::SubAgentState::Conflict;
+                    }
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!(
+                        "Conflict Analysis\n\n  ✗ reviewed agents remained unresolved after the merge sweep ({tasks})\n\nAgents were left in Conflict instead of allowing a silent continuation."
+                    ),
+                });
+            }
         }
 
         // When all spawn handles are done and no other tools are pending, finalize
@@ -8076,7 +8169,7 @@ impl App {
     /// Run the conflict detection sweep and merge agents that are ready.
     /// Called when all non-terminal agents have reached Review state.
     async fn merge_reviewed_agents(&mut self) {
-        let changes = std::mem::take(&mut self.state.agent_changes);
+        self.state.agent_changes.clear();
 
         // No-worktree agents won't have changes entries — move them to Done directly
         let no_worktree_ids: Vec<uuid::Uuid> = self
@@ -8092,6 +8185,45 @@ impl App {
             self.merge_single_agent(id).await;
         }
 
+        let review_worktree_ids: std::collections::HashSet<uuid::Uuid> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| {
+                matches!(a.state, crate::sub_agent::SubAgentState::Review) && !a.branch.is_empty()
+            })
+            .map(|a| a.id)
+            .collect();
+        let changes = self.collect_review_agent_changes().await;
+        let analyzed_ids: std::collections::HashSet<uuid::Uuid> =
+            changes.iter().map(|c| c.agent_id).collect();
+        let missing_ids: std::collections::HashSet<uuid::Uuid> = review_worktree_ids
+            .difference(&analyzed_ids)
+            .copied()
+            .collect();
+
+        if !missing_ids.is_empty() {
+            for agent in &mut self.state.sub_agents {
+                if missing_ids.contains(&agent.id) {
+                    agent.state = crate::sub_agent::SubAgentState::Conflict;
+                }
+            }
+            let tasks = self
+                .state
+                .sub_agents
+                .iter()
+                .filter(|a| missing_ids.contains(&a.id))
+                .map(|a| a.task.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!(
+                    "Conflict Analysis\n\n  ✗ unable to analyze all reviewed agent diffs ({tasks})\n\nAgents were left in Conflict instead of being auto-merged."
+                ),
+            });
+            return;
+        }
+
         if changes.len() <= 1 {
             // Single agent or no agents — skip cross-agent check, merge directly
             for agent_change in &changes {
@@ -8102,48 +8234,121 @@ impl App {
 
         // Run cross-agent check
         let report = crate::sub_agent::conflict::cross_agent_check(&changes);
+        let overlap_ids: std::collections::HashSet<uuid::Uuid> = report
+            .overlaps
+            .iter()
+            .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+            .collect();
+        let review_ids: std::collections::HashSet<uuid::Uuid> = report
+            .overlaps
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.resolution,
+                    crate::sub_agent::conflict::OverlapResolution::RequiresReview
+                )
+            })
+            .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+            .collect();
 
-        if !report.has_blocking() {
-            // No blocking overlaps — merge all sequentially
-            if !report.overlaps.is_empty() {
-                let warn_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
-                self.state
-                    .chat_messages
-                    .push(ChatMessage::System { content: warn_text });
-            }
+        if report.overlaps.is_empty() {
             for agent_change in &changes {
                 self.merge_single_agent(agent_change.agent_id).await;
             }
+        } else if !report.requires_review() {
+            // Only safe overlaps were detected — auto-merge or auto-reconcile them.
+            let warn_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
+            self.state
+                .chat_messages
+                .push(ChatMessage::System { content: warn_text });
+            for agent_change in &changes {
+                self.merge_single_agent(agent_change.agent_id).await;
+            }
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!(
+                    "Agent coordination\n\nAutomatically reconciled and merged {} reviewed agent result(s).",
+                    changes.len()
+                ),
+            });
         } else {
-            // Blocking overlaps — surface report, await user decision
+            // Ambiguous overlaps remain — auto-merge safe participants and hold the rest.
             let report_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
             self.state.chat_messages.push(ChatMessage::System {
                 content: report_text,
             });
 
-            // Identify which agents are blocked
-            let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
-                .overlaps
-                .iter()
-                .filter(|o| {
-                    matches!(
-                        o.severity,
-                        crate::sub_agent::conflict::OverlapSeverity::Block
-                    )
-                })
-                .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
-                .collect();
-
-            // Auto-merge non-blocked agents
             for agent_change in &changes {
-                if !blocked_ids.contains(&agent_change.agent_id) {
+                if !review_ids.contains(&agent_change.agent_id) {
                     self.merge_single_agent(agent_change.agent_id).await;
                 }
             }
 
-            // Store report for approval flow
-            self.state.conflict_report = Some(report);
+            if !overlap_ids.is_empty() {
+                self.state.conflict_report = Some(report);
+            }
         }
+    }
+
+    async fn collect_review_agent_changes(&self) -> Vec<crate::sub_agent::conflict::AgentChanges> {
+        let review_agents: Vec<(uuid::Uuid, String, String, std::path::PathBuf, String)> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| {
+                matches!(a.state, crate::sub_agent::SubAgentState::Review) && !a.branch.is_empty()
+            })
+            .map(|a| {
+                (
+                    a.id,
+                    a.task.clone(),
+                    a.branch.clone(),
+                    a.worktree_path.clone(),
+                    a.base_sha.clone(),
+                )
+            })
+            .collect();
+
+        let mut changes = Vec::new();
+        for (agent_id, task, branch, worktree_path, base_sha) in review_agents {
+            let diff_output = tokio::task::spawn_blocking({
+                let base = base_sha.clone();
+                let br = branch.clone();
+                move || crate::sub_agent::worktree::run_diff(&base, &br)
+            })
+            .await;
+
+            let Ok(Ok(output)) = diff_output else {
+                continue;
+            };
+
+            let mut files = crate::sub_agent::conflict::parse_diff_hunks(&output);
+            if files.is_empty() {
+                continue;
+            }
+            for file in &mut files {
+                let base_content =
+                    crate::sub_agent::worktree::read_file_at_commit(&base_sha, &file.path)
+                        .ok()
+                        .flatten();
+                let new_content =
+                    crate::sub_agent::worktree::read_worktree_file(&worktree_path, &file.path)
+                        .ok()
+                        .flatten();
+                crate::sub_agent::conflict::enrich_file_change_semantics(
+                    file,
+                    base_content.as_deref(),
+                    new_content.as_deref(),
+                );
+            }
+
+            changes.push(crate::sub_agent::conflict::AgentChanges {
+                agent_id,
+                task,
+                files,
+            });
+        }
+
+        changes
     }
 
     /// Merge a single agent's branch and clean up its worktree.
@@ -10689,63 +10894,199 @@ async fn run_spawn_agent_task(
     tool_use_id: String,
     task: String,
     branch: String,
-    _worktree_path: std::path::PathBuf,
+    worktree_path: std::path::PathBuf,
     base_sha: String,
-    input: crate::sub_agent::executor::SubAgentInput,
+    mut input: crate::sub_agent::executor::SubAgentInput,
     provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
     config: crate::config::Config,
     tx: tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
 ) -> crate::sub_agent::SpawnAgentResult {
     use crate::sub_agent::{SpawnAgentResult, SubAgentState};
 
-    let run_result =
-        crate::sub_agent::executor::run_subagent(input, provider, config, tx.clone()).await;
+    let requires_changes = task_likely_requires_changes(&task);
+    let mut total_cost = 0.0;
+    let mut attempts = 0usize;
 
-    match run_result {
-        Ok((cost, summary)) => {
-            // Collect changes via git diff for conflict detection
-            let diff_output = tokio::task::spawn_blocking({
-                let base = base_sha.clone();
-                let br = branch.clone();
-                move || crate::sub_agent::worktree::run_diff(&base, &br)
-            })
-            .await;
+    loop {
+        attempts += 1;
+        let run_result = crate::sub_agent::executor::run_subagent(
+            &mut input,
+            provider.clone(),
+            config.clone(),
+            tx.clone(),
+        )
+        .await;
 
-            let changes = match diff_output {
-                Ok(Ok(output)) => Some(crate::sub_agent::conflict::AgentChanges {
+        match run_result {
+            Ok((cost, summary)) => {
+                total_cost += cost;
+                if !branch.is_empty() {
+                    let commit_result = tokio::task::spawn_blocking({
+                        let path = worktree_path.clone();
+                        let task_for_commit = task.clone();
+                        let message = format!("subagent: {task_for_commit}");
+                        move || crate::sub_agent::worktree::commit_worktree(&path, &message)
+                    })
+                    .await;
+
+                    match commit_result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            return SpawnAgentResult {
+                                agent_id,
+                                tool_use_id,
+                                result_text: format!(
+                                    "spawn_agent: failed to capture worktree changes for '{task}': {e}"
+                                ),
+                                is_error: true,
+                                produced_changes: false,
+                                task,
+                                final_state: SubAgentState::Failed,
+                                cost_usd: total_cost,
+                                changes: None,
+                            };
+                        }
+                        Err(e) => {
+                            return SpawnAgentResult {
+                                agent_id,
+                                tool_use_id,
+                                result_text: format!(
+                                    "spawn_agent: commit task panicked for '{task}': {e}"
+                                ),
+                                is_error: true,
+                                produced_changes: false,
+                                task,
+                                final_state: SubAgentState::Failed,
+                                cost_usd: total_cost,
+                                changes: None,
+                            };
+                        }
+                    }
+                }
+
+                // Collect changes via git diff for conflict detection
+                let diff_output = tokio::task::spawn_blocking({
+                    let base = base_sha.clone();
+                    let br = branch.clone();
+                    move || crate::sub_agent::worktree::run_diff(&base, &br)
+                })
+                .await;
+
+                let changes = match diff_output {
+                    Ok(Ok(output)) => {
+                        let mut files = crate::sub_agent::conflict::parse_diff_hunks(&output);
+                        let produced_changes = !files.is_empty();
+                        if !produced_changes {
+                            if requires_changes && attempts == 1 {
+                                let _ = tx.send(crate::sub_agent::SubAgentEvent::StreamLine {
+                                    id: agent_id,
+                                    line: crate::sub_agent::SubAgentStreamLine {
+                                        kind: crate::sub_agent::StreamLineKind::Error,
+                                        text: "No tracked file changes detected. Retrying once with stricter edit instructions.".to_string(),
+                                    },
+                                });
+                                input.task = build_noop_retry_task(&task);
+                                continue;
+                            }
+                            return SpawnAgentResult {
+                                agent_id,
+                                tool_use_id,
+                                result_text: if requires_changes {
+                                    format!(
+                                        "spawn_agent: agent produced no tracked file changes for '{task}' after {} attempt(s)\n\nLast summary: {summary}",
+                                        attempts
+                                    )
+                                } else {
+                                    format!(
+                                        "Agent completed task but produced no tracked file changes: {task}\n\n{summary}"
+                                    )
+                                },
+                                is_error: requires_changes,
+                                produced_changes: false,
+                                task,
+                                final_state: if requires_changes {
+                                    SubAgentState::Failed
+                                } else {
+                                    SubAgentState::Done
+                                },
+                                cost_usd: total_cost,
+                                changes: None,
+                            };
+                        }
+                        for file in &mut files {
+                            let base_content =
+                                crate::sub_agent::worktree::read_file_at_commit(&base_sha, &file.path)
+                                    .ok()
+                                    .flatten();
+                            let new_content =
+                                crate::sub_agent::worktree::read_worktree_file(&worktree_path, &file.path)
+                                    .ok()
+                                    .flatten();
+                            crate::sub_agent::conflict::enrich_file_change_semantics(
+                                file,
+                                base_content.as_deref(),
+                                new_content.as_deref(),
+                            );
+                        }
+                        Some(crate::sub_agent::conflict::AgentChanges {
+                            agent_id,
+                            task: task.clone(),
+                            files,
+                        })
+                    }
+                    _ => None,
+                };
+
+                return SpawnAgentResult {
                     agent_id,
-                    task: task.clone(),
-                    files: crate::sub_agent::conflict::parse_diff_hunks(&output),
-                }),
-                _ => None,
-            };
-
-            // Return Review state — merging is handled by the coordination sweep
-            SpawnAgentResult {
-                agent_id,
-                tool_use_id,
-                result_text: format!("Agent completed task: {task}\n\n{summary}"),
-                is_error: false,
-                task,
-                final_state: SubAgentState::Review,
-                cost_usd: cost,
-                changes,
+                    tool_use_id,
+                    result_text: format!("Agent completed task: {task}\n\n{summary}"),
+                    is_error: false,
+                    produced_changes: true,
+                    task,
+                    final_state: SubAgentState::Review,
+                    cost_usd: total_cost,
+                    changes,
+                };
             }
-        }
-        Err(message) => {
-            tracing::error!("spawn_agent executor failed for '{task}': {message}");
-            SpawnAgentResult {
-                agent_id,
-                tool_use_id,
-                result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
-                is_error: true,
-                task,
-                final_state: SubAgentState::Failed,
-                cost_usd: 0.0,
-                changes: None,
+            Err(message) => {
+                tracing::error!("spawn_agent executor failed for '{task}': {message}");
+                return SpawnAgentResult {
+                    agent_id,
+                    tool_use_id,
+                    result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
+                    is_error: true,
+                    produced_changes: false,
+                    task,
+                    final_state: SubAgentState::Failed,
+                    cost_usd: total_cost,
+                    changes: None,
+                };
             }
         }
     }
+}
+
+fn task_likely_requires_changes(task: &str) -> bool {
+    let task = task.to_ascii_lowercase();
+    [
+        "edit_file",
+        "write_file",
+        "apply_patch",
+        "replace this exact line",
+        "do not edit any other line",
+        "do not edit any other file",
+        "modify the file",
+        "edit the file",
+    ]
+    .iter()
+    .any(|needle| task.contains(needle))
+}
+
+fn build_noop_retry_task(task: &str) -> String {
+    format!(
+        "{task}\n\nRetry requirement:\n- You must actually modify the target file in this attempt.\n- Use a file-editing tool (`edit_file`, `write_file`, or `apply_patch`) rather than only reading.\n- If the exact match fails, read the smallest needed window and then immediately call the edit tool.\n- Do not stop after inspection. The task is incomplete unless a file diff is produced."
+    )
 }
 
 /// Parse "5m" → 300, "30s" → 30, "1h" → 3600

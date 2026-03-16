@@ -336,6 +336,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             h_chunks[1],
             app.agent.last_input_tokens,
             app.agent.last_output_tokens,
+            app.session_cost,
             app.agent.context_window,
             app.agent.turn_count,
             app.agent.last_tokens_per_sec,
@@ -1076,17 +1077,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         max_scroll
     };
 
-    // Store plain text for text selection extraction
-    let plain_lines: Vec<String> = lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>()
-        })
-        .collect();
-    *app.rendered_chat_text.borrow_mut() = plain_lines;
+    // Store wrapped plain text rows for text selection extraction.
+    *app.rendered_chat_text.borrow_mut() = flatten_wrapped_rows(&lines, area.width as usize);
 
     // Build paragraph, apply scroll, and render
     let chat = Paragraph::new(lines)
@@ -1143,6 +1135,29 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         };
         frame.render_widget(Paragraph::new(indicator), indicator_area);
     }
+}
+
+fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    lines.iter()
+        .flat_map(|line| {
+            let plain = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+
+            if plain.is_empty() {
+                return vec![String::new()];
+            }
+
+            let chars: Vec<char> = plain.chars().collect();
+            chars.chunks(width).map(|chunk| chunk.iter().collect()).collect()
+        })
+        .collect()
 }
 
 /// Render the input area (with optional queued messages box above).

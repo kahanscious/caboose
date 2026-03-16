@@ -115,7 +115,7 @@ pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
     if out.status.success() {
         return Ok(());
     }
-    let _ = Command::new("git").args(["merge", "--abort"]).status();
+    let _ = Command::new("git").args(["merge", "--abort"]).output();
     Err(WorktreeError::GitFailed(
         String::from_utf8_lossy(&out.stderr).into(),
     ))
@@ -131,8 +131,55 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
             String::from_utf8_lossy(&out.stderr).into(),
         ));
     }
-    let _ = Command::new("git").args(["branch", "-d", branch]).status();
+    let _ = Command::new("git").args(["branch", "-d", branch]).output();
     Ok(())
+}
+
+/// Commit all staged and unstaged changes in a worktree branch.
+/// Returns Ok(true) when a commit was created, Ok(false) when there was nothing to commit.
+pub fn commit_worktree(path: &Path, message: &str) -> Result<bool, WorktreeError> {
+    let status = Command::new("git")
+        .args(["-C", &path.to_string_lossy(), "status", "--porcelain"])
+        .output()?;
+    if !status.status.success() {
+        return Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&status.stderr).into(),
+        ));
+    }
+    if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+        return Ok(false);
+    }
+
+    let add = Command::new("git")
+        .args(["-C", &path.to_string_lossy(), "add", "-A"])
+        .output()?;
+    if !add.status.success() {
+        return Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&add.stderr).into(),
+        ));
+    }
+
+    let commit = Command::new("git")
+        .args([
+            "-C",
+            &path.to_string_lossy(),
+            "-c",
+            "user.name=Caboose",
+            "-c",
+            "user.email=caboose@local",
+            "commit",
+            "-m",
+            message,
+            "--no-gpg-sign",
+        ])
+        .output()?;
+    if commit.status.success() {
+        Ok(true)
+    } else {
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&commit.stderr).into(),
+        ))
+    }
 }
 
 /// Get the current HEAD commit SHA.
@@ -144,6 +191,35 @@ pub fn current_head_sha() -> Result<String, WorktreeError> {
         Err(WorktreeError::GitFailed(
             String::from_utf8_lossy(&out.stderr).into(),
         ))
+    }
+}
+
+/// Read a file from a specific commit. Returns Ok(None) if the file does not exist there.
+pub fn read_file_at_commit(commit: &str, path: &str) -> Result<Option<String>, WorktreeError> {
+    let spec = format!("{commit}:{path}");
+    let out = Command::new("git").args(["show", &spec]).output()?;
+    if out.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&out.stdout).to_string()));
+    }
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("exists on disk, but not in") || stderr.contains("does not exist in") {
+        Ok(None)
+    } else {
+        Err(WorktreeError::GitFailed(stderr.into()))
+    }
+}
+
+/// Read a file from a subagent worktree. Returns Ok(None) when the file is absent.
+pub fn read_worktree_file(
+    worktree_root: &Path,
+    relative_path: &str,
+) -> Result<Option<String>, WorktreeError> {
+    let path = worktree_root.join(relative_path);
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(WorktreeError::Io(err)),
     }
 }
 
