@@ -1,5 +1,6 @@
 # Rust build artifacts
 tui/target/
+tui/target-*/
 dist/
 *.tar.gz
 *.nupkg
