@@ -111,7 +111,13 @@ pub fn build_stub(output_id: &str, tool_name: &str, tool_args: &str, content: &s
         format!("{}B", byte_size)
     };
 
-    let first_lines: String = content.lines().take(3).collect::<Vec<_>>().join("\n");
+    let first_lines: String = content.lines().take(3).fold(String::new(), |mut acc, s| {
+        if !acc.is_empty() {
+            acc.push('\n');
+        }
+        acc.push_str(s);
+        acc
+    });
 
     if tool_args.is_empty() {
         format!("[stored: {output_id}] {tool_name} → {line_count} lines, {size_str}\n{first_lines}")

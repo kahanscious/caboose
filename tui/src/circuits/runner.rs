@@ -56,7 +56,7 @@ impl CircuitManager {
 
         let event_tx = self.event_tx.clone();
         let interval_secs = circuit.interval_secs;
-        let circuit_id = circuit.id.clone();
+        let circuit_id = circuit.id;
 
         // Spawn the interval task
         tokio::spawn(async move {

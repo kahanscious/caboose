@@ -262,9 +262,16 @@ fn render_table(table_lines: &[&str], colors: &Colors) -> Vec<Line<'static>> {
         if is_sep {
             let sep: String = widths
                 .iter()
-                .map(|w| "\u{2500}".repeat(*w + 2))
-                .collect::<Vec<_>>()
-                .join("\u{253C}");
+                .enumerate()
+                .fold(String::new(), |mut acc, (i, w)| {
+                    if i > 0 {
+                        acc.push('\u{253C}');
+                    }
+                    for _ in 0..(*w + 2) {
+                        acc.push('\u{2500}');
+                    }
+                    acc
+                });
             result.push(Line::from(Span::styled(
                 sep,
                 Style::default().fg(colors.border),

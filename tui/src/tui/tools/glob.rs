@@ -55,7 +55,7 @@ pub fn render(tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'stati
         if file_count > 3 {
             format!("{joined}, \u{2026} ({file_count} files)")
         } else {
-            joined.to_string()
+            joined
         }
     };
 

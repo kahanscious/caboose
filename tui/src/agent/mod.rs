@@ -836,7 +836,7 @@ impl AgentLoop {
     fn finalize_compaction(&mut self) {
         let summary = std::mem::take(&mut self.streaming_text);
         if !summary.is_empty() {
-            self.conversation.replace_with_summary(summary);
+            self.conversation.replace_with_summary(&summary);
         }
         self.last_input_tokens = 0;
         self.last_output_tokens = 0;

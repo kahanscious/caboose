@@ -218,7 +218,7 @@ pub fn render(
             Style::default().fg(colors.brand),
         ),
         Span::styled(
-            "\u{2591}".repeat(empty).to_string(),
+            "\u{2591}".repeat(empty),
             Style::default().fg(colors.text_muted),
         ),
         Span::styled(

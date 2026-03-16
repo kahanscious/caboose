@@ -251,7 +251,7 @@ impl Conversation {
     }
 
     /// Replace all messages with a single summary message. Resets token estimate.
-    pub fn replace_with_summary(&mut self, summary: String) {
+    pub fn replace_with_summary(&mut self, summary: &str) {
         self.messages.clear();
         self.messages.push(Message {
             role: Role::User,
@@ -404,7 +404,7 @@ mod tests {
         });
         assert_eq!(conv.messages.len(), 2);
 
-        conv.replace_with_summary("Summary of conversation.".into());
+        conv.replace_with_summary("Summary of conversation.");
         assert_eq!(conv.messages.len(), 1);
         assert_eq!(conv.messages[0].role, Role::User);
         match &conv.messages[0].content {

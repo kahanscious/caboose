@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentSource {
     Project,
     Global,
@@ -106,7 +106,7 @@ pub fn scan_directory(dir: &std::path::Path, source: AgentSource) -> Vec<AgentDe
             continue;
         }
         if let Ok(content) = std::fs::read_to_string(&path)
-            && let Some(def) = parse_agent_file(&content, &path, source.clone())
+            && let Some(def) = parse_agent_file(&content, &path, source)
         {
             agents.push(def);
         }

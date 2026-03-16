@@ -3674,7 +3674,7 @@ impl App {
                     && self.state.message_queue.len() < 3
                 {
                     // Agent is busy — queue the message
-                    let content = self.state.input.content().to_string();
+                    let content = self.state.input.content();
                     self.state.history.push(content.clone());
                     self.state.input.clear();
                     self.reset_text_input_activity();
@@ -4551,7 +4551,7 @@ impl App {
                         if preset {
                             // Save removed: true so preset doesn't reappear
                             if let Some(preset_info) = crate::mcp::find_preset(&name) {
-                                let mut config = preset_info.config.clone();
+                                let mut config = preset_info.config;
                                 config.removed = true;
                                 crate::config::save_mcp_server_toggle(&name, &config);
                             }
@@ -5354,7 +5354,7 @@ impl App {
                         _ => crate::provider::local::LocalServerType::Custom,
                     };
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let addr = address.clone();
+                    let addr = address;
                     tokio::spawn(async move {
                         match crate::provider::local::probe_server(&addr, &server_type).await {
                             Some(models) => {
@@ -6025,7 +6025,7 @@ impl App {
 
         // Create config
         let server_config = crate::config::schema::McpServerConfig {
-            command: command.clone(),
+            command,
             args,
             env: std::collections::HashMap::new(),
             disabled: false,
@@ -7231,13 +7231,13 @@ impl App {
                     } // nothing selected
                     selected.join(", ")
                 } else if !self.state.input.is_empty() {
-                    self.state.input.content().to_string()
+                    self.state.input.content()
                 } else {
                     return; // nothing to submit
                 };
 
                 // Record answer
-                let question_text = current_q.question.clone();
+                let question_text = current_q.question;
                 let session = self.state.ask_user_session.as_mut().unwrap();
                 session.answers.push((question_text, answer.clone()));
                 session.toggled.clear();
@@ -8937,7 +8937,7 @@ impl App {
                     "error": result.output,
                     "session_id": self.state.current_session_id,
                 });
-                let tool_name_clone = tool_name.clone();
+                let tool_name_clone = tool_name;
                 tokio::spawn(async move {
                     crate::hooks::fire_hooks_for_tool(&hooks, context, &tool_name_clone).await;
                 });
@@ -8949,7 +8949,7 @@ impl App {
                     "tool_output": result.output,
                     "session_id": self.state.current_session_id,
                 });
-                let tool_name_clone = tool_name.clone();
+                let tool_name_clone = tool_name;
                 tokio::spawn(async move {
                     crate::hooks::fire_hooks_for_tool(&hooks, context, &tool_name_clone).await;
                 });
@@ -10411,7 +10411,7 @@ impl App {
         // Set fork title on the new session
         let title_session = crate::session::Session {
             id: new_session_id.clone(),
-            title: fork_title.clone(),
+            title: fork_title,
             model: model.map(|s| s.to_string()),
             provider: provider.map(|s| s.to_string()),
             turn_count: 0,

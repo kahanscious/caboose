@@ -29,8 +29,13 @@ pub async fn execute(input: &Value) -> Result<ToolResult> {
                 .iter()
                 .enumerate()
                 .map(|(i, line)| format!("{:>6}\t{}", offset + i + 1, line))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .fold(String::new(), |mut acc, s| {
+                    if !acc.is_empty() {
+                        acc.push('\n');
+                    }
+                    acc.push_str(&s);
+                    acc
+                });
             let output = if offset + shown < total_lines {
                 format!(
                     "{}\n\n[Showing lines {}-{} of {} total. Use offset/limit to read other sections.]",
