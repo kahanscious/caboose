@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod agent;
+mod agents;
 mod app;
 mod attachment;
 mod checkpoint;

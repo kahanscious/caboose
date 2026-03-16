@@ -36,6 +36,18 @@ pub enum PlannerUpdate {
         planner_index: usize,
         text: String,
     },
+    ToolStarted {
+        planner_index: usize,
+        tool_name: String,
+        args_summary: String,
+    },
+    ToolCompleted {
+        planner_index: usize,
+        #[allow(dead_code)]
+        tool_name: String,
+        summary: String,
+        is_error: bool,
+    },
     PlanComplete {
         planner_index: usize,
         result: Result<String, String>,
@@ -77,6 +89,7 @@ async fn execute_read_only_tool(name: &str, input: &Value) -> Result<String, Str
 /// an error as Err(String).
 pub async fn run_planner(
     provider: Box<dyn Provider>,
+    system_prompt: String,
     prompt: String,
     tools: Vec<ToolDefinition>,
     timeout_secs: u64,
@@ -85,7 +98,14 @@ pub async fn run_planner(
 ) -> Result<String, String> {
     let result = tokio::time::timeout(
         Duration::from_secs(timeout_secs),
-        run_planner_inner(&*provider, &prompt, &tools, &update_tx, planner_index),
+        run_planner_inner(
+            &*provider,
+            &system_prompt,
+            &prompt,
+            &tools,
+            &update_tx,
+            planner_index,
+        ),
     )
     .await;
 
@@ -103,13 +123,12 @@ pub async fn run_planner(
 
 async fn run_planner_inner(
     provider: &dyn Provider,
+    system_prompt: &str,
     prompt: &str,
     tools: &[ToolDefinition],
     update_tx: &mpsc::UnboundedSender<PlannerUpdate>,
     planner_index: usize,
 ) -> Result<String, String> {
-    let system_prompt = planning_system_prompt(prompt);
-
     // Build initial messages: system + user prompt
     let mut messages = vec![
         Message {
@@ -222,16 +241,75 @@ async fn run_planner_inner(
         // Execute each tool call and build tool_result blocks
         let mut tool_result_blocks = Vec::new();
         for (id, name, arguments) in &tool_calls {
+            let input_val: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+
+            // Build a brief args summary for the "running" state
+            let args_summary = match name.as_str() {
+                "read_file" => input_val
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "glob" => input_val
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "grep" => input_val
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                "list_directory" => input_val
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+                _ => name.clone(),
+            };
+
             let _ = update_tx.send(PlannerUpdate::StatusChanged {
                 planner_index,
                 status: super::types::PlannerStatus::UsingTool(name.clone()),
             });
+            let _ = update_tx.send(PlannerUpdate::ToolStarted {
+                planner_index,
+                tool_name: name.clone(),
+                args_summary: args_summary.clone(),
+            });
 
-            let input_val: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
             let (output, is_error) = match execute_read_only_tool(name, &input_val).await {
                 Ok(output) => (output, false),
                 Err(e) => (e, true),
             };
+
+            // Build the completed summary with result details
+            let summary = if is_error {
+                name.clone()
+            } else {
+                match name.as_str() {
+                    "read_file" => {
+                        let line_count = output.lines().count();
+                        format!("{args_summary} ({line_count} lines)")
+                    }
+                    "glob" => {
+                        let match_count = output.lines().count();
+                        format!("{args_summary} ({match_count} matches)")
+                    }
+                    "grep" => {
+                        let match_count = output.lines().count();
+                        format!("{args_summary} ({match_count} results)")
+                    }
+                    "list_directory" => args_summary.clone(),
+                    _ => name.clone(),
+                }
+            };
+            let _ = update_tx.send(PlannerUpdate::ToolCompleted {
+                planner_index,
+                tool_name: name.clone(),
+                summary,
+                is_error,
+            });
 
             tool_result_blocks.push(serde_json::json!({
                 "type": "tool_result",
@@ -266,8 +344,54 @@ pub fn planning_system_prompt(user_prompt: &str) -> String {
     )
 }
 
-/// Build the synthesis prompt given to the primary LLM
-pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> String {
+/// Build the critique prompt for a model to review other models' plans.
+///
+/// Each model critiques all plans except its own (matched by `own_provider`).
+pub fn critique_system_prompt(
+    user_prompt: &str,
+    own_provider: &str,
+    all_plans: &[(&str, &str)],
+) -> String {
+    let mut prompt = format!(
+        "You are a critical reviewer in a multi-LLM planning session. \
+         The original user request was:\n\n{user_prompt}\n\n\
+         The following plans were produced by other models. \
+         Review each plan and identify:\n\
+         1. **Risks** — what could go wrong or break\n\
+         2. **Gaps** — what's missing or incomplete\n\
+         3. **Conflicts** — where plans contradict each other\n\
+         4. **Improvements** — concrete suggestions to strengthen each plan\n\n"
+    );
+
+    let mut included = 0;
+    for (provider, plan) in all_plans {
+        if *provider == own_provider {
+            continue;
+        }
+        included += 1;
+        prompt.push_str(&format!("--- Plan from {provider} ---\n{plan}\n\n"));
+    }
+
+    if included == 0 {
+        prompt.push_str("(No other plans available for review.)\n\n");
+    }
+
+    prompt.push_str(
+        "Provide a structured critique covering Risks, Gaps, Conflicts, and Improvements. \
+         Be specific and actionable.",
+    );
+    prompt
+}
+
+/// Build the synthesis prompt given to the primary LLM.
+///
+/// When `critiques` are provided, they are included after the plans so the
+/// synthesizer can address identified risks and gaps.
+pub fn synthesis_system_prompt(
+    user_prompt: &str,
+    plans: &[(&str, &str)],
+    critiques: Option<&[(&str, &str)]>,
+) -> String {
     let mut prompt = format!(
         "You are the primary planner in a multi-LLM planning session. \
          Multiple LLMs have independently created plans for the following request. \
@@ -281,10 +405,25 @@ pub fn synthesis_system_prompt(user_prompt: &str, plans: &[(&str, &str)]) -> Str
             i + 1
         ));
     }
-    prompt.push_str(
+
+    if let Some(crits) = critiques
+        && !crits.is_empty()
+    {
+        prompt.push_str("--- Critiques ---\n\n");
+        for (provider, critique) in crits {
+            prompt.push_str(&format!("--- Critique from {provider} ---\n{critique}\n\n"));
+        }
+    }
+
+    let synthesis_instruction = if critiques.is_some_and(|c| !c.is_empty()) {
         "Produce a single unified plan that combines the best approaches. \
-         Note where plans disagreed and explain your choices.",
-    );
+         Note where plans disagreed and explain your choices. \
+         Address the risks and gaps identified in the critiques."
+    } else {
+        "Produce a single unified plan that combines the best approaches. \
+         Note where plans disagreed and explain your choices."
+    };
+    prompt.push_str(synthesis_instruction);
     prompt
 }
 
@@ -332,12 +471,70 @@ mod tests {
     #[test]
     fn test_synthesis_prompt_includes_all_plans() {
         let plans = vec![("openai", "Plan A content"), ("gemini", "Plan B content")];
-        let prompt = synthesis_system_prompt("build a feature", &plans);
+        let prompt = synthesis_system_prompt("build a feature", &plans, None);
         assert!(prompt.contains("Plan A content"));
         assert!(prompt.contains("Plan B content"));
         assert!(prompt.contains("openai"));
         assert!(prompt.contains("gemini"));
         assert!(prompt.contains("build a feature"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_includes_critiques() {
+        let plans = vec![("openai", "Plan A")];
+        let critiques = vec![("gemini", "Risk: missing error handling")];
+        let prompt = synthesis_system_prompt("build a feature", &plans, Some(&critiques));
+        assert!(prompt.contains("--- Critiques ---"));
+        assert!(prompt.contains("Critique from gemini"));
+        assert!(prompt.contains("Risk: missing error handling"));
+        assert!(prompt.contains("risks and gaps"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_without_critiques() {
+        let plans = vec![("openai", "Plan A")];
+        // None critiques — no critique section
+        let prompt_none = synthesis_system_prompt("build a feature", &plans, None);
+        assert!(!prompt_none.contains("--- Critiques ---"));
+        assert!(!prompt_none.contains("risks and gaps"));
+
+        // Empty critiques — no critique section
+        let prompt_empty = synthesis_system_prompt("build a feature", &plans, Some(&[]));
+        assert!(!prompt_empty.contains("--- Critiques ---"));
+        assert!(!prompt_empty.contains("risks and gaps"));
+    }
+
+    #[test]
+    fn test_critique_prompt_excludes_own_plan() {
+        let plans = vec![
+            ("openai", "OpenAI plan text"),
+            ("gemini", "Gemini plan text"),
+            ("anthropic", "Anthropic plan text"),
+        ];
+        let prompt = critique_system_prompt("build a feature", "gemini", &plans);
+        // Should include other plans but not gemini's own
+        assert!(prompt.contains("OpenAI plan text"));
+        assert!(prompt.contains("Anthropic plan text"));
+        assert!(!prompt.contains("Gemini plan text"));
+        assert!(prompt.contains("openai"));
+        assert!(prompt.contains("anthropic"));
+        // Provider name "gemini" appears in the system instruction text,
+        // but the plan block "--- Plan from gemini ---" should not appear
+        assert!(!prompt.contains("--- Plan from gemini ---"));
+    }
+
+    #[test]
+    fn test_critique_prompt_with_all_plans() {
+        let plans = vec![("openai", "Plan A"), ("gemini", "Plan B")];
+        let prompt = critique_system_prompt("add login", "anthropic", &plans);
+        // All plans included since own_provider doesn't match any
+        assert!(prompt.contains("Plan A"));
+        assert!(prompt.contains("Plan B"));
+        // Contains required keywords
+        assert!(prompt.contains("Risks"));
+        assert!(prompt.contains("Gaps"));
+        assert!(prompt.contains("Conflicts"));
+        assert!(prompt.contains("Improvements"));
     }
 
     #[test]

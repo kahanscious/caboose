@@ -80,6 +80,8 @@ pub struct State {
     pub file_auto: Option<crate::tui::file_auto::FileAutoState>,
     /// All loaded skills (built-in + user).
     pub skills: Vec<crate::skills::Skill>,
+    /// All loaded custom agent definitions.
+    pub agent_definitions: Vec<crate::agents::AgentDefinition>,
     /// Current active session ID (for persistence).
     pub current_session_id: Option<String>,
     /// Memory store for cross-session persistence.
@@ -192,6 +194,9 @@ pub struct State {
     pub update_check_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Active Roundhouse (multi-LLM planning) session.
     pub roundhouse_session: Option<crate::roundhouse::RoundhouseSession>,
+    /// Per-invocation override for roundhouse critique: `--no-critique` → Some(false),
+    /// `--critique` → Some(true), neither → None (falls back to config).
+    pub roundhouse_critique_override: Option<bool>,
     /// When true, the model picker adds to roundhouse secondaries instead of switching.
     pub roundhouse_model_add: bool,
     /// Receiver for roundhouse planner status updates (parallel planning engine).
@@ -199,6 +204,9 @@ pub struct State {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Receiver for roundhouse synthesis streaming deltas.
     pub roundhouse_synthesis_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Receiver for roundhouse critique phase planner updates.
+    pub roundhouse_critique_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
     /// Active subagents.
     pub sub_agents: Vec<crate::sub_agent::SubAgent>,
     /// Sender cloned into each subagent executor so they can emit events.
@@ -211,6 +219,10 @@ pub struct State {
     pub sub_agent_approval_showing: Option<(uuid::Uuid, String, String)>,
     /// Pending spawn_agent background tasks. Polled each event-loop tick.
     pub spawn_agent_handles: Vec<SpawnAgentHandle>,
+    /// Collected AgentChanges from completed agents, used for cross-agent conflict detection.
+    pub agent_changes: Vec<crate::sub_agent::conflict::AgentChanges>,
+    /// Conflict report from the latest cross-agent sweep, if any blocking overlaps were found.
+    pub conflict_report: Option<crate::sub_agent::conflict::ConflictReport>,
     /// Index into sub_agents for the stream overlay. None = closed.
     // TODO: consumed by overlay renderer
     pub agent_stream_overlay: Option<usize>,
@@ -238,6 +250,10 @@ pub struct State {
     pub diff_expanded: bool,
     /// Scroll offset for the expanded pending diff.
     pub diff_scroll: usize,
+    /// Session-scoped pinned rules injected into system prompt.
+    pub pins: Vec<String>,
+    /// Whether the pins sidebar section is expanded.
+    pub pins_expanded: bool,
 }
 
 /// Status of a tool execution.
@@ -421,7 +437,12 @@ impl State {
         let prefix = crate::tui::slash_auto::slash_prefix(&input_text);
         match prefix {
             Some(p) => {
-                let count = crate::tui::slash_auto::total_filtered(p, &self.commands, &self.skills);
+                let count = crate::tui::slash_auto::total_filtered(
+                    p,
+                    &self.commands,
+                    &self.agent_definitions,
+                    &self.skills,
+                );
                 if count == 0 {
                     self.slash_auto = None;
                 } else if let Some(auto) = self.slash_auto.as_mut() {
@@ -568,6 +589,16 @@ impl App {
         let skills =
             crate::skills::loader::load_all_skills(std::path::Path::new("."), &skills_disabled);
 
+        // Load custom agent definitions (ensure directories exist)
+        let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
+        let global_agents_dir = dirs::config_dir()
+            .map(|d| d.join("caboose/agents"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+        let _ = std::fs::create_dir_all(&project_agents_dir);
+        let _ = std::fs::create_dir_all(&global_agents_dir);
+        let agent_definitions =
+            crate::agents::load_agents(Some(&project_agents_dir), Some(&global_agents_dir));
+
         // Build system prompt with memory context
         let memory_ctx = memory_store.load_context();
         let base_prompt = config
@@ -650,6 +681,17 @@ impl App {
             system_prompt
         };
 
+        // Inject agent awareness block into system prompt
+        let system_prompt = if !agent_definitions.is_empty() {
+            let mut prompt = system_prompt;
+            prompt.push_str(&crate::agents::build_agent_awareness_block(
+                &agent_definitions,
+            ));
+            prompt
+        } else {
+            system_prompt
+        };
+
         // Inject workspace context
         let system_prompt = {
             let ws_block = workspace_system_prompt_block(&config.workspaces);
@@ -661,6 +703,10 @@ impl App {
                 system_prompt
             }
         };
+
+        // Session pins
+        // (At construction time pins are empty; they are injected dynamically
+        // when loaded from a resumed session or added via /pin.)
 
         // Inject spawn_agent guidance
         let system_prompt = {
@@ -773,6 +819,7 @@ impl App {
                 slash_auto: None,
                 file_auto: None,
                 skills,
+                agent_definitions,
                 current_session_id: None,
                 memory: memory_store,
                 history: crate::tui::input_history::InputHistory::load(),
@@ -828,15 +875,19 @@ impl App {
                 update_available: None,
                 update_check_rx: None,
                 roundhouse_session: None,
+                roundhouse_critique_override: None,
                 roundhouse_model_add: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
+                roundhouse_critique_rx: None,
                 sub_agents: Vec::new(),
                 sub_agent_tx: Some(sub_agent_tx),
                 sub_agent_rx: Some(sub_agent_rx),
                 sub_agent_pending_approvals: std::collections::VecDeque::new(),
                 sub_agent_approval_showing: None,
                 spawn_agent_handles: Vec::new(),
+                agent_changes: Vec::new(),
+                conflict_report: None,
                 agent_stream_overlay: None,
                 sidebar_agent_selected: 0,
                 agents_dismiss_row: Cell::new(None),
@@ -849,6 +900,8 @@ impl App {
                 active_watchers: Vec::new(),
                 diff_expanded: false,
                 diff_scroll: 0,
+                pins: vec![],
+                pins_expanded: false,
             },
             terminal,
             provider,
@@ -877,6 +930,39 @@ impl App {
         Ok(app)
     }
 
+    /// Sync session pins into the agent's system prompt.
+    ///
+    /// Strips any existing `## Session Pins` section and, if pins are non-empty,
+    /// appends a fresh one right before the `## Subagents` section.
+    fn sync_pins_to_system_prompt(&mut self) {
+        let prompt = &mut self.state.agent.conversation.system_prompt;
+
+        // Remove any existing pins section
+        if let Some(start) = prompt.find("\n\n## Session Pins") {
+            // Find where the next section begins (or end of string)
+            let after = &prompt[start + 1..];
+            let end = after
+                .find("\n\n## ")
+                .map(|pos| start + 1 + pos)
+                .unwrap_or(prompt.len());
+            prompt.replace_range(start..end, "");
+        }
+
+        // Insert pins before the Subagents section (if present)
+        if !self.state.pins.is_empty() {
+            let mut pins_block =
+                String::from("\n\n## Session Pins (user-set rules for this session)\n");
+            for (i, pin) in self.state.pins.iter().enumerate() {
+                pins_block.push_str(&format!("{}. {pin}\n", i + 1));
+            }
+            if let Some(pos) = prompt.find("\n\n## Subagents") {
+                prompt.insert_str(pos, &pins_block);
+            } else {
+                prompt.push_str(&pins_block);
+            }
+        }
+    }
+
     /// Restore a session from the database, loading messages into the chat.
     fn restore_session(&mut self, session_id: &str) {
         let session = match self.state.sessions.get(session_id) {
@@ -896,6 +982,9 @@ impl App {
         };
 
         self.state.current_session_id = Some(session.id.clone());
+        self.state.pins = session.pins.clone();
+        self.state.pins_expanded = false;
+        self.sync_pins_to_system_prompt();
         self.state.agent.init_cold_store(&session.id);
         self.state.session_title = session.title.clone();
         self.state.agent.session_allows.clear();
@@ -1001,6 +1090,17 @@ impl App {
                         continue;
                     }
                 }
+                "fork_context" => {
+                    self.state.agent.conversation.messages.push(
+                        crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Text(msg.content.clone()),
+                            tool_call_id: None,
+                        },
+                    );
+                    i += 1;
+                    continue;
+                }
                 _ => {
                     i += 1;
                     continue;
@@ -1029,7 +1129,7 @@ impl App {
             } else {
                 Some(self.state.active_provider_name.as_str())
             };
-            match self.state.sessions.create(model, provider) {
+            match self.state.sessions.create(model, provider, None, None) {
                 Ok(session) => {
                     self.state.agent.init_cold_store(&session.id);
                     self.state.current_session_id = Some(session.id);
@@ -1062,6 +1162,9 @@ impl App {
                     .map(|p| p.to_string_lossy().to_string()),
                 created_at: chrono::Utc::now(), // not updated — SQL UPDATE doesn't touch it
                 updated_at: chrono::Utc::now(),
+                parent_session_id: None,
+                fork_message_count: None,
+                pins: vec![],
             };
             if let Err(e) = self.state.sessions.update(&session) {
                 tracing::warn!("Failed to update session: {e}");
@@ -1547,14 +1650,17 @@ impl App {
                                         if let Some(dismiss_y) = self.state.agents_dismiss_row.get()
                                             && mouse.row == dismiss_y
                                         {
-                                            self.state.sub_agents.retain(|a| {
-                                                !matches!(
-                                                    a.state,
-                                                    crate::sub_agent::SubAgentState::Done
-                                                        | crate::sub_agent::SubAgentState::Failed { .. }
-                                                        | crate::sub_agent::SubAgentState::Conflict { .. }
-                                                )
+                                            self.state
+                                                .sub_agents
+                                                .retain(|a| !a.state.is_terminal());
+                                            // Clean up stashed changes for dismissed agents
+                                            self.state.agent_changes.retain(|c| {
+                                                self.state
+                                                    .sub_agents
+                                                    .iter()
+                                                    .any(|a| a.id == c.agent_id)
                                             });
+                                            self.state.conflict_report = None;
                                             if !self.state.sub_agents.is_empty() {
                                                 let max =
                                                     self.state.sub_agents.len().saturating_sub(1);
@@ -1568,11 +1674,27 @@ impl App {
                                         }
 
                                         // Files Modified header click to toggle collapse
-                                        if let Some(header_y) = self.state.files_modified_header_row.get()
+                                        if let Some(header_y) =
+                                            self.state.files_modified_header_row.get()
                                             && mouse.row == header_y
                                         {
-                                            self.state.files_modified_collapsed = !self.state.files_modified_collapsed;
+                                            self.state.files_modified_collapsed =
+                                                !self.state.files_modified_collapsed;
                                             continue;
+                                        }
+
+                                        // Pin bar toggle click
+                                        if !self.state.pins.is_empty() {
+                                            let pin_bar_end = if self.state.pins_expanded {
+                                                1 + self.state.pins.len() as u16
+                                            } else {
+                                                1
+                                            };
+                                            if mouse.row >= 1 && mouse.row <= pin_bar_end {
+                                                self.state.pins_expanded =
+                                                    !self.state.pins_expanded;
+                                                continue;
+                                            }
                                         }
 
                                         // Diff toggle click zone logic — runs BEFORE truncation zones.
@@ -1953,6 +2075,45 @@ impl App {
                                 session.primary_streaming_text.push_str(&text);
                             }
                         }
+                        crate::roundhouse::PlannerUpdate::ToolStarted {
+                            planner_index,
+                            tool_name,
+                            args_summary,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_tool_calls.push(
+                                    crate::roundhouse::RoundhouseToolCall {
+                                        tool_name,
+                                        args_summary,
+                                        status: crate::roundhouse::ToolCallStatus::Running,
+                                        result_summary: None,
+                                    },
+                                );
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::ToolCompleted {
+                            planner_index,
+                            tool_name: _,
+                            summary,
+                            is_error,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                                && let Some(tc) =
+                                    session.primary_tool_calls.iter_mut().rev().find(|tc| {
+                                        tc.status == crate::roundhouse::ToolCallStatus::Running
+                                    })
+                            {
+                                tc.status = if is_error {
+                                    crate::roundhouse::ToolCallStatus::Failed
+                                } else {
+                                    crate::roundhouse::ToolCallStatus::Success
+                                };
+                                tc.result_summary = Some(summary);
+                            }
+                        }
                         crate::roundhouse::PlannerUpdate::TokensUsed {
                             planner_index: _,
                             input_tokens: _,
@@ -2016,14 +2177,24 @@ impl App {
                                 }
 
                                 if session.all_planners_done() {
-                                    session.phase =
-                                        crate::roundhouse::RoundhousePhase::Synthesizing;
                                     let plan_count = session.successful_plans().len();
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!(
-                                            "All planners complete ({plan_count} plans). Synthesizing..."
-                                        ),
-                                    });
+                                    if session.critique_enabled && !session.secondaries.is_empty() {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Critiquing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Starting critique phase..."
+                                            ),
+                                        });
+                                    } else {
+                                        session.phase =
+                                            crate::roundhouse::RoundhousePhase::Synthesizing;
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!(
+                                                "All planners complete ({plan_count} plans). Synthesizing..."
+                                            ),
+                                        });
+                                    }
                                     all_done = true;
                                 }
                             }
@@ -2033,8 +2204,116 @@ impl App {
                 if cancelled {
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                 } else if all_done {
                     self.state.roundhouse_update_rx = None;
+                    if let Some(ref session) = self.state.roundhouse_session {
+                        if session.phase == crate::roundhouse::RoundhousePhase::Critiquing {
+                            self.start_roundhouse_critique();
+                        } else {
+                            self.start_roundhouse_synthesis();
+                        }
+                    }
+                }
+            }
+
+            // Poll roundhouse critique updates (non-blocking)
+            if let Some(ref mut rx) = self.state.roundhouse_critique_rx {
+                let mut all_critiques_done = false;
+                while let Ok(update) = rx.try_recv() {
+                    match update {
+                        crate::roundhouse::PlannerUpdate::StatusChanged {
+                            planner_index,
+                            status,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                let tick = self.state.tick;
+                                if planner_index == 0 {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        session.primary_critique_streaming_text.clear();
+                                    }
+                                    session.primary_critique_status = status;
+                                    session.primary_critique_status_tick = tick;
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
+                                    {
+                                        s.critique_streaming_text.clear();
+                                    }
+                                    s.critique_status = status;
+                                    s.critique_status_tick = tick;
+                                }
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::StreamingDelta {
+                            planner_index,
+                            text,
+                        } => {
+                            if planner_index == 0
+                                && let Some(ref mut session) = self.state.roundhouse_session
+                            {
+                                session.primary_critique_streaming_text.push_str(&text);
+                            }
+                        }
+                        crate::roundhouse::PlannerUpdate::ToolStarted { .. }
+                        | crate::roundhouse::PlannerUpdate::ToolCompleted { .. } => {
+                            // Critiques don't use tools, ignore
+                        }
+                        crate::roundhouse::PlannerUpdate::TokensUsed { .. } => {
+                            // No-op for now
+                        }
+                        crate::roundhouse::PlannerUpdate::PlanComplete {
+                            planner_index,
+                            result,
+                        } => {
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                match result {
+                                    Ok(critique_text) => {
+                                        if planner_index == 0 {
+                                            session.primary_critique = Some(critique_text);
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique = Some(critique_text);
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Done;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Critique failures are NON-FATAL — just mark as failed
+                                        if planner_index == 0 {
+                                            session.primary_critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        } else if let Some(s) =
+                                            session.secondaries.get_mut(planner_index - 1)
+                                        {
+                                            s.critique_status =
+                                                crate::roundhouse::PlannerStatus::Failed(e);
+                                        }
+                                    }
+                                }
+
+                                if session.all_critiques_done() {
+                                    let critique_count = session.successful_critiques().len();
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All critiques complete ({critique_count} critiques). Synthesizing..."
+                                        ),
+                                    });
+                                    all_critiques_done = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if all_critiques_done {
+                    self.state.roundhouse_critique_rx = None;
                     self.start_roundhouse_synthesis();
                 }
             }
@@ -2070,6 +2349,21 @@ impl App {
                             .map(|(p, t)| (p.as_str(), t.as_str()))
                             .collect();
 
+                        let critique_plans: Vec<(String, String)> = session
+                            .successful_critiques()
+                            .iter()
+                            .map(|(p, t)| (p.to_string(), t.to_string()))
+                            .collect();
+                        let critique_refs: Vec<(&str, &str)> = critique_plans
+                            .iter()
+                            .map(|(p, t)| (p.as_str(), t.as_str()))
+                            .collect();
+                        let critiques_opt = if critique_refs.is_empty() {
+                            None
+                        } else {
+                            Some(critique_refs.as_slice())
+                        };
+
                         session.synthesized_plan = Some(plan_text.clone());
                         session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
 
@@ -2079,6 +2373,7 @@ impl App {
                             &prompt,
                             &individual_refs,
                             &plan_text,
+                            critiques_opt,
                         );
                         match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
                             Ok(path) => {
@@ -2374,6 +2669,53 @@ impl App {
             }
         }
 
+        // Conflict report approval — intercept y/n when blocking overlaps are pending
+        if self.state.conflict_report.is_some() {
+            match key {
+                KeyCode::Char('y') => {
+                    let report = self.state.conflict_report.take().unwrap();
+                    let blocked_ids: Vec<uuid::Uuid> = report
+                        .overlaps
+                        .iter()
+                        .filter(|o| {
+                            matches!(
+                                o.severity,
+                                crate::sub_agent::conflict::OverlapSeverity::Block
+                            )
+                        })
+                        .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                        .collect();
+                    for id in blocked_ids {
+                        self.merge_single_agent(id).await;
+                    }
+                    return;
+                }
+                KeyCode::Char('n') => {
+                    let report = self.state.conflict_report.take().unwrap();
+                    let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
+                        .overlaps
+                        .iter()
+                        .filter(|o| {
+                            matches!(
+                                o.severity,
+                                crate::sub_agent::conflict::OverlapSeverity::Block
+                            )
+                        })
+                        .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                        .collect();
+                    for agent in &mut self.state.sub_agents {
+                        if blocked_ids.contains(&agent.id) {
+                            agent.state = crate::sub_agent::SubAgentState::Conflict {
+                                report: "overlapping edits — skipped by user".to_string(),
+                            };
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Inline approval bar — intercept y/n/a before dialog dispatch
         if matches!(self.state.agent.state, AgentState::PendingApproval { .. }) {
             match key {
@@ -2543,6 +2885,7 @@ impl App {
                 &input_text,
                 selected,
                 &self.state.commands,
+                &self.state.agent_definitions,
                 &self.state.skills,
             );
             match key {
@@ -2557,6 +2900,7 @@ impl App {
                     let count = crate::tui::slash_auto::total_filtered(
                         prefix,
                         &self.state.commands,
+                        &self.state.agent_definitions,
                         &self.state.skills,
                     );
                     if let Some(auto) = self.state.slash_auto.as_mut()
@@ -2701,6 +3045,16 @@ impl App {
                             self.open_rewind_picker();
                             return;
                         }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
+                        }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
                             self.handle_roundhouse_subcommand(sub.trim());
@@ -2714,6 +3068,20 @@ impl App {
                         // /watch pr <number> [--persist] | /watch mr <number> [--persist]
                         if let Some(args) = slash.strip_prefix("watch ") {
                             self.handle_watch_command(args.trim()).await;
+                            return;
+                        }
+                        // /pin, /pins, /unpin
+                        if slash == "pin" || slash.starts_with("pin ") {
+                            self.handle_pin_command(slash);
+                            return;
+                        }
+                        if slash == "pins" {
+                            self.handle_pins_command();
+                            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+                            return;
+                        }
+                        if slash == "unpin" || slash.starts_with("unpin ") {
+                            self.handle_unpin_command(slash);
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -2733,7 +3101,7 @@ impl App {
 
                         // Try skill resolution after command registry check
                         {
-                            // Reload skills from disk before resolution (picks up external changes)
+                            // Reload skills and agents from disk before resolution (picks up external changes)
                             let skills_disabled = self
                                 .state
                                 .config
@@ -2744,6 +3112,21 @@ impl App {
                             self.state.skills = crate::skills::loader::load_all_skills(
                                 std::path::Path::new("."),
                                 &skills_disabled,
+                            );
+                            let command_names: Vec<&str> = self
+                                .state
+                                .commands
+                                .slash_commands()
+                                .filter_map(|c| c.slash)
+                                .collect();
+                            let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
+                            let global_agents_dir = dirs::config_dir()
+                                .map(|d| d.join("caboose/agents"))
+                                .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+                            self.state.agent_definitions = crate::agents::load_agents_validated(
+                                Some(&project_agents_dir),
+                                Some(&global_agents_dir),
+                                &command_names,
                             );
 
                             let slash_name = slash.split_whitespace().next().unwrap_or(slash);
@@ -2757,8 +3140,78 @@ impl App {
                             let resolution = crate::skills::resolver::resolve_slash_name(
                                 slash_name,
                                 &command_names,
+                                &self.state.agent_definitions,
                                 &self.state.skills,
                             );
+                            if let crate::skills::SlashResolution::Agent(agent_def) = resolution {
+                                // Invoke agent via spawn_agent with the remaining args as the task
+                                let task_text = if args.is_empty() {
+                                    format!("Run agent: {}", agent_def.name)
+                                } else {
+                                    args.to_string()
+                                };
+                                let spawn_args = serde_json::json!({
+                                    "task": task_text,
+                                    "agent": agent_def.name,
+                                });
+                                if !self.require_provider() {
+                                    return;
+                                }
+                                self.state.dialog_stack.base = Screen::Chat;
+                                self.state.dialog_stack.clear();
+                                match self.spawn_agent_setup(&spawn_args).await {
+                                    Ok((
+                                        agent_id,
+                                        input,
+                                        provider,
+                                        config,
+                                        tx,
+                                        task,
+                                        branch,
+                                        worktree_path,
+                                        base_sha,
+                                    )) => {
+                                        let placeholder_idx = self.state.chat_messages.len();
+                                        self.state.chat_messages.push(ChatMessage::Tool(
+                                            ToolMessage {
+                                                name: "spawn_agent".to_string(),
+                                                args: spawn_args.clone(),
+                                                output: None,
+                                                status: ToolStatus::Running,
+                                                expanded: false,
+                                                file_path: None,
+                                                diff_preview: None,
+                                                diff_expanded: false,
+                                            },
+                                        ));
+                                        let tool_use_id = format!("slash-{}", uuid::Uuid::new_v4());
+                                        let handle = tokio::spawn(run_spawn_agent_task(
+                                            agent_id,
+                                            tool_use_id.clone(),
+                                            task,
+                                            branch,
+                                            worktree_path,
+                                            base_sha,
+                                            input,
+                                            provider,
+                                            config,
+                                            tx,
+                                        ));
+                                        self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                                            tool_use_id,
+                                            arguments: spawn_args,
+                                            chat_placeholder_idx: placeholder_idx,
+                                            handle,
+                                        });
+                                    }
+                                    Err(err_msg) => {
+                                        self.state.chat_messages.push(ChatMessage::System {
+                                            content: format!("Agent failed: {err_msg}"),
+                                        });
+                                    }
+                                }
+                                return;
+                            }
                             if let crate::skills::SlashResolution::Skill(skill) = resolution {
                                 let cwd = std::env::current_dir()
                                     .unwrap_or_default()
@@ -3040,6 +3493,7 @@ impl App {
                 &input_text,
                 selected,
                 &self.state.commands,
+                &self.state.agent_definitions,
                 &self.state.skills,
             );
             match key {
@@ -3054,6 +3508,7 @@ impl App {
                     let count = crate::tui::slash_auto::total_filtered(
                         prefix,
                         &self.state.commands,
+                        &self.state.agent_definitions,
                         &self.state.skills,
                     );
                     if let Some(auto) = self.state.slash_auto.as_mut()
@@ -3512,11 +3967,26 @@ impl App {
                             self.open_rewind_picker();
                             return;
                         }
+                        // /fork — fork current session
+                        if slash == "fork" {
+                            self.handle_fork_command();
+                            return;
+                        }
                         // /handoff — build handoff summary
                         if slash == "handoff" || slash.starts_with("handoff ") {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
                             self.handle_handoff_command(args).await;
                             return;
+                        }
+                        // /roundhouse — parse --critique / --no-critique flags
+                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+                            if slash.contains("--no-critique") {
+                                self.state.roundhouse_critique_override = Some(false);
+                            } else if slash.contains("--critique") {
+                                self.state.roundhouse_critique_override = Some(true);
+                            } else {
+                                self.state.roundhouse_critique_override = None;
+                            }
                         }
                         // /roundhouse execute|cancel — subcommands
                         if let Some(sub) = slash.strip_prefix("roundhouse ") {
@@ -3531,6 +4001,19 @@ impl App {
                         // /watch pr <number> [--persist] | /watch mr <number> [--persist]
                         if let Some(args) = slash.strip_prefix("watch ") {
                             self.handle_watch_command(args.trim()).await;
+                            return;
+                        }
+                        // /pin, /pins, /unpin
+                        if slash == "pin" || slash.starts_with("pin ") {
+                            self.handle_pin_command(slash);
+                            return;
+                        }
+                        if slash == "pins" {
+                            self.handle_pins_command();
+                            return;
+                        }
+                        if slash == "unpin" || slash.starts_with("unpin ") {
+                            self.handle_unpin_command(slash);
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -4076,7 +4559,9 @@ impl App {
                             .iter()
                             .chain(recent.iter())
                             .find(|(_, m)| m.id == *model_id)
-                            .map(|(_, m)| (m.supports_tools, m.supports_vision, m.supports_thinking))
+                            .map(|(_, m)| {
+                                (m.supports_tools, m.supports_vision, m.supports_thinking)
+                            })
                     })
                     .unwrap_or((true, false, false));
                 // Build display name for roundhouse before clearing slash_auto
@@ -4452,6 +4937,7 @@ impl App {
                 let count = crate::tui::slash_auto::total_filtered(
                     prefix,
                     &self.state.commands,
+                    &self.state.agent_definitions,
                     &self.state.skills,
                 );
                 if let Some(auto) = self.state.slash_auto.as_mut()
@@ -4684,6 +5170,9 @@ impl App {
         match key {
             KeyCode::Esc => {
                 self.state.roundhouse_session = None;
+                self.state.roundhouse_update_rx = None;
+                self.state.roundhouse_synthesis_rx = None;
+                self.state.roundhouse_critique_rx = None;
                 self.state.roundhouse_model_add = false;
                 self.state.dialog_stack.pop();
             }
@@ -6278,6 +6767,7 @@ impl App {
                                     task,
                                     branch,
                                     worktree_path,
+                                    base_sha,
                                 )) => {
                                     let placeholder_idx = self.state.chat_messages.len();
                                     self.state
@@ -6300,6 +6790,7 @@ impl App {
                                         task,
                                         branch,
                                         worktree_path,
+                                        base_sha,
                                         input,
                                         provider,
                                         config,
@@ -7241,6 +7732,7 @@ impl App {
             String,
             String,
             std::path::PathBuf,
+            String, // base_sha
         ),
         String,
     > {
@@ -7249,84 +7741,112 @@ impl App {
             None => return Err("spawn_agent: missing required parameter 'task'".to_string()),
         };
 
-        // Check gitignore
-        if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
-            return Err(format!(
-                "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
-                 Add .worktrees/ to .gitignore first."
-            ));
-        }
+        // Look up custom agent definition if specified
+        let agent_def = if let Some(name) = arguments.get("agent").and_then(|v| v.as_str()) {
+            match self.state.agent_definitions.iter().find(|a| a.name == name) {
+                Some(def) => Some(def.clone()),
+                None => return Err(format!("spawn_agent: unknown agent '{name}'")),
+            }
+        } else {
+            None
+        };
 
-        // Compute unique slug
-        let used_slugs: Vec<String> = self
-            .state
-            .sub_agents
-            .iter()
-            .filter_map(|a| {
-                a.worktree_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(|n| n.strip_prefix("agent-"))
-                    .map(|s| s.to_string())
-            })
-            .collect();
-        let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
-        let branch = crate::sub_agent::worktree::branch_name(&slug);
-        let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
+        let use_worktree = agent_def
+            .as_ref()
+            .map(|d| d.worktree.unwrap_or(true))
+            .unwrap_or(true);
 
         // Auto-clear terminal-state agents
-        self.state.sub_agents.retain(|a| {
-            !matches!(
-                a.state,
-                crate::sub_agent::SubAgentState::Done
-                    | crate::sub_agent::SubAgentState::Failed { .. }
-                    | crate::sub_agent::SubAgentState::Conflict { .. }
-            )
-        });
+        self.state.sub_agents.retain(|a| !a.state.is_terminal());
+        self.state
+            .agent_changes
+            .retain(|c| self.state.sub_agents.iter().any(|a| a.id == c.agent_id));
+        self.state.conflict_report = None;
 
-        // Clean up any stale branch/worktree from a previous run
-        let branch_cleanup = branch.clone();
-        let path_cleanup = worktree_path.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            // Try removing stale worktree first (ignores errors)
-            let _ = std::process::Command::new("git")
-                .args([
-                    "worktree",
-                    "remove",
-                    "--force",
-                    &path_cleanup.to_string_lossy(),
-                ])
-                .output();
-            // Try deleting stale branch (ignores errors)
-            let _ = std::process::Command::new("git")
-                .args(["branch", "-D", &branch_cleanup])
-                .output();
-        })
-        .await;
+        let (branch, worktree_path, base_sha) = if use_worktree {
+            // Check gitignore
+            if let Err(e) = crate::sub_agent::worktree::check_worktrees_ignored() {
+                return Err(format!(
+                    "Cannot spawn agent: .worktrees/ is not git-ignored ({e}). \
+                     Add .worktrees/ to .gitignore first."
+                ));
+            }
 
-        // Create worktree
-        let path_clone = worktree_path.clone();
-        let branch_clone = branch.clone();
-        let worktree_result = tokio::task::spawn_blocking(move || {
-            crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
-        })
-        .await;
+            // Compute unique slug
+            let used_slugs: Vec<String> = self
+                .state
+                .sub_agents
+                .iter()
+                .filter_map(|a| {
+                    a.worktree_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .and_then(|n| n.strip_prefix("agent-"))
+                        .map(|s| s.to_string())
+                })
+                .collect();
+            let slug = crate::sub_agent::worktree::unique_slug(&task, &used_slugs);
+            let branch = crate::sub_agent::worktree::branch_name(&slug);
+            let worktree_path = crate::sub_agent::worktree::worktree_path(&slug);
 
-        match worktree_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
-            Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
-        }
+            // Clean up any stale branch/worktree from a previous run
+            let branch_cleanup = branch.clone();
+            let path_cleanup = worktree_path.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("git")
+                    .args([
+                        "worktree",
+                        "remove",
+                        "--force",
+                        &path_cleanup.to_string_lossy(),
+                    ])
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["branch", "-D", &branch_cleanup])
+                    .output();
+            })
+            .await;
+
+            // Create worktree
+            let path_clone = worktree_path.clone();
+            let branch_clone = branch.clone();
+            let worktree_result = tokio::task::spawn_blocking(move || {
+                crate::sub_agent::worktree::create_worktree(&path_clone, &branch_clone)
+            })
+            .await;
+
+            match worktree_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(format!("spawn_agent: failed to create worktree: {e}")),
+                Err(e) => return Err(format!("spawn_agent: worktree task panicked: {e}")),
+            }
+
+            // Capture HEAD SHA before any agent work begins
+            let base_sha = tokio::task::spawn_blocking(|| {
+                crate::sub_agent::worktree::current_head_sha()
+                    .unwrap_or_else(|_| "unknown".to_string())
+            })
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+
+            (branch, worktree_path, base_sha)
+        } else {
+            // No worktree — run in current working directory
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            (String::new(), cwd, String::new())
+        };
 
         // Register SubAgent
         let agent_id = uuid::Uuid::new_v4();
         let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
 
+        let base_sha_ret = base_sha.clone();
         self.state.sub_agents.push(crate::sub_agent::SubAgent {
             id: agent_id,
             task: task.clone(),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
+            base_sha,
             state: crate::sub_agent::SubAgentState::Running,
             started_at: Some(std::time::Instant::now()),
             cost_usd: 0.0,
@@ -7343,8 +7863,43 @@ impl App {
             Mode::Chug => PermissionMode::Chug,
         };
 
-        let system_prompt = self.state.agent.conversation.system_prompt.clone();
-        let pricing = self.state.pricing.get(&self.state.active_model_name);
+        // Build system prompt: custom agent body or inherited
+        let system_prompt = if let Some(ref def) = agent_def {
+            let mut prompt = def.system_prompt.clone();
+            let ws_block = workspace_system_prompt_block(&self.state.config.workspaces);
+            if !ws_block.is_empty() {
+                prompt.push_str(&ws_block);
+            }
+            prompt.push_str(
+                "\n\nYou are a specialized sub-agent. Focus only on your assigned task. \
+                 Do not modify files outside your task scope.",
+            );
+            prompt
+        } else {
+            self.state.agent.conversation.system_prompt.clone()
+        };
+
+        // Resolve model for custom agents
+        let model_name = if let Some(ref def) = agent_def {
+            if let Some(ref model_str) = def.model {
+                match crate::agents::resolve_model_shorthand(model_str) {
+                    Some(resolved) => resolved.to_string(),
+                    None => {
+                        eprintln!(
+                            "warning: agent '{}' has unknown model '{}', using current model",
+                            def.name, model_str
+                        );
+                        self.state.active_model_name.clone()
+                    }
+                }
+            } else {
+                self.state.active_model_name.clone()
+            }
+        } else {
+            self.state.active_model_name.clone()
+        };
+
+        let pricing = self.state.pricing.get(&model_name);
         let input = crate::sub_agent::executor::SubAgentInput {
             id: agent_id,
             task: task.clone(),
@@ -7354,13 +7909,16 @@ impl App {
             approval_rx,
             input_per_m: pricing.map(|p| p.input_per_m).unwrap_or(0.0),
             output_per_m: pricing.map(|p| p.output_per_m).unwrap_or(0.0),
+            allowed_tools: agent_def.as_ref().and_then(|d| d.tools.clone()),
+            denied_tools: agent_def.as_ref().and_then(|d| d.denied_tools.clone()),
         };
 
         // Get provider
-        let provider_arc = match self.state.providers.get_provider_arc(
-            Some(&self.state.active_provider_name),
-            Some(&self.state.active_model_name),
-        ) {
+        let provider_arc = match self
+            .state
+            .providers
+            .get_provider_arc(Some(&self.state.active_provider_name), Some(&model_name))
+        {
             Ok(p) => p,
             Err(e) => {
                 if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
@@ -7398,6 +7956,7 @@ impl App {
             task,
             branch,
             worktree_path,
+            base_sha_ret,
         ))
     }
 
@@ -7427,6 +7986,7 @@ impl App {
                         message: format!("task panicked: {e}"),
                     },
                     cost_usd: 0.0,
+                    changes: None,
                 },
             };
 
@@ -7442,6 +8002,13 @@ impl App {
                 a.approval_tx = None;
             }
 
+            // Stash AgentChanges for Review-state agents
+            if matches!(result.final_state, crate::sub_agent::SubAgentState::Review)
+                && let Some(changes) = result.changes
+            {
+                self.state.agent_changes.push(changes);
+            }
+
             // Update chat placeholder
             if let Some(ChatMessage::Tool(tm)) =
                 self.state.chat_messages.get_mut(sh.chat_placeholder_idx)
@@ -7454,32 +8021,55 @@ impl App {
                 tm.output = Some(result.result_text.clone());
             }
 
-            // Inject ToolResult into agent conversation
-            self.state
-                .agent
-                .conversation
-                .push(crate::agent::conversation::Message {
-                    role: crate::agent::conversation::Role::User,
-                    content: crate::agent::conversation::Content::Blocks(vec![
-                        crate::agent::conversation::ContentBlock::ToolResult {
-                            tool_use_id: result.tool_use_id.clone(),
-                            content: result.result_text.clone(),
-                            is_error: result.is_error,
-                        },
-                    ]),
-                    tool_call_id: Some(result.tool_use_id),
-                });
+            // Inject ToolResult into agent conversation (skip for slash-invoked agents)
+            if !result.tool_use_id.starts_with("slash-") {
+                self.state
+                    .agent
+                    .conversation
+                    .push(crate::agent::conversation::Message {
+                        role: crate::agent::conversation::Role::User,
+                        content: crate::agent::conversation::Content::Blocks(vec![
+                            crate::agent::conversation::ContentBlock::ToolResult {
+                                tool_use_id: result.tool_use_id.clone(),
+                                content: result.result_text.clone(),
+                                is_error: result.is_error,
+                            },
+                        ]),
+                        tool_call_id: Some(result.tool_use_id),
+                    });
+            }
 
             // Emit system chat message
             if result.is_error {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent failed: {}", result.task),
                 });
+            } else if matches!(result.final_state, crate::sub_agent::SubAgentState::Review) {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("agent ready for review: {}", result.task),
+                });
             } else {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!("agent done: {}", result.task),
                 });
             }
+        }
+
+        // Check if all non-terminal agents are in Review — trigger merge sweep
+        let all_in_review = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| !a.state.is_terminal())
+            .all(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review));
+        let review_count = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| matches!(a.state, crate::sub_agent::SubAgentState::Review))
+            .count();
+        if all_in_review && review_count > 0 {
+            self.merge_reviewed_agents().await;
         }
 
         // When all spawn handles are done and no other tools are pending, finalize
@@ -7489,6 +8079,132 @@ impl App {
             && matches!(self.state.agent.state, AgentState::ExecutingTools)
         {
             self.finalize_tool_execution();
+        }
+    }
+
+    /// Run the conflict detection sweep and merge agents that are ready.
+    /// Called when all non-terminal agents have reached Review state.
+    async fn merge_reviewed_agents(&mut self) {
+        let changes = std::mem::take(&mut self.state.agent_changes);
+
+        // No-worktree agents won't have changes entries — move them to Done directly
+        let no_worktree_ids: Vec<uuid::Uuid> = self
+            .state
+            .sub_agents
+            .iter()
+            .filter(|a| {
+                matches!(a.state, crate::sub_agent::SubAgentState::Review) && a.branch.is_empty()
+            })
+            .map(|a| a.id)
+            .collect();
+        for id in no_worktree_ids {
+            self.merge_single_agent(id).await;
+        }
+
+        if changes.len() <= 1 {
+            // Single agent or no agents — skip cross-agent check, merge directly
+            for agent_change in &changes {
+                self.merge_single_agent(agent_change.agent_id).await;
+            }
+            return;
+        }
+
+        // Run cross-agent check
+        let report = crate::sub_agent::conflict::cross_agent_check(&changes);
+
+        if !report.has_blocking() {
+            // No blocking overlaps — merge all sequentially
+            if !report.overlaps.is_empty() {
+                let warn_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
+                self.state
+                    .chat_messages
+                    .push(ChatMessage::System { content: warn_text });
+            }
+            for agent_change in &changes {
+                self.merge_single_agent(agent_change.agent_id).await;
+            }
+        } else {
+            // Blocking overlaps — surface report, await user decision
+            let report_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
+            self.state.chat_messages.push(ChatMessage::System {
+                content: report_text,
+            });
+
+            // Identify which agents are blocked
+            let blocked_ids: std::collections::HashSet<uuid::Uuid> = report
+                .overlaps
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        o.severity,
+                        crate::sub_agent::conflict::OverlapSeverity::Block
+                    )
+                })
+                .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
+                .collect();
+
+            // Auto-merge non-blocked agents
+            for agent_change in &changes {
+                if !blocked_ids.contains(&agent_change.agent_id) {
+                    self.merge_single_agent(agent_change.agent_id).await;
+                }
+            }
+
+            // Store report for approval flow
+            self.state.conflict_report = Some(report);
+        }
+    }
+
+    /// Merge a single agent's branch and clean up its worktree.
+    async fn merge_single_agent(&mut self, agent_id: uuid::Uuid) {
+        // Extract data upfront to avoid borrow issues with async
+        let (branch, worktree_path) = match self.state.sub_agents.iter().find(|a| a.id == agent_id)
+        {
+            Some(a) => (a.branch.clone(), a.worktree_path.clone()),
+            None => return,
+        };
+
+        // No-worktree agents: skip merge, go straight to Done
+        if branch.is_empty() {
+            if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                a.state = crate::sub_agent::SubAgentState::Done;
+            }
+            return;
+        }
+
+        let branch_for_merge = branch.clone();
+        let merge_result = tokio::task::spawn_blocking(move || {
+            crate::sub_agent::worktree::merge_branch(&branch_for_merge)
+        })
+        .await;
+
+        match merge_result {
+            Ok(Ok(())) => {
+                // Clean up worktree
+                let wp = worktree_path;
+                let br = branch;
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::sub_agent::worktree::remove_worktree(&wp, &br)
+                })
+                .await;
+
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Done;
+                }
+            }
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Conflict { report: msg };
+                }
+            }
+            Err(e) => {
+                if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
+                    a.state = crate::sub_agent::SubAgentState::Failed {
+                        message: e.to_string(),
+                    };
+                }
+            }
         }
     }
 
@@ -8640,11 +9356,13 @@ impl App {
             Some(&session.primary_model),
         ) {
             let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
             let p = prompt.clone();
             let t = tools.clone();
             tokio::spawn(async move {
                 let result = crate::roundhouse::planner::run_planner(
                     primary_provider,
+                    sys,
                     p,
                     t,
                     timeout,
@@ -8674,12 +9392,14 @@ impl App {
                 .get_provider(Some(&provider_name), Some(&model_name))
             {
                 let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::planning_system_prompt(&prompt);
                 let p = prompt.clone();
                 let t = tools.clone();
                 let idx = i + 1;
                 tokio::spawn(async move {
                     let result = crate::roundhouse::planner::run_planner(
                         provider,
+                        sys,
                         p,
                         t,
                         timeout,
@@ -8698,6 +9418,136 @@ impl App {
                     && let Some(s) = session.secondaries.get_mut(i)
                 {
                     s.status = crate::roundhouse::PlannerStatus::Failed(format!(
+                        "Could not create provider '{provider_name}'"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Spawn parallel critique tasks for Roundhouse mode.
+    /// Each model reviews all plans except its own.
+    fn start_roundhouse_critique(&mut self) {
+        // Extract everything we need from session before releasing the borrow
+        let (prompt, timeout, all_plans, primary_provider_name, primary_model_name, secondaries) = {
+            let session = match self.state.roundhouse_session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let prompt = match session.prompt.clone() {
+                Some(p) => p,
+                None => return,
+            };
+            let timeout = session.config.critique_timeout_secs;
+            let all_plans: Vec<(String, String)> = session
+                .successful_plans()
+                .iter()
+                .map(|(p, t)| (p.to_string(), t.to_string()))
+                .collect();
+            let primary_provider_name = session.primary_provider.clone();
+            let primary_model_name = session.primary_model.clone();
+            let secondaries: Vec<(usize, String, String)> = session
+                .secondaries
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
+                .collect();
+            (
+                prompt,
+                timeout,
+                all_plans,
+                primary_provider_name,
+                primary_model_name,
+                secondaries,
+            )
+        };
+
+        // No tools for critique phase
+        let tools: Vec<crate::provider::ToolDefinition> = Vec::new();
+
+        let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.state.roundhouse_critique_rx = Some(update_rx);
+
+        // Build plan refs for critique_system_prompt
+        let plan_refs: Vec<(&str, &str)> = all_plans
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+
+        // Spawn primary critique (index 0)
+        if let Ok(primary_provider) = self
+            .state
+            .providers
+            .get_provider(Some(&primary_provider_name), Some(&primary_model_name))
+        {
+            let tx = update_tx.clone();
+            let sys = crate::roundhouse::planner::critique_system_prompt(
+                &prompt,
+                &primary_provider_name,
+                &plan_refs,
+            );
+            let t = tools.clone();
+            tokio::spawn(async move {
+                let result = crate::roundhouse::planner::run_planner(
+                    primary_provider,
+                    sys,
+                    "Review the plans above and provide your critique.".to_string(),
+                    t,
+                    timeout,
+                    tx.clone(),
+                    0,
+                )
+                .await;
+                let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                    planner_index: 0,
+                    result,
+                });
+            });
+        } else {
+            // Mark primary critique as failed
+            if let Some(ref mut session) = self.state.roundhouse_session {
+                session.primary_critique_status = crate::roundhouse::PlannerStatus::Failed(
+                    "Could not create provider for critique".to_string(),
+                );
+            }
+        }
+
+        for (i, provider_name, model_name) in secondaries {
+            if let Ok(provider) = self
+                .state
+                .providers
+                .get_provider(Some(&provider_name), Some(&model_name))
+            {
+                let tx = update_tx.clone();
+                let sys = crate::roundhouse::planner::critique_system_prompt(
+                    &prompt,
+                    &provider_name,
+                    &plan_refs,
+                );
+                let t = tools.clone();
+                let idx = i + 1;
+                tokio::spawn(async move {
+                    let result = crate::roundhouse::planner::run_planner(
+                        provider,
+                        sys,
+                        "Review the plans above and provide your critique.".to_string(),
+                        t,
+                        timeout,
+                        tx.clone(),
+                        idx,
+                    )
+                    .await;
+                    let _ = tx.send(crate::roundhouse::PlannerUpdate::PlanComplete {
+                        planner_index: idx,
+                        result,
+                    });
+                });
+            } else {
+                // Mark as failed if we can't create the provider
+                if let Some(ref mut session) = self.state.roundhouse_session
+                    && let Some(s) = session.secondaries.get_mut(i)
+                {
+                    s.critique_status = crate::roundhouse::PlannerStatus::Failed(format!(
                         "Could not create provider '{provider_name}'"
                     ));
                 }
@@ -8738,6 +9588,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse cancelled.".to_string(),
@@ -8753,6 +9604,7 @@ impl App {
                     self.state.roundhouse_session = None;
                     self.state.roundhouse_update_rx = None;
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse session cleared.".to_string(),
@@ -8791,7 +9643,17 @@ impl App {
         }
 
         let prompt = session.prompt.clone().unwrap_or_default();
-        let system = crate::roundhouse::planner::synthesis_system_prompt(&prompt, &plans);
+        let critiques = session.successful_critiques();
+        let critiques_opt = if critiques.is_empty() {
+            None
+        } else {
+            Some(critiques)
+        };
+        let system = crate::roundhouse::planner::synthesis_system_prompt(
+            &prompt,
+            &plans,
+            critiques_opt.as_deref(),
+        );
 
         let provider = match self.state.providers.get_provider(
             Some(&session.primary_provider),
@@ -9193,6 +10055,333 @@ impl App {
         self.state.input.clear();
     }
 
+    /// Handle /pin — add a pinned rule, auto-creates session from home screen.
+    fn handle_pin_command(&mut self, slash: &str) {
+        let args = slash.strip_prefix("pin").unwrap_or("").trim();
+        let text = args.to_string();
+        if text.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /pin <text>".to_string(),
+            });
+            // Still switch to chat so the error is visible
+            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+            self.state.dialog_stack.clear();
+            return;
+        }
+        // Auto-create session if needed
+        if self.state.current_session_id.is_none() {
+            let model = if self.state.active_model_name == "no key configured" {
+                None
+            } else {
+                Some(self.state.active_model_name.as_str())
+            };
+            let provider = if self.state.active_provider_name == "none" {
+                None
+            } else {
+                Some(self.state.active_provider_name.as_str())
+            };
+            match self.state.sessions.create(model, provider, None, None) {
+                Ok(session) => {
+                    self.state.agent.init_cold_store(&session.id);
+                    self.state.current_session_id = Some(session.id);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create session for pin: {e}");
+                    return;
+                }
+            }
+        }
+        self.state.pins.push(text.clone());
+        self.sync_pins_to_system_prompt();
+        if let Some(ref sid) = self.state.current_session_id {
+            let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("Pinned: {text}"),
+        });
+        self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+        self.state.dialog_stack.clear();
+    }
+
+    /// Handle /pins — list all pinned rules.
+    fn handle_pins_command(&mut self) {
+        if self.state.pins.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "No pins set.".to_string(),
+            });
+        } else {
+            let list = self
+                .state
+                .pins
+                .iter()
+                .enumerate()
+                .map(|(i, p)| format!("  {}. {p}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Pins:\n{list}"),
+            });
+        }
+    }
+
+    /// Handle /unpin — remove pin(s) by index or clear all.
+    fn handle_unpin_command(&mut self, slash: &str) {
+        let arg = slash.strip_prefix("unpin").unwrap_or("").trim();
+        if arg.is_empty() {
+            if self.state.pins.is_empty() {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No pins to remove.".to_string(),
+                });
+            } else {
+                let count = self.state.pins.len();
+                self.state.pins.clear();
+                self.sync_pins_to_system_prompt();
+                if let Some(ref sid) = self.state.current_session_id {
+                    let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Removed all {count} pins."),
+                });
+            }
+        } else if let Ok(n) = arg.parse::<usize>() {
+            if n == 0 || n > self.state.pins.len() {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!(
+                        "Pin {n} does not exist. You have {} pins.",
+                        self.state.pins.len()
+                    ),
+                });
+            } else {
+                let removed = self.state.pins.remove(n - 1);
+                self.sync_pins_to_system_prompt();
+                if let Some(ref sid) = self.state.current_session_id {
+                    let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Removed pin: {removed}"),
+                });
+            }
+        } else {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /unpin or /unpin <number>".to_string(),
+            });
+        }
+    }
+
+    /// Handle the /fork command — clone current session into a new one with context.
+    fn handle_fork_command(&mut self) {
+        // Guard: need an active session
+        let parent_id = match self.state.current_session_id.clone() {
+            Some(id) => id,
+            None => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No active session to fork.".into(),
+                });
+                return;
+            }
+        };
+
+        // Guard: need messages
+        if self.state.chat_messages.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Cannot fork an empty session.".into(),
+            });
+            return;
+        }
+
+        // Build handoff summary BEFORE switching sessions (needs current state)
+        let user_msgs: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let modified: std::collections::HashMap<String, crate::skills::handoff::HandoffFileStats> =
+            self.state
+                .modified_files
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        crate::skills::handoff::HandoffFileStats {
+                            additions: v.additions,
+                            deletions: v.deletions,
+                        },
+                    )
+                })
+                .collect();
+
+        let open_tasks: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                ChatMessage::TaskOutline(outline) => Some(outline),
+                _ => None,
+            })
+            .map(|outline| {
+                outline
+                    .tasks
+                    .iter()
+                    .filter(|t| !matches!(t.status, TaskStatus::Completed | TaskStatus::Cancelled))
+                    .map(|t| t.content.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let ctx = crate::skills::handoff::HandoffContext {
+            session_id: Some(parent_id.as_str()),
+            session_title: self.state.session_title.as_deref(),
+            provider_name: Some(self.state.active_provider_name.as_str()),
+            model_name: Some(self.state.active_model_name.as_str()),
+            turn_count: self.state.agent.turn_count,
+            user_messages: user_msgs,
+            modified_files: &modified,
+            tool_counts: &self.state.tool_counts,
+            open_tasks,
+            focus: None,
+        };
+
+        let handoff_summary = crate::skills::handoff::build_handoff_summary(&ctx);
+
+        // Inherit parent title with " (fork)" suffix
+        let fork_title = match &self.state.session_title {
+            Some(t) => Some(format!("{t} (fork)")),
+            None => Some("Untitled (fork)".to_string()),
+        };
+
+        // Count messages for fork metadata
+        let message_count = match self.state.sessions.load_messages(&parent_id) {
+            Ok(msgs) => msgs.len() as u32,
+            Err(_) => 0,
+        };
+
+        // Create new session
+        let model = if self.state.active_model_name == "no key configured" {
+            None
+        } else {
+            Some(self.state.active_model_name.as_str())
+        };
+        let provider = if self.state.active_provider_name == "none" {
+            None
+        } else {
+            Some(self.state.active_provider_name.as_str())
+        };
+        let new_session_id =
+            match self
+                .state
+                .sessions
+                .create(model, provider, Some(&parent_id), Some(message_count))
+            {
+                Ok(session) => session.id,
+                Err(e) => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to create fork session: {e}"),
+                    });
+                    return;
+                }
+            };
+
+        // Copy messages from parent to new session
+        if let Err(e) = self
+            .state
+            .sessions
+            .copy_messages(&parent_id, &new_session_id)
+        {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: format!("Failed to copy messages to fork: {e}"),
+            });
+            return;
+        }
+
+        // Set fork title on the new session
+        let title_session = crate::session::Session {
+            id: new_session_id.clone(),
+            title: fork_title.clone(),
+            model: model.map(|s| s.to_string()),
+            provider: provider.map(|s| s.to_string()),
+            turn_count: 0,
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            parent_session_id: Some(parent_id.clone()),
+            fork_message_count: Some(message_count),
+            pins: vec![],
+        };
+        if let Err(e) = self.state.sessions.update(&title_session) {
+            tracing::warn!("Failed to set fork title: {e}");
+        }
+
+        // Reset all session-scoped state (mirrors /new command)
+        self.state.chat_messages.clear();
+        self.state.input.clear();
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
+        self.state.session_title = None;
+        self.state.session_title_source = None;
+        self.state.current_session_id = None;
+        self.state.modified_files.clear();
+        self.state.file_baselines.clear();
+        self.state.tool_counts.clear();
+        self.state.focused_tool = None;
+        self.state.pending_handoff = None;
+        self.state.roundhouse_session = None;
+        self.state.roundhouse_update_rx = None;
+        self.state.roundhouse_synthesis_rx = None;
+        self.state.roundhouse_critique_rx = None;
+        self.state.roundhouse_model_add = false;
+        self.state.agent.cancel();
+        self.state.agent.conversation.messages.clear();
+        self.state.agent.turn_count = 0;
+        self.state.agent.session_allows.clear();
+        self.state.agent.handoff_prompted = false;
+        self.state.dialog_stack.clear();
+
+        // Restore the forked session (loads copied messages)
+        self.restore_session(&new_session_id);
+
+        // Guard: if restore failed
+        if self.state.current_session_id.is_none() {
+            return;
+        }
+
+        // Inject fork context
+        let short_parent_id = if parent_id.len() > 8 {
+            &parent_id[..8]
+        } else {
+            &parent_id
+        };
+        let fork_context = format!("[Forked from session {short_parent_id}]\n\n{handoff_summary}");
+
+        // Persist as fork_context role (not displayed to user)
+        self.persist_message("fork_context", &fork_context);
+
+        // Inject into agent conversation as a User message
+        self.state
+            .agent
+            .conversation
+            .messages
+            .push(crate::agent::conversation::Message {
+                role: crate::agent::conversation::Role::User,
+                content: crate::agent::conversation::Content::Text(fork_context),
+                tool_call_id: None,
+            });
+
+        // Push system notification
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!(
+                "Session forked from {short_parent_id}. You're now in a new branch with full conversation history."
+            ),
+        });
+    }
+
     /// Handle the /handoff command — build summary and prompt for new session.
     async fn handle_handoff_command(&mut self, args: &str) {
         // Collect user messages
@@ -9518,7 +10707,8 @@ async fn run_spawn_agent_task(
     tool_use_id: String,
     task: String,
     branch: String,
-    worktree_path: std::path::PathBuf,
+    _worktree_path: std::path::PathBuf,
+    base_sha: String,
     input: crate::sub_agent::executor::SubAgentInput,
     provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
     config: crate::config::Config,
@@ -9531,70 +10721,35 @@ async fn run_spawn_agent_task(
 
     match run_result {
         Ok((cost, summary)) => {
-            // Merge branch back
-            let branch_merge = branch.clone();
-            let merge_result = tokio::task::spawn_blocking(move || {
-                crate::sub_agent::worktree::merge_branch(&branch_merge)
+            // Collect changes via git diff for conflict detection
+            let diff_output = tokio::task::spawn_blocking({
+                let base = base_sha.clone();
+                let br = branch.clone();
+                move || crate::sub_agent::worktree::run_diff(&base, &br)
             })
             .await;
 
-            match merge_result {
-                Ok(Ok(())) => {
-                    // Remove worktree
-                    let path_rm = worktree_path.clone();
-                    let branch_rm = branch.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        crate::sub_agent::worktree::remove_worktree(&path_rm, &branch_rm)
-                    })
-                    .await;
+            let changes = match diff_output {
+                Ok(Ok(output)) => Some(crate::sub_agent::conflict::AgentChanges {
+                    agent_id,
+                    task: task.clone(),
+                    branch: branch.clone(),
+                    base_sha,
+                    files: crate::sub_agent::conflict::parse_diff_hunks(&output),
+                }),
+                _ => None,
+            };
 
-                    SpawnAgentResult {
-                        agent_id,
-                        tool_use_id,
-                        result_text: format!("Agent completed task: {task}\n\n{summary}"),
-                        is_error: false,
-                        task,
-                        final_state: SubAgentState::Done,
-                        cost_usd: cost,
-                    }
-                }
-                Ok(Err(e)) if e.to_string().contains("CONFLICT") => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!(
-                        "Merge conflict for task '{task}'. \
-                         Worktree preserved at {}. Resolve manually.",
-                        worktree_path.display()
-                    ),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Conflict {
-                        report: e.to_string(),
-                    },
-                    cost_usd: cost,
-                },
-                Ok(Err(e)) => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!("spawn_agent: merge failed for '{task}': {e}"),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Failed {
-                        message: format!("merge failed: {e}"),
-                    },
-                    cost_usd: cost,
-                },
-                Err(e) => SpawnAgentResult {
-                    agent_id,
-                    tool_use_id,
-                    result_text: format!("spawn_agent: merge task panicked: {e}"),
-                    is_error: true,
-                    task,
-                    final_state: SubAgentState::Failed {
-                        message: format!("merge panicked: {e}"),
-                    },
-                    cost_usd: 0.0,
-                },
+            // Return Review state — merging is handled by the coordination sweep
+            SpawnAgentResult {
+                agent_id,
+                tool_use_id,
+                result_text: format!("Agent completed task: {task}\n\n{summary}"),
+                is_error: false,
+                task,
+                final_state: SubAgentState::Review,
+                cost_usd: cost,
+                changes,
             }
         }
         Err(message) => {
@@ -9607,6 +10762,7 @@ async fn run_spawn_agent_task(
                 task,
                 final_state: SubAgentState::Failed { message },
                 cost_usd: 0.0,
+                changes: None,
             }
         }
     }

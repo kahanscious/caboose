@@ -225,7 +225,10 @@ pub fn build_default_registry() -> CommandRegistry {
             state.roundhouse_session = None;
             state.roundhouse_update_rx = None;
             state.roundhouse_synthesis_rx = None;
+            state.roundhouse_critique_rx = None;
             state.roundhouse_model_add = false;
+            state.pins.clear();
+            state.pins_expanded = false;
             state.agent.cancel();
             state.agent.conversation.messages.clear();
             state.agent.turn_count = 0;
@@ -235,6 +238,52 @@ pub fn build_default_registry() -> CommandRegistry {
             state.dialog_stack.clear();
             Action::None
         },
+    });
+
+    registry.register(Command {
+        id: "session.fork",
+        name: "Fork Session",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("fork"),
+        available: |state| {
+            state.current_session_id.is_some()
+                && matches!(state.agent.state, crate::agent::AgentState::Idle)
+        },
+        execute: |_state| {
+            // Handled in app.rs — needs access to App methods (persist_message, restore_session)
+            Action::None
+        },
+    });
+
+    registry.register(Command {
+        id: "session.pin",
+        name: "Pin Rule",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("pin"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "session.pins",
+        name: "List Pins",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("pins"),
+        available: |state| state.current_session_id.is_some(),
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "session.unpin",
+        name: "Remove Pin(s)",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("unpin"),
+        available: |state| state.current_session_id.is_some(),
+        execute: |_state| Action::None,
     });
 
     registry.register(Command {
@@ -447,9 +496,34 @@ pub fn build_default_registry() -> CommandRegistry {
             let primary_id = state.active_provider_name.clone();
             let primary_model = state.active_model_name.clone();
 
+            let critique_enabled = state.roundhouse_critique_override.unwrap_or_else(|| {
+                state
+                    .config
+                    .roundhouse
+                    .as_ref()
+                    .and_then(|r| r.critique)
+                    .unwrap_or(true)
+            });
+            let mut rh_config = crate::roundhouse::RoundhouseConfig::default();
+            if let Some(ref schema) = state.config.roundhouse {
+                if let Some(t) = schema.planning_timeout {
+                    rh_config.planning_timeout_secs = t;
+                }
+                if let Some(b) = schema.per_llm_token_budget {
+                    rh_config.per_llm_token_budget = Some(b);
+                }
+                if let Some(t) = schema.critique_timeout {
+                    rh_config.critique_timeout_secs = t;
+                }
+                if let Some(c) = schema.critique {
+                    rh_config.critique_enabled = c;
+                }
+            }
             state.roundhouse_session = Some(crate::roundhouse::RoundhouseSession::new(
                 primary_id,
                 primary_model,
+                critique_enabled,
+                rh_config,
             ));
 
             let picker = super::dialog::RoundhousePickerState {

@@ -77,6 +77,27 @@ pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
     }
 }
 
+/// Run `git diff --unified=0` between a base SHA and a branch.
+/// Must be called via spawn_blocking.
+#[allow(dead_code)]
+pub fn run_diff(base_sha: &str, branch: &str) -> Result<String, WorktreeError> {
+    let out = Command::new("git")
+        .args(["diff", "--unified=0", &format!("{base_sha}...{branch}")])
+        .output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        // diff can return non-zero for binary files etc., but stderr tells us
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.is_empty() {
+            // Non-zero exit but no error — treat output as valid
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(WorktreeError::GitFailed(stderr.into()))
+        }
+    }
+}
+
 /// Create a worktree at `path` with new branch `branch` from current HEAD.
 #[allow(dead_code)]
 pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
@@ -121,6 +142,19 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     }
     let _ = Command::new("git").args(["branch", "-d", branch]).status();
     Ok(())
+}
+
+/// Get the current HEAD commit SHA.
+#[allow(dead_code)]
+pub fn current_head_sha() -> Result<String, WorktreeError> {
+    let out = Command::new("git").args(["rev-parse", "HEAD"]).output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&out.stderr).into(),
+        ))
+    }
 }
 
 /// Get the name of the currently checked-out branch.

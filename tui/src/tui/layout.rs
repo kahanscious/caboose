@@ -227,27 +227,84 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
         0u16
     };
     let attachment_height = if app.attachments.is_empty() { 0u16 } else { 1 };
-    let input_height = 4 + extra_lines + queue_height + approval_height + attachment_height;
+    let input_height = 5 + extra_lines + queue_height + approval_height + attachment_height;
 
-    let v_constraints: Vec<Constraint> = vec![
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(input_height),
+    let pin_bar_height = if app.pins.is_empty() {
+        0
+    } else if app.pins_expanded {
+        (app.pins.len() + 2) as u16 // header + pins + padding
+    } else {
+        2 // collapsed line + padding
+    };
+
+    let mut v_constraints: Vec<Constraint> = vec![
+        Constraint::Length(1), // header
     ];
+    if pin_bar_height > 0 {
+        v_constraints.push(Constraint::Length(pin_bar_height));
+    }
+    v_constraints.push(Constraint::Min(1)); // chat
+    v_constraints.push(Constraint::Length(input_height)); // input
 
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(v_constraints)
         .split(main_area);
 
+    let header_idx = 0;
+    let (pin_bar_idx, chat_idx, input_idx) = if pin_bar_height > 0 {
+        (Some(1), 2, 3)
+    } else {
+        (None, 1, 2)
+    };
+
     // --- Header bar ---
-    crate::tui::header::render(frame, v_chunks[0]);
+    crate::tui::header::render(frame, v_chunks[header_idx]);
+
+    // --- Pin bar ---
+    if let Some(idx) = pin_bar_idx {
+        let pin_area = v_chunks[idx];
+        if app.pins_expanded {
+            let mut lines = vec![Line::from(vec![
+                Span::styled("\u{25bc} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    "Pins",
+                    Style::default()
+                        .fg(colors.text)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])];
+            for (i, pin) in app.pins.iter().enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {}. ", i + 1),
+                        Style::default().fg(colors.text_muted),
+                    ),
+                    Span::styled(pin.as_str(), Style::default().fg(colors.text)),
+                ]));
+            }
+            frame.render_widget(Paragraph::new(lines), pin_area);
+        } else {
+            let line = Line::from(vec![
+                Span::styled("\u{25b6} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    format!(
+                        "{} pin{}",
+                        app.pins.len(),
+                        if app.pins.len() == 1 { "" } else { "s" }
+                    ),
+                    Style::default().fg(colors.text),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line), pin_area);
+        }
+    }
 
     // --- Chat area ---
-    render_chat(frame, v_chunks[1], app, colors);
+    render_chat(frame, v_chunks[chat_idx], app, colors);
 
     // --- Input area ---
-    render_input(frame, v_chunks[2], app, colors);
+    render_input(frame, v_chunks[input_idx], app, colors);
 
     // --- Sidebar ---
     if show_sidebar {
@@ -383,7 +440,11 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         msg_boundaries.push((start_idx, kind));
         let msg_lines = match msg {
             ChatMessage::User { content, images } => {
-                let accent = mode_accent(app.mode, colors);
+                let accent = if app.roundhouse_session.is_some() {
+                    colors.roundhouse
+                } else {
+                    mode_accent(app.mode, colors)
+                };
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
             ChatMessage::Assistant {
@@ -568,32 +629,121 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         let accent = colors.roundhouse;
 
         // Primary planner streaming
-        if !rh.primary_streaming_text.is_empty() {
-            let still_streaming = matches!(
-                rh.primary_status,
-                crate::roundhouse::PlannerStatus::Streaming
-                    | crate::roundhouse::PlannerStatus::Thinking
-                    | crate::roundhouse::PlannerStatus::UsingTool(_)
-            );
+        let planner_active = matches!(
+            rh.primary_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if planner_active || !rh.primary_streaming_text.is_empty() {
+            msg_boundaries.push((lines.len(), 2u8));
+            // Header: show tool name if using a tool, otherwise "(planning)"
+            let phase_label = match &rh.primary_status {
+                crate::roundhouse::PlannerStatus::UsingTool(tool) => {
+                    format!("reading {tool}")
+                }
+                _ => "(planning)".to_string(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_model),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled(phase_label, Style::default().fg(colors.text_muted)),
+            ]));
+            // Render tool calls with running/completed status
+            for tc in &rh.primary_tool_calls {
+                let label = match tc.tool_name.as_str() {
+                    "read_file" => "Read",
+                    "list_directory" => "List",
+                    "glob" => "Glob",
+                    "grep" => "Grep",
+                    _ => tc.tool_name.as_str(),
+                };
+                let (icon_color, summary_text) = match tc.status {
+                    crate::roundhouse::ToolCallStatus::Running => {
+                        let dim = (app.tick / 10) % 2 == 1;
+                        let color = if dim { colors.text_dim } else { colors.warning };
+                        (color, tc.args_summary.clone())
+                    }
+                    crate::roundhouse::ToolCallStatus::Success => (
+                        colors.success,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                    crate::roundhouse::ToolCallStatus::Failed => (
+                        colors.error,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("\u{2022} ", Style::default().fg(icon_color)),
+                    Span::styled(label, Style::default().fg(colors.text)),
+                    Span::styled(
+                        format!("  {summary_text}"),
+                        Style::default()
+                            .fg(colors.text_dim)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ]));
+            }
+            if !rh.primary_streaming_text.is_empty() {
+                let parsed =
+                    crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
+                }
+            }
+            if planner_active {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+        }
+
+        // Primary critique streaming
+        let critique_active = matches!(
+            rh.primary_critique_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if critique_active || !rh.primary_critique_streaming_text.is_empty() {
             msg_boundaries.push((lines.len(), 2u8));
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
-                Span::styled("(planning)", Style::default().fg(colors.text_muted)),
+                Span::styled("(critiquing)", Style::default().fg(colors.text_muted)),
             ]));
-            let parsed =
-                crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
-            if !parsed.is_empty() {
-                let mut sl = parsed;
-                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                    sl.pop();
+            if !rh.primary_critique_streaming_text.is_empty() {
+                let parsed = crate::tui::chat::parse_markdown(
+                    &rh.primary_critique_streaming_text,
+                    colors,
+                    accent,
+                );
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
                 }
-                lines.extend(sl);
             }
-            if still_streaming {
+            if critique_active {
                 const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
                 let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
                 lines.push(Line::from(Span::styled(
@@ -611,7 +761,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
                 Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
@@ -1191,6 +1341,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             auto,
             &app.input.content(),
             &app.commands,
+            &app.agent_definitions,
             &app.skills,
             colors,
             true,
@@ -1828,12 +1979,18 @@ mod tests {
 
     #[test]
     fn sidebar_min_width_reasonable() {
-        assert!(SIDEBAR_MIN_WIDTH >= 15, "sidebar must fit at least a short label");
+        assert!(
+            SIDEBAR_MIN_WIDTH >= 15,
+            "sidebar must fit at least a short label"
+        );
     }
 
     #[test]
     fn sidebar_max_width_bounded() {
-        assert!(SIDEBAR_MAX_WIDTH <= 120, "sidebar should not exceed half a wide terminal");
+        assert!(
+            SIDEBAR_MAX_WIDTH <= 120,
+            "sidebar should not exceed half a wide terminal"
+        );
     }
 
     #[test]

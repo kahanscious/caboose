@@ -60,6 +60,14 @@ impl Storage {
             let _ = conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col}"), []);
         }
 
+        // Migration: add fork-related columns
+        for col in &["parent_session_id TEXT", "fork_message_count INTEGER"] {
+            let _ = conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col}"), []);
+        }
+
+        // Migration: add pins column
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN pins TEXT", []);
+
         // Migrate: create observations table (Phase 5) — non-fatal
         if let Err(e) = crate::memory::observations::create_tables(&conn) {
             tracing::warn!("Failed to create observations table: {e}");
@@ -81,8 +89,8 @@ impl Storage {
     /// Insert a new session row.
     pub fn insert_session(&self, session: &super::Session) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO sessions (id, title, model, provider, turn_count, cwd, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO sessions (id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 session.id,
                 session.title,
@@ -92,6 +100,9 @@ impl Storage {
                 session.cwd,
                 session.created_at.to_rfc3339(),
                 session.updated_at.to_rfc3339(),
+                session.parent_session_id,
+                session.fork_message_count.map(|v| v as i32),
+                serde_json::to_string(&session.pins).unwrap_or_else(|_| "[]".to_string()),
             ],
         )?;
         Ok(())
@@ -101,13 +112,14 @@ impl Storage {
     pub fn update_session(&self, session: &super::Session) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET title = ?1, model = ?2, provider = ?3,
-             turn_count = ?4, updated_at = ?5 WHERE id = ?6",
+             turn_count = ?4, updated_at = ?5, pins = ?6 WHERE id = ?7",
             params![
                 session.title,
                 session.model,
                 session.provider,
                 session.turn_count,
                 session.updated_at.to_rfc3339(),
+                serde_json::to_string(&session.pins).unwrap_or_else(|_| "[]".to_string()),
                 session.id,
             ],
         )?;
@@ -117,7 +129,7 @@ impl Storage {
     /// List recent sessions, most recently updated first.
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<super::Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at
+            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins
              FROM sessions ORDER BY updated_at DESC LIMIT ?1",
         )?;
 
@@ -137,6 +149,12 @@ impl Storage {
                 updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
                     .unwrap_or_default()
                     .with_timezone(&chrono::Utc),
+                parent_session_id: row.get(8)?,
+                fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
+                pins: row
+                    .get::<_, Option<String>>(10)?
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default(),
             })
         })?;
 
@@ -190,7 +208,7 @@ impl Storage {
     /// Load a session by ID.
     pub fn get_session(&self, id: &str) -> Result<Option<super::Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at
+            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins
              FROM sessions WHERE id = ?1",
         )?;
 
@@ -210,6 +228,12 @@ impl Storage {
                 updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
                     .unwrap_or_default()
                     .with_timezone(&chrono::Utc),
+                parent_session_id: row.get(8)?,
+                fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
+                pins: row
+                    .get::<_, Option<String>>(10)?
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default(),
             })
         })?;
 
@@ -247,6 +271,28 @@ impl Storage {
             messages.push(row?);
         }
         Ok(messages)
+    }
+
+    /// Copy all messages from one session to another. Returns the number of messages copied.
+    pub fn copy_messages(&self, from_session_id: &str, to_session_id: &str) -> Result<u32> {
+        let count = self.conn.execute(
+            "INSERT INTO messages (session_id, role, content, created_at)
+             SELECT ?1, role, content, created_at FROM messages
+             WHERE session_id = ?2 ORDER BY id",
+            params![to_session_id, from_session_id],
+        )?;
+        Ok(count as u32)
+    }
+
+    /// Update session pins.
+    #[allow(dead_code)]
+    pub fn update_pins(&self, session_id: &str, pins: &[String]) -> Result<()> {
+        let json = serde_json::to_string(pins).unwrap_or_else(|_| "[]".to_string());
+        self.conn.execute(
+            "UPDATE sessions SET pins = ?1 WHERE id = ?2",
+            params![json, session_id],
+        )?;
+        Ok(())
     }
 
     /// Delete a session and its messages.
@@ -290,7 +336,10 @@ mod tests {
                 turn_count INTEGER NOT NULL DEFAULT 0,
                 cwd TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                parent_session_id TEXT,
+                fork_message_count INTEGER,
+                pins TEXT
             );
             CREATE TABLE messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,6 +364,9 @@ mod tests {
             cwd: Some("/tmp".to_string()),
             created_at: now,
             updated_at: now,
+            parent_session_id: None,
+            fork_message_count: None,
+            pins: vec![],
         }
     }
 
@@ -458,5 +510,120 @@ mod tests {
         storage.delete_session("d1").unwrap();
         assert!(storage.get_session("d1").unwrap().is_none());
         assert!(storage.load_messages("d1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_parent_fields_default_to_none() {
+        let storage = test_storage();
+        let session = make_session("p1");
+        storage.insert_session(&session).unwrap();
+
+        let loaded = storage.get_session("p1").unwrap().unwrap();
+        assert!(loaded.parent_session_id.is_none());
+        assert!(loaded.fork_message_count.is_none());
+    }
+
+    #[test]
+    fn insert_session_with_parent() {
+        let storage = test_storage();
+        let now = chrono::Utc::now();
+        let session = crate::session::Session {
+            id: "child-1".to_string(),
+            title: Some("Forked session".to_string()),
+            model: Some("claude-sonnet".to_string()),
+            provider: Some("anthropic".to_string()),
+            turn_count: 0,
+            cwd: Some("/tmp".to_string()),
+            created_at: now,
+            updated_at: now,
+            parent_session_id: Some("parent-1".to_string()),
+            fork_message_count: Some(5),
+            pins: vec![],
+        };
+        storage.insert_session(&session).unwrap();
+
+        let loaded = storage.get_session("child-1").unwrap().unwrap();
+        assert_eq!(loaded.parent_session_id, Some("parent-1".to_string()));
+        assert_eq!(loaded.fork_message_count, Some(5));
+    }
+
+    #[test]
+    fn copy_messages_between_sessions() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("src")).unwrap();
+        storage.insert_session(&make_session("dst")).unwrap();
+
+        storage.insert_message("src", "user", "Hello").unwrap();
+        storage
+            .insert_message("src", "assistant", "Hi there!")
+            .unwrap();
+        storage
+            .insert_message("src", "user", "How are you?")
+            .unwrap();
+
+        let count = storage.copy_messages("src", "dst").unwrap();
+        assert_eq!(count, 3);
+
+        let dst_msgs = storage.load_messages("dst").unwrap();
+        assert_eq!(dst_msgs.len(), 3);
+        assert_eq!(dst_msgs[0].role, "user");
+        assert_eq!(dst_msgs[0].content, "Hello");
+        assert_eq!(dst_msgs[1].role, "assistant");
+        assert_eq!(dst_msgs[1].content, "Hi there!");
+        assert_eq!(dst_msgs[2].role, "user");
+        assert_eq!(dst_msgs[2].content, "How are you?");
+
+        // Verify independence — source still has its messages
+        let src_msgs = storage.load_messages("src").unwrap();
+        assert_eq!(src_msgs.len(), 3);
+    }
+
+    #[test]
+    fn copy_messages_empty_session() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("empty")).unwrap();
+        storage.insert_session(&make_session("dst")).unwrap();
+
+        let count = storage.copy_messages("empty", "dst").unwrap();
+        assert_eq!(count, 0);
+
+        let dst_msgs = storage.load_messages("dst").unwrap();
+        assert!(dst_msgs.is_empty());
+    }
+
+    #[test]
+    fn test_pins_default_to_empty() {
+        let storage = test_storage();
+        let session = make_session("s1");
+        storage.insert_session(&session).unwrap();
+        let loaded = storage.get_session("s1").unwrap().unwrap();
+        assert!(loaded.pins.is_empty());
+    }
+
+    #[test]
+    fn test_update_and_load_pins() {
+        let storage = test_storage();
+        let session = make_session("s1");
+        storage.insert_session(&session).unwrap();
+        storage
+            .update_pins(
+                "s1",
+                &["no auth changes".to_string(), "use snake_case".to_string()],
+            )
+            .unwrap();
+        let loaded = storage.get_session("s1").unwrap().unwrap();
+        assert_eq!(loaded.pins, vec!["no auth changes", "use snake_case"]);
+    }
+
+    #[test]
+    fn test_pins_persist_through_update_session() {
+        let storage = test_storage();
+        let mut session = make_session("s1");
+        session.pins = vec!["rule one".to_string()];
+        storage.insert_session(&session).unwrap();
+        session.turn_count = 5;
+        storage.update_session(&session).unwrap();
+        let loaded = storage.get_session("s1").unwrap().unwrap();
+        assert_eq!(loaded.pins, vec!["rule one"]);
     }
 }

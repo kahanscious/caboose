@@ -1,3 +1,4 @@
+pub mod conflict;
 pub mod executor;
 pub mod pipeline;
 pub mod worktree;
@@ -29,9 +30,19 @@ pub enum SubAgentState {
     Pending,
     Running,
     WaitingApproval { tool_name: String },
+    Review,
     Done,
     Failed { message: String },
     Conflict { report: String },
+}
+
+impl SubAgentState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Done | Self::Failed { .. } | Self::Conflict { .. }
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -41,6 +52,7 @@ pub struct SubAgent {
     pub task: String,
     pub branch: String,
     pub worktree_path: PathBuf,
+    pub base_sha: String,
     pub state: SubAgentState,
     pub started_at: Option<Instant>,
     pub cost_usd: f64,
@@ -54,12 +66,13 @@ pub struct SubAgent {
 
 #[allow(dead_code)]
 impl SubAgent {
-    pub fn new(task: String, branch: String, worktree_path: PathBuf) -> Self {
+    pub fn new(task: String, branch: String, worktree_path: PathBuf, base_sha: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             task,
             branch,
             worktree_path,
+            base_sha,
             state: SubAgentState::Pending,
             started_at: None,
             cost_usd: 0.0,
@@ -141,6 +154,7 @@ pub struct SpawnAgentResult {
     pub is_error: bool,
     pub final_state: SubAgentState,
     pub cost_usd: f64,
+    pub changes: Option<crate::sub_agent::conflict::AgentChanges>,
 }
 
 #[allow(dead_code)]
@@ -165,6 +179,7 @@ mod tests {
             "auth refactor".to_string(),
             "agent/auth-refactor".to_string(),
             std::path::PathBuf::from(".worktrees/agent-auth-refactor"),
+            "abc123".to_string(),
         );
         assert!(matches!(agent.state, SubAgentState::Pending));
         assert_eq!(agent.task, "auth refactor");
@@ -175,7 +190,12 @@ mod tests {
 
     #[test]
     fn elapsed_secs_zero_when_not_started() {
-        let agent = SubAgent::new("t".into(), "b".into(), std::path::PathBuf::new());
+        let agent = SubAgent::new(
+            "t".into(),
+            "b".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert_eq!(agent.elapsed_secs(), 0);
     }
 
@@ -219,19 +239,30 @@ mod tests {
             "task".to_string(),
             "agent/task".to_string(),
             std::path::PathBuf::from(".worktrees/agent-task"),
+            String::new(),
         );
         assert!(agent.approval_tx.is_none());
     }
 
     #[test]
     fn sub_agent_auto_approve_defaults_false() {
-        let agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        let agent = SubAgent::new(
+            "task".into(),
+            "branch".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert!(!agent.auto_approve);
     }
 
     #[test]
     fn sub_agent_auto_approve_toggleable() {
-        let mut agent = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
+        let mut agent = SubAgent::new(
+            "task".into(),
+            "branch".into(),
+            std::path::PathBuf::new(),
+            String::new(),
+        );
         assert!(!agent.auto_approve);
         agent.auto_approve = true;
         assert!(agent.auto_approve);

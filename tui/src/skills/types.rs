@@ -43,6 +43,8 @@ pub enum ResponseFormat {
 pub enum SlashResolution {
     /// Matches a built-in client command (e.g., `/model`, `/connect`).
     Command(String),
+    /// Matches a custom agent definition.
+    Agent(crate::agents::AgentDefinition),
     /// Matches a skill (user or built-in).
     Skill(Skill),
     /// No match found.

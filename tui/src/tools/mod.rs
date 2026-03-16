@@ -271,13 +271,17 @@ impl ToolRegistry {
                 ),
                 tool_def(
                     "spawn_agent",
-                    "Spawn an autonomous sub-agent that works in an isolated git worktree. Use this when you identify tasks that can be done in parallel without conflicting file edits. Each sub-agent gets its own branch and worktree, runs independently, and its changes are merged back when complete. The sub-agent inherits the current permission mode. Do NOT spawn agents for tasks that depend on each other's output — those must be sequential.",
+                    "Spawn an autonomous sub-agent that works in an isolated git worktree. Use this when you identify tasks that can be done in parallel without conflicting file edits. Each sub-agent gets its own branch and worktree, runs independently, and its changes are merged back when complete. The sub-agent inherits the current permission mode. Do NOT spawn agents for tasks that depend on each other's output — those must be sequential. If a custom agent matches the task, specify it with the `agent` parameter.",
                     serde_json::json!({
                         "type": "object",
                         "properties": {
                             "task": {
                                 "type": "string",
                                 "description": "A clear, self-contained description of the work to do. Include enough context for the agent to work independently (file paths, function names, expected behavior)."
+                            },
+                            "agent": {
+                                "type": "string",
+                                "description": "Optional name of a custom agent definition to use. When specified, the agent runs with the custom agent's system prompt, model, and tool restrictions instead of inheriting from the parent."
                             }
                         },
                         "required": ["task"]

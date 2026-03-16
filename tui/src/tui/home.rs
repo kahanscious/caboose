@@ -125,7 +125,7 @@ pub fn render(frame: &mut Frame, state: &State) {
         .visual_line_count(home_text_width as u16)
         .saturating_sub(1)
         .min(4) as u16;
-    let input_field_height = 4 + extra_input_lines;
+    let input_field_height = 5 + extra_input_lines;
     let content_height = lines_above_input as u16 + input_field_height;
     let vertical_pad = outer[0].height.saturating_sub(content_height) / 2;
 
@@ -228,6 +228,7 @@ pub fn render(frame: &mut Frame, state: &State) {
             auto,
             &input_text,
             &state.commands,
+            &state.agent_definitions,
             &state.skills,
             &colors,
             false,

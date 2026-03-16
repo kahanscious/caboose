@@ -22,7 +22,8 @@ pub struct ProviderConfig {
     pub max_tokens: Option<u32>,
 }
 
-/// Application configuration.
+/// Global application configuration, loaded from files and environment.
+/// This struct holds all user-configurable options for the Caboose application.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Default provider (e.g. "anthropic", "openai")
