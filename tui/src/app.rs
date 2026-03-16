@@ -1683,6 +1683,20 @@ impl App {
                                             continue;
                                         }
 
+                                        // Pin bar toggle click
+                                        if !self.state.pins.is_empty() {
+                                            let pin_bar_end = if self.state.pins_expanded {
+                                                1 + self.state.pins.len() as u16
+                                            } else {
+                                                1
+                                            };
+                                            if mouse.row >= 1 && mouse.row <= pin_bar_end {
+                                                self.state.pins_expanded =
+                                                    !self.state.pins_expanded;
+                                                continue;
+                                            }
+                                        }
+
                                         // Diff toggle click zone logic — runs BEFORE truncation zones.
                                         // Extract the hit message index first (drops borrow before mutating chat_messages).
                                         let toggle_hit = {

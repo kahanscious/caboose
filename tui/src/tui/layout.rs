@@ -229,25 +229,82 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
     let attachment_height = if app.attachments.is_empty() { 0u16 } else { 1 };
     let input_height = 5 + extra_lines + queue_height + approval_height + attachment_height;
 
-    let v_constraints: Vec<Constraint> = vec![
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(input_height),
+    let pin_bar_height = if app.pins.is_empty() {
+        0
+    } else if app.pins_expanded {
+        (app.pins.len() + 1) as u16
+    } else {
+        1
+    };
+
+    let mut v_constraints: Vec<Constraint> = vec![
+        Constraint::Length(1), // header
     ];
+    if pin_bar_height > 0 {
+        v_constraints.push(Constraint::Length(pin_bar_height));
+    }
+    v_constraints.push(Constraint::Min(1)); // chat
+    v_constraints.push(Constraint::Length(input_height)); // input
 
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(v_constraints)
         .split(main_area);
 
+    let header_idx = 0;
+    let (pin_bar_idx, chat_idx, input_idx) = if pin_bar_height > 0 {
+        (Some(1), 2, 3)
+    } else {
+        (None, 1, 2)
+    };
+
     // --- Header bar ---
-    crate::tui::header::render(frame, v_chunks[0]);
+    crate::tui::header::render(frame, v_chunks[header_idx]);
+
+    // --- Pin bar ---
+    if let Some(idx) = pin_bar_idx {
+        let pin_area = v_chunks[idx];
+        if app.pins_expanded {
+            let mut lines = vec![Line::from(vec![
+                Span::styled("\u{25bc} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    "Pins",
+                    Style::default()
+                        .fg(colors.text)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])];
+            for (i, pin) in app.pins.iter().enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {}. ", i + 1),
+                        Style::default().fg(colors.text_muted),
+                    ),
+                    Span::styled(pin.as_str(), Style::default().fg(colors.text)),
+                ]));
+            }
+            frame.render_widget(Paragraph::new(lines), pin_area);
+        } else {
+            let line = Line::from(vec![
+                Span::styled("\u{25b6} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    format!(
+                        "{} pin{}",
+                        app.pins.len(),
+                        if app.pins.len() == 1 { "" } else { "s" }
+                    ),
+                    Style::default().fg(colors.text),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line), pin_area);
+        }
+    }
 
     // --- Chat area ---
-    render_chat(frame, v_chunks[1], app, colors);
+    render_chat(frame, v_chunks[chat_idx], app, colors);
 
     // --- Input area ---
-    render_input(frame, v_chunks[2], app, colors);
+    render_input(frame, v_chunks[input_idx], app, colors);
 
     // --- Sidebar ---
     if show_sidebar {
