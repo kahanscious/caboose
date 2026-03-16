@@ -3065,12 +3065,12 @@ impl App {
                             self.handle_roundhouse_subcommand(sub.trim());
                             return;
                         }
-                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        // /circuit <interval> "prompt" | stop <id> | stop-all
                         if let Some(args) = slash.strip_prefix("circuit ") {
                             self.handle_circuit_command(args.trim()).await;
                             return;
                         }
-                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        // /watch pr <number> | /watch mr <number>
                         if let Some(args) = slash.strip_prefix("watch ") {
                             self.handle_watch_command(args.trim()).await;
                             return;
@@ -4019,12 +4019,12 @@ impl App {
                             self.handle_roundhouse_subcommand(sub.trim());
                             return;
                         }
-                        // /circuit [--persist] <interval> "prompt" | stop <id> | stop-all
+                        // /circuit <interval> "prompt" | stop <id> | stop-all
                         if let Some(args) = slash.strip_prefix("circuit ") {
                             self.handle_circuit_command(args.trim()).await;
                             return;
                         }
-                        // /watch pr <number> [--persist] | /watch mr <number> [--persist]
+                        // /watch pr <number> | /watch mr <number>
                         if let Some(args) = slash.strip_prefix("watch ") {
                             self.handle_watch_command(args.trim()).await;
                             return;
@@ -11041,20 +11041,14 @@ impl App {
             return;
         }
 
-        // /circuit [--persist] <interval> "prompt"
+        // /circuit <interval> "prompt"
         match parse_circuit_args(args) {
-            Some((persist, interval_secs, prompt)) => {
-                if persist {
-                    self.state.chat_messages.push(ChatMessage::Error {
-                        content: "Persistent circuits are not supported in the current runtime yet. Use `/circuit <interval> \"<prompt>\"` for in-session scheduling.".to_string(),
-                    });
-                    return;
-                }
+            Some((interval_secs, prompt)) => {
                 let _ = self.create_circuit(&prompt, interval_secs).await;
             }
             None => {
                 self.state.chat_messages.push(ChatMessage::Error {
-                    content: "Usage: /circuit [--persist] <interval> \"<prompt>\"\nExamples: /circuit 5m \"check build\" | /circuit --persist 10m \"watch CI\"".to_string(),
+                    content: "Usage: /circuit <interval> \"<prompt>\"\nExamples: /circuit 5m \"check build\" | /circuit 10m \"watch CI\"".to_string(),
                 });
             }
         }
@@ -11114,8 +11108,8 @@ impl App {
             self.state.dialog_stack.clear();
         }
 
-        // /watch pr <number> [--persist]
-        // /watch mr <number> [--persist]
+        // /watch pr <number>
+        // /watch mr <number>
         let rest = if let Some(r) = args
             .strip_prefix("pr ")
             .or_else(|| args.strip_prefix("mr "))
@@ -11123,34 +11117,29 @@ impl App {
             r
         } else {
             self.state.chat_messages.push(ChatMessage::Error {
-                content: "Usage: /watch pr <number> [--persist]".to_string(),
+                content: "Usage: /watch pr <number>".to_string(),
             });
             return;
         };
 
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        let pr_number = match parts.first().and_then(|s| s.parse::<u32>().ok()) {
+        let pr_number = match rest
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+        {
             Some(n) => n,
             None => {
                 self.state.chat_messages.push(ChatMessage::Error {
-                    content: "Usage: /watch pr <number> [--persist]".to_string(),
+                    content: "Usage: /watch pr <number>".to_string(),
                 });
                 return;
             }
         };
-        let persist = parts.contains(&"--persist");
 
-        self.create_watcher(pr_number, persist).await;
+        self.create_watcher(pr_number).await;
     }
 
-    async fn create_watcher(&mut self, pr_number: u32, persist: bool) {
-        if persist {
-            self.state.chat_messages.push(ChatMessage::Error {
-                content: "Persistent PR/MR watchers are not supported in the current runtime yet. Use `/watch pr <number>` for in-session monitoring.".to_string(),
-            });
-            return;
-        }
-
+    async fn create_watcher(&mut self, pr_number: u32) {
         let interval_secs = 180; // 3 minutes
         let prompt = format!(
             "Check the status of PR/MR #{pr_number}. Use the check_ci tool and report: is CI passing, failing, or pending? Is the PR merged or closed?"
@@ -11405,29 +11394,23 @@ fn format_duration(secs: u64) -> String {
     }
 }
 
-/// Parse circuit command args: "[--persist] <interval> <prompt>"
-fn parse_circuit_args(args: &str) -> Option<(bool, u64, String)> {
+/// Parse circuit command args: "<interval> <prompt>"
+fn parse_circuit_args(args: &str) -> Option<(u64, String)> {
     let args = args.trim();
-    let persist = args.starts_with("--persist");
-    let rest = if persist {
-        args.strip_prefix("--persist").unwrap().trim()
-    } else {
-        args
-    };
 
     // First token is interval
-    let space = rest.find(' ')?;
-    let interval_str = &rest[..space];
+    let space = args.find(' ')?;
+    let interval_str = &args[..space];
     let interval = parse_interval(interval_str)?;
 
     // Rest is prompt (strip quotes if present)
-    let prompt = rest[space..].trim();
+    let prompt = args[space..].trim();
     let prompt = prompt.trim_matches('"').trim_matches('\'').trim();
     if prompt.is_empty() {
         return None;
     }
 
-    Some((persist, interval, prompt.to_string()))
+    Some((interval, prompt.to_string()))
 }
 
 /// Parse task-like patterns from assistant text output.
@@ -11943,23 +11926,14 @@ mod circuit_parse_tests {
 
     #[test]
     fn parse_circuit_args_basic() {
-        let (persist, interval, prompt) = parse_circuit_args("5m \"check build\"").unwrap();
-        assert!(!persist);
+        let (interval, prompt) = parse_circuit_args("5m \"check build\"").unwrap();
         assert_eq!(interval, 300);
         assert_eq!(prompt, "check build");
     }
 
     #[test]
-    fn parse_circuit_args_persist() {
-        let (persist, interval, prompt) = parse_circuit_args("--persist 10m \"watch CI\"").unwrap();
-        assert!(persist);
-        assert_eq!(interval, 600);
-        assert_eq!(prompt, "watch CI");
-    }
-
-    #[test]
     fn parse_circuit_args_no_quotes() {
-        let (_, _, prompt) = parse_circuit_args("5m check build status").unwrap();
+        let (_, prompt) = parse_circuit_args("5m check build status").unwrap();
         assert_eq!(prompt, "check build status");
     }
 

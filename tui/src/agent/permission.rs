@@ -159,9 +159,9 @@ pub fn check_permission(
 ) -> ToolDecision {
     // Cross-workspace write check: write/edit targeting a secondary workspace
     // always requires approval, regardless of mode.
-    // Note: apply_patch is excluded here — it has no top-level `path` field in
-    // tool_input (path is embedded in the diff body). apply_patch cross-workspace
-    // detection is deferred to a future enhancement.
+    // Note: apply_patch is excluded here — it has no top-level `path` field
+    // (paths are embedded in the diff body). apply_patch enforces workspace
+    // boundaries in patch.rs via validate_path_in_workspace() instead.
     if let Some(root) = primary_root
         && matches!(tool_name, "write_file" | "edit_file")
     {

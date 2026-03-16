@@ -128,6 +128,9 @@ async fn apply_file_entry(
     root: Option<&std::path::Path>,
 ) -> Result<String> {
     let resolved_path = resolve_patch_path(&entry.file_path, root);
+    if let Err(msg) = validate_path_in_workspace(&resolved_path, root) {
+        anyhow::bail!(msg);
+    }
     match entry.status {
         FileStatus::Deleted => {
             tokio::fs::remove_file(&resolved_path).await?;
@@ -163,6 +166,43 @@ fn resolve_patch_path(file_path: &str, root: Option<&std::path::Path>) -> std::p
         root.join(path)
     } else {
         path.to_path_buf()
+    }
+}
+
+/// Check that a resolved path is inside the workspace root.
+/// Returns an error message if the path escapes the workspace.
+fn validate_path_in_workspace(
+    resolved: &std::path::Path,
+    root: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let Some(root) = root else {
+        return Ok(());
+    };
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // Try canonicalizing the path itself. If it doesn't exist (new-file patch),
+    // canonicalize the nearest existing ancestor and append the remainder.
+    let path_canon = if let Ok(c) = resolved.canonicalize() {
+        c
+    } else if let Some(parent) = resolved.parent() {
+        let parent_canon = parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf());
+        if let Some(name) = resolved.file_name() {
+            parent_canon.join(name)
+        } else {
+            parent_canon
+        }
+    } else {
+        resolved.to_path_buf()
+    };
+    if path_canon.starts_with(&root_canon) {
+        Ok(())
+    } else {
+        Err(format!(
+            "path '{}' is outside the workspace root '{}'",
+            resolved.display(),
+            root.display()
+        ))
     }
 }
 
@@ -625,6 +665,57 @@ mod tests {
         let input = "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new";
         let result = strip_fences(input);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn validate_path_inside_workspace() {
+        let root = std::path::Path::new("/tmp/workspace");
+        let inside = std::path::PathBuf::from("/tmp/workspace/src/main.rs");
+        assert!(validate_path_in_workspace(&inside, Some(root)).is_ok());
+    }
+
+    #[test]
+    fn validate_path_outside_workspace() {
+        let root = std::path::Path::new("/tmp/workspace");
+        let outside = std::path::PathBuf::from("/etc/passwd");
+        assert!(validate_path_in_workspace(&outside, Some(root)).is_err());
+    }
+
+    #[test]
+    fn validate_path_no_root_always_ok() {
+        let any_path = std::path::PathBuf::from("/etc/passwd");
+        assert!(validate_path_in_workspace(&any_path, None).is_ok());
+    }
+
+    #[test]
+    fn validate_path_relative_inside_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let inside = root.join("src/main.rs");
+        assert!(validate_path_in_workspace(&inside, Some(root)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn apply_patch_rejects_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("escaped.txt");
+        std::fs::write(&target, "original").unwrap();
+        let target_str = target.to_str().unwrap();
+
+        let diff =
+            format!("--- a/{target_str}\n+++ b/{target_str}\n@@ -1,1 +1,1 @@\n-original\n+hacked");
+        let result = execute(&serde_json::json!({
+            "diff": diff,
+            "root": workspace.path().to_str().unwrap()
+        }))
+        .await
+        .unwrap();
+        assert!(result.is_error);
+        assert!(result.output.contains("outside the workspace"));
+        // File should be unchanged
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
     }
 
     #[test]
