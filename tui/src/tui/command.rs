@@ -262,7 +262,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Session,
         keybind: None,
         slash: Some("pin"),
-        available: |state| state.current_session_id.is_some(),
+        available: |_| true,
         execute: |_state| Action::None,
     });
 

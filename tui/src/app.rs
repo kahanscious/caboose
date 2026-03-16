@@ -3958,16 +3958,8 @@ impl App {
                             self.handle_fork_command();
                             return;
                         }
-                        // /pin — add a pinned rule (requires active session)
+                        // /pin — add a pinned rule (auto-creates session if needed)
                         if slash == "pin" || slash.starts_with("pin ") {
-                            if self.state.current_session_id.is_none() {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content:
-                                        "Pins require an active session. Send a message first."
-                                            .to_string(),
-                                });
-                                return;
-                            }
                             let args = slash.strip_prefix("pin").unwrap_or("").trim();
                             let text = args.to_string();
                             if text.is_empty() {
@@ -3975,6 +3967,30 @@ impl App {
                                     content: "Usage: /pin <text>".to_string(),
                                 });
                                 return;
+                            }
+                            // Auto-create session if on home screen
+                            if self.state.current_session_id.is_none() {
+                                let model = if self.state.active_model_name == "no key configured" {
+                                    None
+                                } else {
+                                    Some(self.state.active_model_name.as_str())
+                                };
+                                let provider = if self.state.active_provider_name == "none" {
+                                    None
+                                } else {
+                                    Some(self.state.active_provider_name.as_str())
+                                };
+                                match self.state.sessions.create(model, provider, None, None) {
+                                    Ok(session) => {
+                                        self.state.agent.init_cold_store(&session.id);
+                                        self.state.current_session_id = Some(session.id);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Failed to create session for pin: {e}");
+                                        return;
+                                    }
+                                }
+                                self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
                             }
                             self.state.pins.push(text.clone());
                             self.sync_pins_to_system_prompt();
