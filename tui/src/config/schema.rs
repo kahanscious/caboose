@@ -324,8 +324,6 @@ pub struct RoundhouseSchemaConfig {
 pub struct CircuitsConfig {
     /// Max concurrent circuits (default 5)
     pub max_concurrent: Option<usize>,
-    /// Enable persistent circuits / daemon (default true)
-    pub persistent_enabled: Option<bool>,
 }
 
 /// Configuration for a local LLM provider instance.

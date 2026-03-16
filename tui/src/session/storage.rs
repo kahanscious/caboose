@@ -285,7 +285,6 @@ impl Storage {
     }
 
     /// Update session pins.
-    #[allow(dead_code)]
     pub fn update_pins(&self, session_id: &str, pins: &[String]) -> Result<()> {
         let json = serde_json::to_string(pins).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(

@@ -34,10 +34,6 @@ pub struct FileChange {
 pub struct AgentChanges {
     pub agent_id: Uuid,
     pub task: String,
-    #[allow(dead_code)]
-    pub branch: String,
-    #[allow(dead_code)]
-    pub base_sha: String,
     pub files: Vec<FileChange>,
 }
 
@@ -61,8 +57,6 @@ pub struct OverlapParticipant {
 /// A detected overlap between agents.
 #[derive(Debug)]
 pub struct Overlap {
-    #[allow(dead_code)]
-    pub file: String,
     pub participants: Vec<OverlapParticipant>,
     pub severity: OverlapSeverity,
     pub details: String,
@@ -207,7 +201,6 @@ pub fn cross_agent_check(all_changes: &[AgentChanges]) -> ConflictReport {
         let details = format_overlap_details(path, &participants, &severity);
 
         overlaps.push(Overlap {
-            file: path.clone(),
             participants,
             severity,
             details,
@@ -476,8 +469,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-a".into(),
-                branch: "agent/a".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/a.rs".into(),
                     kind: ChangeKind::Modified,
@@ -487,8 +478,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-b".into(),
-                branch: "agent/b".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/b.rs".into(),
                     kind: ChangeKind::Modified,
@@ -507,8 +496,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-a".into(),
-                branch: "agent/a".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/shared.rs".into(),
                     kind: ChangeKind::Modified,
@@ -518,8 +505,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-b".into(),
-                branch: "agent/b".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/shared.rs".into(),
                     kind: ChangeKind::Modified,
@@ -541,8 +526,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: id_a,
                 task: "task-a".into(),
-                branch: "agent/a".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/shared.rs".into(),
                     kind: ChangeKind::Modified,
@@ -552,8 +535,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: id_b,
                 task: "task-b".into(),
-                branch: "agent/b".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/shared.rs".into(),
                     kind: ChangeKind::Modified,
@@ -574,8 +555,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-a".into(),
-                branch: "agent/a".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/new.rs".into(),
                     kind: ChangeKind::Added,
@@ -585,8 +564,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-b".into(),
-                branch: "agent/b".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/new.rs".into(),
                     kind: ChangeKind::Added,
@@ -604,8 +581,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-a".into(),
-                branch: "agent/a".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/doomed.rs".into(),
                     kind: ChangeKind::Deleted,
@@ -615,8 +590,6 @@ index abc..def 100644
             AgentChanges {
                 agent_id: Uuid::new_v4(),
                 task: "task-b".into(),
-                branch: "agent/b".into(),
-                base_sha: "abc".into(),
                 files: vec![FileChange {
                     path: "src/doomed.rs".into(),
                     kind: ChangeKind::Modified,

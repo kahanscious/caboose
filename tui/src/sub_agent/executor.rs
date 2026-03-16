@@ -7,7 +7,6 @@ use super::{StreamLineKind, SubAgentEvent, SubAgentStreamLine};
 use crate::agent::{AgentEvent, AgentLoop, AgentState, permission::PermissionMode};
 use crate::config::Config;
 
-#[allow(dead_code)]
 pub struct SubAgentInput {
     pub id: Uuid,
     pub task: String,
@@ -26,7 +25,6 @@ pub struct SubAgentInput {
 }
 
 /// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
-#[allow(dead_code)]
 pub async fn run_subagent(
     mut input: SubAgentInput,
     provider: Arc<dyn crate::provider::Provider + Send + Sync>,

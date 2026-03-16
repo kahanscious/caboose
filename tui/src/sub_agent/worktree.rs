@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[allow(dead_code)]
 pub fn slug(task: &str) -> String {
     let s: String = task
         .to_lowercase()
@@ -28,7 +27,6 @@ pub fn slug(task: &str) -> String {
     truncated.trim_matches('-').to_string()
 }
 
-#[allow(dead_code)]
 pub fn unique_slug(task: &str, existing: &[String]) -> String {
     let base = slug(task);
     if !existing.contains(&base) {
@@ -44,12 +42,10 @@ pub fn unique_slug(task: &str, existing: &[String]) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn branch_name(slug: &str) -> String {
     format!("agent/{slug}")
 }
 
-#[allow(dead_code)]
 pub fn worktree_path(slug: &str) -> PathBuf {
     PathBuf::from(format!(".worktrees/agent-{slug}"))
 }
@@ -65,7 +61,6 @@ pub enum WorktreeError {
 }
 
 /// Verify `.worktrees/` is listed in `.gitignore`.
-#[allow(dead_code)]
 pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
     let status = Command::new("git")
         .args(["check-ignore", "-q", ".worktrees"])
@@ -79,7 +74,6 @@ pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
 
 /// Run `git diff --unified=0` between a base SHA and a branch.
 /// Must be called via spawn_blocking.
-#[allow(dead_code)]
 pub fn run_diff(base_sha: &str, branch: &str) -> Result<String, WorktreeError> {
     let out = Command::new("git")
         .args(["diff", "--unified=0", &format!("{base_sha}...{branch}")])
@@ -99,7 +93,6 @@ pub fn run_diff(base_sha: &str, branch: &str) -> Result<String, WorktreeError> {
 }
 
 /// Create a worktree at `path` with new branch `branch` from current HEAD.
-#[allow(dead_code)]
 pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["worktree", "add", &path.to_string_lossy(), "-b", branch])
@@ -115,7 +108,6 @@ pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
 
 /// Merge `branch` into the current branch with `--no-ff`.
 /// On conflict, aborts the merge and returns Err.
-#[allow(dead_code)]
 pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["merge", "--no-ff", branch])
@@ -130,7 +122,6 @@ pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
 }
 
 /// Remove a worktree and (best-effort) delete its branch.
-#[allow(dead_code)]
 pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["worktree", "remove", &path.to_string_lossy()])
@@ -145,24 +136,8 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
 }
 
 /// Get the current HEAD commit SHA.
-#[allow(dead_code)]
 pub fn current_head_sha() -> Result<String, WorktreeError> {
     let out = Command::new("git").args(["rev-parse", "HEAD"]).output()?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        Err(WorktreeError::GitFailed(
-            String::from_utf8_lossy(&out.stderr).into(),
-        ))
-    }
-}
-
-/// Get the name of the currently checked-out branch.
-#[allow(dead_code)]
-pub fn current_branch() -> Result<String, WorktreeError> {
-    let out = Command::new("git")
-        .args(["branch", "--show-current"])
-        .output()?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {

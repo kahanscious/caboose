@@ -928,7 +928,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(phrase, chars_visible)),
+                    typewriter(phrase, chars_visible),
                     Style::default().fg(colors.text_muted),
                 )));
             }
@@ -942,7 +942,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                     .unwrap_or(fallback);
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(label, chars_visible)),
+                    typewriter(label, chars_visible),
                     Style::default().fg(colors.text_muted),
                 )));
             }
@@ -950,7 +950,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let phrase = "Compacting conversation...";
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(phrase, chars_visible)),
+                    typewriter(phrase, chars_visible),
                     Style::default().fg(colors.warning),
                 )));
             }
@@ -962,7 +962,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             let phrase = "Generating CABOOSE.md...";
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("  {}", typewriter(phrase, chars_visible)),
+                typewriter(phrase, chars_visible),
                 Style::default().fg(colors.warning),
             )));
         }
@@ -1861,7 +1861,6 @@ fn render_agent_stream_overlay(
     state: &State,
     colors: &theme::Colors,
 ) {
-    use ratatui::style::Modifier;
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Paragraph};
 
@@ -1925,12 +1924,6 @@ fn render_agent_stream_overlay(
         .iter()
         .map(|line| {
             let (style, prefix) = match line.kind {
-                crate::sub_agent::StreamLineKind::Thinking => (
-                    Style::default()
-                        .fg(colors.text_dim)
-                        .add_modifier(Modifier::ITALIC),
-                    "",
-                ),
                 crate::sub_agent::StreamLineKind::ToolCall => {
                     (Style::default().fg(colors.info), "")
                 }

@@ -235,7 +235,6 @@ pub struct State {
     /// Screen row of the "Files Modified" header for click-to-toggle (set each frame).
     pub files_modified_header_row: Cell<Option<u16>>,
     /// In-session circuit manager.
-    #[allow(dead_code)]
     pub circuit_manager: crate::circuits::runner::CircuitManager,
     /// Local LLM servers discovered at startup (background probe).
     pub discovered_locals: Vec<crate::provider::local::LocalServer>,
@@ -1194,6 +1193,19 @@ impl App {
             std::process::exit(0);
         }
         self.state.quit_first_press = Some(Instant::now());
+    }
+
+    /// Clear the main composer input and any transient completion state.
+    fn clear_composer_input(&mut self) {
+        self.state.input.clear();
+        self.state.slash_auto = None;
+        self.state.file_auto = None;
+        self.state.text_selection = None;
+        self.state.quit_first_press = None;
+    }
+
+    fn should_insert_text(modifiers: KeyModifiers) -> bool {
+        modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
     }
 
     /// Extract plain text from the rendered chat lines within the given selection.
@@ -2411,7 +2423,6 @@ impl App {
                     Option<crate::sub_agent::SubAgentStreamLine>,
                     Option<f64>,
                 );
-                let mut pending_messages: Vec<ChatMessage> = Vec::new();
                 let mut agent_updates: Vec<AgentUpdate> = Vec::new();
 
                 while let Ok(event) = rx.try_recv() {
@@ -2424,39 +2435,6 @@ impl App {
                         }
                         SubAgentEvent::CostUpdate { id, cost_usd } => {
                             agent_updates.push((id, None, None, Some(cost_usd)));
-                        }
-                        SubAgentEvent::AgentMerged {
-                            task,
-                            elapsed_secs,
-                            cost_usd,
-                            ..
-                        } => {
-                            pending_messages.push(ChatMessage::System {
-                                content: format!(
-                                    "agent done: {} ({}  ·  ${:.3})",
-                                    task,
-                                    crate::sub_agent::format_elapsed(elapsed_secs),
-                                    cost_usd
-                                ),
-                            });
-                        }
-                        SubAgentEvent::AgentFailed { task, message, .. } => {
-                            pending_messages.push(ChatMessage::System {
-                                content: format!("agent failed: {} — {}", task, message),
-                            });
-                        }
-                        SubAgentEvent::AgentConflict {
-                            task,
-                            worktree_path,
-                            ..
-                        } => {
-                            pending_messages.push(ChatMessage::System {
-                                content: format!(
-                                    "conflict: {} — worktree preserved at {}",
-                                    task,
-                                    worktree_path.display()
-                                ),
-                            });
                         }
                         SubAgentEvent::ApprovalRequest {
                             id,
@@ -2507,8 +2485,6 @@ impl App {
                         }
                     }
                 }
-                self.state.chat_messages.extend(pending_messages);
-
                 // Drain approval queue: show next if nothing currently showing
                 if self.state.sub_agent_approval_showing.is_none()
                     && !self.state.sub_agent_pending_approvals.is_empty()
@@ -2705,9 +2681,7 @@ impl App {
                         .collect();
                     for agent in &mut self.state.sub_agents {
                         if blocked_ids.contains(&agent.id) {
-                            agent.state = crate::sub_agent::SubAgentState::Conflict {
-                                report: "overlapping edits — skipped by user".to_string(),
-                            };
+                            agent.state = crate::sub_agent::SubAgentState::Conflict;
                         }
                     }
                     return;
@@ -2824,7 +2798,13 @@ impl App {
                 let text = self.extract_selected_text(&sel);
                 if !text.is_empty() {
                     let _ = crate::clipboard::copy_to_clipboard(&text);
+                } else if !self.state.input.is_empty() {
+                    self.clear_composer_input();
+                } else {
+                    self.request_quit();
                 }
+            } else if !self.state.input.is_empty() {
+                self.clear_composer_input();
             } else {
                 self.request_quit();
             }
@@ -2951,12 +2931,16 @@ impl App {
                     self.request_quit();
                 }
             }
-            (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
                 if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.handle_paste(&text);
                 }
+            }
+            (KeyCode::Char('v'), m) if m.contains(KeyModifiers::SUPER) => {
+                // Let terminal/platform paste handling deliver the real text
+                // without also inserting the shortcut key as plain input.
             }
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                 let cwd = std::env::current_dir().unwrap_or_default();
@@ -3355,7 +3339,7 @@ impl App {
                 self.state.mode = self.state.mode.next();
                 self.state.agent.permission_mode = self.state.mode.to_permission_mode();
             }
-            (KeyCode::Char(c), _) => {
+            (KeyCode::Char(c), m) if Self::should_insert_text(m) => {
                 self.state.history.reset();
                 self.state.input.insert_char(c);
                 self.state.update_slash_auto();
@@ -3381,7 +3365,18 @@ impl App {
                 let text = self.extract_selected_text(&sel);
                 if !text.is_empty() {
                     let _ = crate::clipboard::copy_to_clipboard(&text);
+                } else if !self.state.input.is_empty() {
+                    self.clear_composer_input();
+                } else if matches!(self.state.agent.state, AgentState::PendingApproval { .. }) {
+                    self.cancel_all_operations();
+                } else if !matches!(self.state.agent.state, AgentState::Idle) {
+                    self.cancel_all_operations();
+                    self.request_quit();
+                } else {
+                    self.request_quit();
                 }
+            } else if !self.state.input.is_empty() {
+                self.clear_composer_input();
             } else if matches!(self.state.agent.state, AgentState::PendingApproval { .. }) {
                 self.cancel_all_operations();
             } else if !matches!(self.state.agent.state, AgentState::Idle) {
@@ -3700,12 +3695,16 @@ impl App {
                     self.request_quit();
                 }
             }
-            (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
                 if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.handle_paste(&text);
                 }
+            }
+            (KeyCode::Char('v'), m) if m.contains(KeyModifiers::SUPER) => {
+                // Let terminal/platform paste handling deliver the real text
+                // without also inserting the shortcut key as plain input.
             }
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                 let cwd = std::env::current_dir().unwrap_or_default();
@@ -3867,9 +3866,6 @@ impl App {
                                     "compaction_model configured but not yet wired — using active provider"
                                 );
                             }
-                            self.state.chat_messages.push(ChatMessage::System {
-                                content: "Compacting conversation...".to_string(),
-                            });
                             // Fire PreCompact hooks and collect must_keep context
                             let must_keep_context = if let Some(ref hooks_config) =
                                 self.state.config.hooks
@@ -4241,7 +4237,7 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Char(c), _) => {
+            (KeyCode::Char(c), m) if Self::should_insert_text(m) => {
                 self.state.focused_tool = None;
                 self.state.history.reset();
                 self.state.input.insert_char(c);
@@ -7846,7 +7842,6 @@ impl App {
             task: task.clone(),
             branch: branch.clone(),
             worktree_path: worktree_path.clone(),
-            base_sha,
             state: crate::sub_agent::SubAgentState::Running,
             started_at: Some(std::time::Instant::now()),
             cost_usd: 0.0,
@@ -7922,9 +7917,7 @@ impl App {
             Ok(p) => p,
             Err(e) => {
                 if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
-                    a.state = crate::sub_agent::SubAgentState::Failed {
-                        message: format!("no provider: {e}"),
-                    };
+                    a.state = crate::sub_agent::SubAgentState::Failed;
                     a.approval_tx = None;
                 }
                 let wt = worktree_path.clone();
@@ -7982,9 +7975,7 @@ impl App {
                     task: String::new(),
                     result_text: format!("spawn_agent: task panicked: {e}"),
                     is_error: true,
-                    final_state: crate::sub_agent::SubAgentState::Failed {
-                        message: format!("task panicked: {e}"),
-                    },
+                    final_state: crate::sub_agent::SubAgentState::Failed,
                     cost_usd: 0.0,
                     changes: None,
                 },
@@ -8192,17 +8183,14 @@ impl App {
                     a.state = crate::sub_agent::SubAgentState::Done;
                 }
             }
-            Ok(Err(e)) => {
-                let msg = e.to_string();
+            Ok(Err(_)) => {
                 if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
-                    a.state = crate::sub_agent::SubAgentState::Conflict { report: msg };
+                    a.state = crate::sub_agent::SubAgentState::Conflict;
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 if let Some(a) = self.state.sub_agents.iter_mut().find(|a| a.id == agent_id) {
-                    a.state = crate::sub_agent::SubAgentState::Failed {
-                        message: e.to_string(),
-                    };
+                    a.state = crate::sub_agent::SubAgentState::Failed;
                 }
             }
         }
@@ -8294,21 +8282,13 @@ impl App {
 
                         let mut stream = provider.stream(&messages, &[]);
                         let mut response = String::new();
-                        let mut input_tokens: u32 = 0;
-                        let mut output_tokens: u32 = 0;
 
                         while let Some(event_result) = stream.next().await {
                             match event_result {
                                 Ok(StreamEvent::TextDelta(text)) => {
                                     response.push_str(&text);
                                 }
-                                Ok(StreamEvent::Done {
-                                    input_tokens: it,
-                                    output_tokens: ot,
-                                    ..
-                                }) => {
-                                    input_tokens = it.unwrap_or(0);
-                                    output_tokens = ot.unwrap_or(0);
+                                Ok(StreamEvent::Done { .. }) => {
                                     break;
                                 }
                                 Ok(StreamEvent::Error(e)) => {
@@ -8338,13 +8318,9 @@ impl App {
                             }
                         }
 
-                        let tokens_used = (input_tokens + output_tokens) as u64;
                         let _ = event_tx.send(CircuitEvent::TickCompleted {
                             circuit_id,
                             output: response,
-                            cost: 0.0,
-                            tokens_used,
-                            success: true,
                         });
                     });
                 }
@@ -10538,6 +10514,11 @@ impl App {
     }
 
     async fn handle_circuit_command(&mut self, args: &str) {
+        if matches!(self.state.dialog_stack.base, Screen::Home) {
+            self.state.dialog_stack.base = Screen::Chat;
+            self.state.dialog_stack.clear();
+        }
+
         // /circuit stop <id>
         if let Some(id) = args.strip_prefix("stop ") {
             let id = id.trim();
@@ -10572,12 +10553,13 @@ impl App {
         // /circuit [--persist] <interval> "prompt"
         match parse_circuit_args(args) {
             Some((persist, interval_secs, prompt)) => {
-                let kind = if persist {
-                    crate::circuits::CircuitKind::Persistent
-                } else {
-                    crate::circuits::CircuitKind::InSession
-                };
-                let _ = self.create_circuit(&prompt, interval_secs, kind).await;
+                if persist {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: "Persistent circuits are not supported in the current runtime yet. Use `/circuit <interval> \"<prompt>\"` for in-session scheduling.".to_string(),
+                    });
+                    return;
+                }
+                let _ = self.create_circuit(&prompt, interval_secs).await;
             }
             None => {
                 self.state.chat_messages.push(ChatMessage::Error {
@@ -10588,12 +10570,7 @@ impl App {
     }
 
     /// Create a circuit and return its ID on success, or None on failure.
-    async fn create_circuit(
-        &mut self,
-        prompt: &str,
-        interval_secs: u64,
-        kind: crate::circuits::CircuitKind,
-    ) -> Option<String> {
+    async fn create_circuit(&mut self, prompt: &str, interval_secs: u64) -> Option<String> {
         let ts = chrono::Utc::now().timestamp_millis() as u64;
         let mut id = format!("c-{:x}", ts % 0x1000000);
         // Ensure uniqueness against existing circuits
@@ -10615,7 +10592,6 @@ impl App {
             provider: self.state.active_provider_name.clone(),
             model: self.state.active_model_name.clone(),
             permission_mode: "plan".to_string(),
-            kind,
             status: crate::circuits::CircuitStatus::Active,
             last_run: None,
             next_run: None,
@@ -10642,6 +10618,11 @@ impl App {
     }
 
     async fn handle_watch_command(&mut self, args: &str) {
+        if matches!(self.state.dialog_stack.base, Screen::Home) {
+            self.state.dialog_stack.base = Screen::Chat;
+            self.state.dialog_stack.clear();
+        }
+
         // /watch pr <number> [--persist]
         // /watch mr <number> [--persist]
         let rest = if let Some(r) = args
@@ -10672,18 +10653,19 @@ impl App {
     }
 
     async fn create_watcher(&mut self, pr_number: u32, persist: bool) {
+        if persist {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Persistent PR/MR watchers are not supported in the current runtime yet. Use `/watch pr <number>` for in-session monitoring.".to_string(),
+            });
+            return;
+        }
+
         let interval_secs = 180; // 3 minutes
         let prompt = format!(
             "Check the status of PR/MR #{pr_number}. Use the check_ci tool and report: is CI passing, failing, or pending? Is the PR merged or closed?"
         );
 
-        let kind = if persist {
-            crate::circuits::CircuitKind::Persistent
-        } else {
-            crate::circuits::CircuitKind::InSession
-        };
-
-        if let Some(circuit_id) = self.create_circuit(&prompt, interval_secs, kind).await {
+        if let Some(circuit_id) = self.create_circuit(&prompt, interval_secs).await {
             let watcher = crate::scm::watcher::Watcher {
                 circuit_id,
                 pr_number,
@@ -10733,8 +10715,6 @@ async fn run_spawn_agent_task(
                 Ok(Ok(output)) => Some(crate::sub_agent::conflict::AgentChanges {
                     agent_id,
                     task: task.clone(),
-                    branch: branch.clone(),
-                    base_sha,
                     files: crate::sub_agent::conflict::parse_diff_hunks(&output),
                 }),
                 _ => None,
@@ -10760,7 +10740,7 @@ async fn run_spawn_agent_task(
                 result_text: format!("spawn_agent: agent failed for '{task}': {message}"),
                 is_error: true,
                 task,
-                final_state: SubAgentState::Failed { message },
+                final_state: SubAgentState::Failed,
                 cost_usd: 0.0,
                 changes: None,
             }

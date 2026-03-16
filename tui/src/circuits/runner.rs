@@ -9,14 +9,7 @@ pub enum CircuitEvent {
     /// A circuit tick started
     TickStarted { circuit_id: String },
     /// A circuit tick completed with output
-    #[allow(dead_code)]
-    TickCompleted {
-        circuit_id: String,
-        output: String,
-        cost: f64,
-        tokens_used: u64,
-        success: bool,
-    },
+    TickCompleted { circuit_id: String, output: String },
     /// A circuit encountered an error
     Error { circuit_id: String, error: String },
 }
@@ -130,7 +123,6 @@ mod tests {
             provider: "anthropic".into(),
             model: "claude-sonnet".into(),
             permission_mode: "default".into(),
-            kind: CircuitKind::InSession,
             status: CircuitStatus::Active,
             last_run: None,
             next_run: None,

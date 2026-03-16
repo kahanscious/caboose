@@ -1,6 +1,5 @@
 //! Session management — CRUD operations and SQLite persistence.
 
-pub mod snapshot;
 pub mod storage;
 
 use anyhow::Result;
@@ -73,12 +72,6 @@ impl SessionManager {
         self.storage.update_session(session)
     }
 
-    /// List recent sessions.
-    #[allow(dead_code)]
-    pub fn list(&self, limit: usize) -> Result<Vec<Session>> {
-        self.storage.list_sessions(limit)
-    }
-
     /// List recent sessions with pre-fetched content for search.
     pub fn list_with_content(&self, limit: usize) -> Result<Vec<storage::SessionSearchResult>> {
         self.storage.list_sessions_with_content(limit)
@@ -105,7 +98,6 @@ impl SessionManager {
     }
 
     /// Update session pins.
-    #[allow(dead_code)]
     pub fn update_pins(&self, session_id: &str, pins: &[String]) -> Result<()> {
         self.storage.update_pins(session_id, pins)
     }

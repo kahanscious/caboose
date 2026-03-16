@@ -11,7 +11,6 @@ use crate::tui::theme::Colors;
 /// Per-state counts for the agents section header pills.
 pub struct AgentCounts {
     pub running: usize,
-    pub pending: usize,
     pub review: usize,
     pub failed: usize,
 }
@@ -21,12 +20,11 @@ pub struct AgentCounts {
 pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static str) {
     match state {
         SubAgentState::Running => ("\u{25CF}", "run"), // ●
-        SubAgentState::Pending => ("\u{25CB}", "dim"), // ○
         SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
         SubAgentState::Review => ("\u{25CF}", "review"), // ● blue
         SubAgentState::Done => ("\u{2713}", "done"),   // ✓
-        SubAgentState::Failed { .. } => ("\u{2717}", "fail"), // ✗
-        SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
+        SubAgentState::Failed => ("\u{2717}", "fail"), // ✗
+        SubAgentState::Conflict => ("\u{2717}", "fail"), // ✗
     }
 }
 
@@ -37,22 +35,13 @@ pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
             .iter()
             .filter(|a| matches!(a.state, SubAgentState::Running))
             .count(),
-        pending: agents
-            .iter()
-            .filter(|a| matches!(a.state, SubAgentState::Pending))
-            .count(),
         review: agents
             .iter()
             .filter(|a| matches!(a.state, SubAgentState::Review))
             .count(),
         failed: agents
             .iter()
-            .filter(|a| {
-                matches!(
-                    a.state,
-                    SubAgentState::Failed { .. } | SubAgentState::Conflict { .. }
-                )
-            })
+            .filter(|a| matches!(a.state, SubAgentState::Failed | SubAgentState::Conflict))
             .count(),
     }
 }
@@ -81,13 +70,6 @@ pub fn render_agents_section(
             Style::default().fg(colors.info),
         ));
     }
-    if counts.pending > 0 {
-        header_spans.push(Span::raw("  "));
-        header_spans.push(Span::styled(
-            format!("\u{25CB} {} pending", counts.pending),
-            Style::default().fg(colors.text_dim),
-        ));
-    }
     if counts.failed > 0 {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
@@ -103,7 +85,7 @@ pub fn render_agents_section(
         ));
     }
     // Clickable dismiss when all agents are in terminal state
-    if counts.running == 0 && counts.pending == 0 && counts.review == 0 && !agents.is_empty() {
+    if counts.running == 0 && counts.review == 0 && !agents.is_empty() {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
             "\u{25B8} clear",
@@ -139,12 +121,11 @@ pub fn render_agents_section(
 
         let right_status: String = match &agent.state {
             SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
-            SubAgentState::Pending => "pending".to_string(),
             SubAgentState::WaitingApproval { tool_name } => format!("waiting: {tool_name}"),
             SubAgentState::Review => "review".to_string(),
             SubAgentState::Done => "done".to_string(),
-            SubAgentState::Failed { .. } => "failed".to_string(),
-            SubAgentState::Conflict { .. } => "conflict".to_string(),
+            SubAgentState::Failed => "failed".to_string(),
+            SubAgentState::Conflict => "conflict".to_string(),
         };
 
         // Compute max task name width: width - 2 indent - 1 dot - 1 space - 2 gap - right_status
@@ -888,12 +869,6 @@ mod agents_section_tests {
     }
 
     #[test]
-    fn agent_status_dot_pending() {
-        let (dot, _) = agent_status_display(&SubAgentState::Pending);
-        assert_eq!(dot, "○");
-    }
-
-    #[test]
     fn agent_status_dot_done() {
         let (dot, _) = agent_status_display(&SubAgentState::Done);
         assert_eq!(dot, "✓");
@@ -901,17 +876,13 @@ mod agents_section_tests {
 
     #[test]
     fn agent_status_dot_failed() {
-        let (dot, _) = agent_status_display(&SubAgentState::Failed {
-            message: "oops".into(),
-        });
+        let (dot, _) = agent_status_display(&SubAgentState::Failed);
         assert_eq!(dot, "✗");
     }
 
     #[test]
     fn agent_status_dot_conflict() {
-        let (dot, _) = agent_status_display(&SubAgentState::Conflict {
-            report: "conflict".into(),
-        });
+        let (dot, _) = agent_status_display(&SubAgentState::Conflict);
         assert_eq!(dot, "✗");
     }
 
@@ -920,12 +891,10 @@ mod agents_section_tests {
         let agents = vec![
             make_agent(SubAgentState::Running),
             make_agent(SubAgentState::Running),
-            make_agent(SubAgentState::Pending),
             make_agent(SubAgentState::Done),
         ];
         let counts = agent_counts(&agents);
         assert_eq!(counts.running, 2);
-        assert_eq!(counts.pending, 1);
         assert_eq!(counts.failed, 0);
     }
 
@@ -957,9 +926,7 @@ mod agents_section_tests {
     fn dismiss_some_when_all_terminal() {
         let agents = vec![
             make_agent(SubAgentState::Done),
-            make_agent(SubAgentState::Failed {
-                message: "err".into(),
-            }),
+            make_agent(SubAgentState::Failed),
         ];
         let colors = Colors::default();
         let mut lines = Vec::new();
@@ -979,12 +946,7 @@ mod agents_section_tests {
     }
 
     fn make_agent(state: SubAgentState) -> SubAgent {
-        let mut a = SubAgent::new(
-            "task".into(),
-            "branch".into(),
-            std::path::PathBuf::new(),
-            String::new(),
-        );
+        let mut a = SubAgent::new("task".into(), "branch".into(), std::path::PathBuf::new());
         a.state = state;
         a
     }

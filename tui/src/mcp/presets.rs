@@ -90,12 +90,6 @@ pub fn find_preset(id: &str) -> Option<McpPreset> {
     builtin_presets().into_iter().find(|p| p.id == id)
 }
 
-/// Return all preset IDs.
-#[allow(dead_code)]
-pub fn preset_ids() -> Vec<&'static str> {
-    builtin_presets().iter().map(|p| p.id).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +129,7 @@ mod tests {
 
     #[test]
     fn preset_ids_returns_all() {
-        let ids = preset_ids();
+        let ids: Vec<&str> = builtin_presets().iter().map(|p| p.id).collect();
         assert!(ids.contains(&"context7"));
         assert!(ids.contains(&"fetch"));
         assert!(ids.contains(&"github"));

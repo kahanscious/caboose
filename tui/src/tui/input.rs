@@ -1,9 +1,7 @@
-//! Input handling — keybinding definitions and input mode management.
-
-use crossterm::event::KeyCode;
+//! Input handling — input field rendering and status hints.
 use ratatui::prelude::*;
 use ratatui::style::Color;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 use std::time::SystemTime;
 
 use crate::tui::theme;
@@ -15,45 +13,6 @@ fn cursor_visible() -> bool {
         .unwrap_or_default()
         .as_millis();
     (millis / 500).is_multiple_of(2)
-}
-
-/// Actions the user can trigger via keyboard input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum Action {
-    /// Submit the current input
-    Submit,
-    /// Insert a character
-    InsertChar(char),
-    /// Delete character before cursor
-    Backspace,
-    /// Quit the application
-    Quit,
-    /// Scroll chat up
-    ScrollUp,
-    /// Scroll chat down
-    ScrollDown,
-    /// Open session picker
-    SessionPicker,
-    /// Approve a tool call
-    ApproveTool,
-    /// Deny a tool call
-    DenyTool,
-    /// No-op
-    None,
-}
-
-/// Map a key code to an action in chat mode.
-#[allow(dead_code)]
-pub fn map_chat_key(key: KeyCode) -> Action {
-    match key {
-        KeyCode::Enter => Action::Submit,
-        KeyCode::Backspace => Action::Backspace,
-        KeyCode::Up => Action::ScrollUp,
-        KeyCode::Down => Action::ScrollDown,
-        KeyCode::Char(c) => Action::InsertChar(c),
-        _ => Action::None,
-    }
 }
 
 /// Placeholder text shown when input is empty.
@@ -82,6 +41,13 @@ pub fn render_input_field(
     if area.height < 5 || area.width < 4 {
         return;
     }
+
+    // Clear the entire input region first so shrinking pasted blobs do not
+    // leave stale glyphs behind on rows that are no longer repainted.
+    frame.render_widget(
+        Block::default().style(Style::default().bg(colors.bg_secondary)),
+        area,
+    );
 
     // Usable text width after accent bar + space prefix + cursor block
     let text_width = (area.width as usize).saturating_sub(3).max(1);

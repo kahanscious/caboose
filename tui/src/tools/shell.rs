@@ -14,15 +14,6 @@ const MAX_OUTPUT_LINES: usize = 2_000;
 /// Default timeout in seconds.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
-/// Execute a shell command with timeout and output limits.
-///
-/// Uses a filtered environment that strips secret variables (API keys, tokens, etc.)
-/// to prevent leaking credentials through shell commands.
-#[allow(dead_code)]
-pub async fn execute(input: &Value) -> Result<ToolResult> {
-    execute_with_env(input, &[]).await
-}
-
 /// Execute a shell command with a filtered environment.
 ///
 /// `additional_secrets` lists extra env var names to strip beyond the built-in patterns.

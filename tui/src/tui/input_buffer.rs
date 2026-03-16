@@ -73,12 +73,6 @@ impl InputBuffer {
         self.lines.len()
     }
 
-    /// Get the current line under the cursor.
-    #[allow(dead_code)]
-    pub fn current_line(&self) -> &str {
-        &self.lines[self.cursor_row]
-    }
-
     /// Iterate over all lines.
     pub fn lines(&self) -> impl Iterator<Item = &str> {
         self.lines.iter().map(|s| s.as_str())
@@ -363,15 +357,6 @@ mod tests {
         buf.push_str("ab\nxyzw");
         buf.move_up();
         assert_eq!(buf.cursor_col, 2);
-    }
-
-    #[test]
-    fn current_line_returns_correct_line() {
-        let mut buf = InputBuffer::new();
-        buf.push_str("hello\nworld");
-        assert_eq!(buf.current_line(), "world");
-        buf.move_up();
-        assert_eq!(buf.current_line(), "hello");
     }
 
     #[test]
