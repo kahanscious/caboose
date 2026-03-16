@@ -3070,6 +3070,20 @@ impl App {
                             self.handle_watch_command(args.trim()).await;
                             return;
                         }
+                        // /pin, /pins, /unpin
+                        if slash == "pin" || slash.starts_with("pin ") {
+                            self.handle_pin_command(slash);
+                            return;
+                        }
+                        if slash == "pins" {
+                            self.handle_pins_command();
+                            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+                            return;
+                        }
+                        if slash == "unpin" || slash.starts_with("unpin ") {
+                            self.handle_unpin_command(slash);
+                            return;
+                        }
                         // /new — extract memories and clean up cold storage before clearing session
                         if slash == "new" {
                             self.extract_session_memories().await;
@@ -3958,133 +3972,6 @@ impl App {
                             self.handle_fork_command();
                             return;
                         }
-                        // /pin — add a pinned rule (auto-creates session if needed)
-                        if slash == "pin" || slash.starts_with("pin ") {
-                            let args = slash.strip_prefix("pin").unwrap_or("").trim();
-                            let text = args.to_string();
-                            if text.is_empty() {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: "Usage: /pin <text>".to_string(),
-                                });
-                                return;
-                            }
-                            // Auto-create session if on home screen
-                            if self.state.current_session_id.is_none() {
-                                let model = if self.state.active_model_name == "no key configured" {
-                                    None
-                                } else {
-                                    Some(self.state.active_model_name.as_str())
-                                };
-                                let provider = if self.state.active_provider_name == "none" {
-                                    None
-                                } else {
-                                    Some(self.state.active_provider_name.as_str())
-                                };
-                                match self.state.sessions.create(model, provider, None, None) {
-                                    Ok(session) => {
-                                        self.state.agent.init_cold_store(&session.id);
-                                        self.state.current_session_id = Some(session.id);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Failed to create session for pin: {e}");
-                                        return;
-                                    }
-                                }
-                                self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
-                            }
-                            self.state.pins.push(text.clone());
-                            self.sync_pins_to_system_prompt();
-                            if let Some(ref sid) = self.state.current_session_id {
-                                let _ = self.state.sessions.update_pins(sid, &self.state.pins);
-                            }
-                            self.state.chat_messages.push(ChatMessage::System {
-                                content: format!("Pinned: {text}"),
-                            });
-                            return;
-                        }
-                        // /pins — list all pinned rules (requires active session)
-                        if slash == "pins" {
-                            if self.state.current_session_id.is_none() {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content:
-                                        "Pins require an active session. Send a message first."
-                                            .to_string(),
-                                });
-                                return;
-                            }
-                            if self.state.pins.is_empty() {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: "No pins set.".to_string(),
-                                });
-                            } else {
-                                let list = self
-                                    .state
-                                    .pins
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, p)| format!("  {}. {p}", i + 1))
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: format!("Pins:\n{list}"),
-                                });
-                            }
-                            return;
-                        }
-                        // /unpin — remove pin(s) (requires active session)
-                        if slash == "unpin" || slash.starts_with("unpin ") {
-                            if self.state.current_session_id.is_none() {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content:
-                                        "Pins require an active session. Send a message first."
-                                            .to_string(),
-                                });
-                                return;
-                            }
-                            let arg = slash.strip_prefix("unpin").unwrap_or("").trim();
-                            if arg.is_empty() {
-                                if self.state.pins.is_empty() {
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: "No pins to remove.".to_string(),
-                                    });
-                                } else {
-                                    let count = self.state.pins.len();
-                                    self.state.pins.clear();
-                                    self.sync_pins_to_system_prompt();
-                                    if let Some(ref sid) = self.state.current_session_id {
-                                        let _ =
-                                            self.state.sessions.update_pins(sid, &self.state.pins);
-                                    }
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!("Removed all {count} pins."),
-                                    });
-                                }
-                            } else if let Ok(n) = arg.parse::<usize>() {
-                                if n == 0 || n > self.state.pins.len() {
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!(
-                                            "Pin {n} does not exist. You have {} pins.",
-                                            self.state.pins.len()
-                                        ),
-                                    });
-                                } else {
-                                    let removed = self.state.pins.remove(n - 1);
-                                    self.sync_pins_to_system_prompt();
-                                    if let Some(ref sid) = self.state.current_session_id {
-                                        let _ =
-                                            self.state.sessions.update_pins(sid, &self.state.pins);
-                                    }
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content: format!("Removed pin: {removed}"),
-                                    });
-                                }
-                            } else {
-                                self.state.chat_messages.push(ChatMessage::System {
-                                    content: "Usage: /unpin or /unpin <number>".to_string(),
-                                });
-                            }
-                            return;
-                        }
                         // /handoff — build handoff summary
                         if slash == "handoff" || slash.starts_with("handoff ") {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
@@ -4114,6 +4001,19 @@ impl App {
                         // /watch pr <number> [--persist] | /watch mr <number> [--persist]
                         if let Some(args) = slash.strip_prefix("watch ") {
                             self.handle_watch_command(args.trim()).await;
+                            return;
+                        }
+                        // /pin, /pins, /unpin
+                        if slash == "pin" || slash.starts_with("pin ") {
+                            self.handle_pin_command(slash);
+                            return;
+                        }
+                        if slash == "pins" {
+                            self.handle_pins_command();
+                            return;
+                        }
+                        if slash == "unpin" || slash.starts_with("unpin ") {
+                            self.handle_unpin_command(slash);
                             return;
                         }
                         // /new — extract memories and clean up cold storage before clearing session
@@ -10153,6 +10053,119 @@ impl App {
             items,
         ));
         self.state.input.clear();
+    }
+
+    /// Handle /pin — add a pinned rule, auto-creates session from home screen.
+    fn handle_pin_command(&mut self, slash: &str) {
+        let args = slash.strip_prefix("pin").unwrap_or("").trim();
+        let text = args.to_string();
+        if text.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /pin <text>".to_string(),
+            });
+            // Still switch to chat so the error is visible
+            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+            self.state.dialog_stack.clear();
+            return;
+        }
+        // Auto-create session if needed
+        if self.state.current_session_id.is_none() {
+            let model = if self.state.active_model_name == "no key configured" {
+                None
+            } else {
+                Some(self.state.active_model_name.as_str())
+            };
+            let provider = if self.state.active_provider_name == "none" {
+                None
+            } else {
+                Some(self.state.active_provider_name.as_str())
+            };
+            match self.state.sessions.create(model, provider, None, None) {
+                Ok(session) => {
+                    self.state.agent.init_cold_store(&session.id);
+                    self.state.current_session_id = Some(session.id);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create session for pin: {e}");
+                    return;
+                }
+            }
+        }
+        self.state.pins.push(text.clone());
+        self.sync_pins_to_system_prompt();
+        if let Some(ref sid) = self.state.current_session_id {
+            let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("Pinned: {text}"),
+        });
+        self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+        self.state.dialog_stack.clear();
+    }
+
+    /// Handle /pins — list all pinned rules.
+    fn handle_pins_command(&mut self) {
+        if self.state.pins.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "No pins set.".to_string(),
+            });
+        } else {
+            let list = self
+                .state
+                .pins
+                .iter()
+                .enumerate()
+                .map(|(i, p)| format!("  {}. {p}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.state.chat_messages.push(ChatMessage::System {
+                content: format!("Pins:\n{list}"),
+            });
+        }
+    }
+
+    /// Handle /unpin — remove pin(s) by index or clear all.
+    fn handle_unpin_command(&mut self, slash: &str) {
+        let arg = slash.strip_prefix("unpin").unwrap_or("").trim();
+        if arg.is_empty() {
+            if self.state.pins.is_empty() {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No pins to remove.".to_string(),
+                });
+            } else {
+                let count = self.state.pins.len();
+                self.state.pins.clear();
+                self.sync_pins_to_system_prompt();
+                if let Some(ref sid) = self.state.current_session_id {
+                    let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Removed all {count} pins."),
+                });
+            }
+        } else if let Ok(n) = arg.parse::<usize>() {
+            if n == 0 || n > self.state.pins.len() {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!(
+                        "Pin {n} does not exist. You have {} pins.",
+                        self.state.pins.len()
+                    ),
+                });
+            } else {
+                let removed = self.state.pins.remove(n - 1);
+                self.sync_pins_to_system_prompt();
+                if let Some(ref sid) = self.state.current_session_id {
+                    let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Removed pin: {removed}"),
+                });
+            }
+        } else {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /unpin or /unpin <number>".to_string(),
+            });
+        }
     }
 
     /// Handle the /fork command — clone current session into a new one with context.
