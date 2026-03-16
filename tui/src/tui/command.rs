@@ -403,6 +403,20 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "agents.list",
+        name: "Agents",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("agents"),
+        available: |state| !state.agent_definitions.is_empty(),
+        execute: |_state| {
+            Action::PushDialog(super::dialog::DialogKind::AgentsList(
+                super::dialog::AgentsListState { selected: 0 },
+            ))
+        },
+    });
+
+    registry.register(Command {
         id: "mcp.list",
         name: "MCP Servers",
         category: Category::Tools,

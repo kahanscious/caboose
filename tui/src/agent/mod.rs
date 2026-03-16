@@ -562,11 +562,8 @@ impl AgentLoop {
                     lines_removed: 0,
                 },
                 _ => {
-                    let normalized_arguments = normalize_tool_arguments(
-                        &tc.name,
-                        &tc.arguments,
-                        &self.primary_root,
-                    );
+                    let normalized_arguments =
+                        normalize_tool_arguments(&tc.name, &tc.arguments, &self.primary_root);
                     match tools::execute_tool(
                         &tc.name,
                         &normalized_arguments,
@@ -636,13 +633,10 @@ impl AgentLoop {
         for (tc, result) in tool_calls.iter().zip(results.iter()) {
             if tc.name == "read_file"
                 && !result.is_error
-                && let Some(path_str) = normalize_tool_arguments(
-                    &tc.name,
-                    &tc.arguments,
-                    &self.primary_root,
-                )
-                .get("path")
-                .and_then(|v| v.as_str())
+                && let Some(path_str) =
+                    normalize_tool_arguments(&tc.name, &tc.arguments, &self.primary_root)
+                        .get("path")
+                        .and_then(|v| v.as_str())
             {
                 let path = PathBuf::from(path_str);
                 self.recent_files.retain(|p| p != &path);

@@ -29,6 +29,7 @@ pub enum DialogKind {
     WorkspaceList(WorkspaceListState),
     WorkspaceAdd(WorkspaceAddState),
     AgentStreamOverlay(AgentStreamOverlayState),
+    AgentsList(AgentsListState),
 }
 
 // Debug impl needed for Action derive
@@ -53,6 +54,7 @@ impl std::fmt::Debug for DialogKind {
             Self::WorkspaceList(_) => write!(f, "WorkspaceList(...)"),
             Self::WorkspaceAdd(_) => write!(f, "WorkspaceAdd(...)"),
             Self::AgentStreamOverlay(_) => write!(f, "AgentStreamOverlay(...)"),
+            Self::AgentsList(_) => write!(f, "AgentsList(...)"),
         }
     }
 }
@@ -79,6 +81,11 @@ impl Default for AgentStreamOverlayState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// State for the agents list dialog.
+pub struct AgentsListState {
+    pub selected: usize,
 }
 
 /// State for the command palette overlay.
@@ -311,6 +318,7 @@ pub enum MigrationItemKind {
     },
     SystemPrompt(String),
     ClaudeMd(std::path::PathBuf),
+    Agent(crate::migrate::agent_import::ImportedAgent),
 }
 
 pub enum MigrationPhase {
@@ -363,9 +371,22 @@ pub fn build_migration_checklist(
                     kind: MigrationItemKind::ClaudeMd(path.clone()),
                 });
             }
+            for agent in &config.agents {
+                items.push(MigrationItem {
+                    label: format!("Agent: {}", agent.name),
+                    description: format!(
+                        "{} ({})",
+                        agent.preview_label(),
+                        agent.source_path.display()
+                    ),
+                    toggled: true,
+                    kind: MigrationItemKind::Agent(agent.clone()),
+                });
+            }
         }
         crate::migrate::SourcePlatform::OpenCode => {
-            let config = crate::migrate::open_code::scan_open_code(&dirs);
+            let config =
+                crate::migrate::open_code::scan_open_code(&dirs, Some(std::path::Path::new(".")));
             for (name, server) in &config.mcp_servers {
                 items.push(MigrationItem {
                     label: format!("MCP: {name}"),
@@ -385,6 +406,18 @@ pub fn build_migration_checklist(
                     description: format!("{preview}{suffix}"),
                     toggled: true,
                     kind: MigrationItemKind::SystemPrompt(prompt.clone()),
+                });
+            }
+            for agent in &config.agents {
+                items.push(MigrationItem {
+                    label: format!("Agent: {}", agent.name),
+                    description: format!(
+                        "{} ({})",
+                        agent.preview_label(),
+                        agent.source_path.display()
+                    ),
+                    toggled: true,
+                    kind: MigrationItemKind::Agent(agent.clone()),
                 });
             }
         }

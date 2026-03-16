@@ -1106,7 +1106,7 @@ impl App {
                         continue;
                     }
                 }
-                "fork_context" => {
+                "fork_context" | "model_switch_context" => {
                     self.state.agent.conversation.messages.push(
                         crate::agent::conversation::Message {
                             role: crate::agent::conversation::Role::User,
@@ -2766,6 +2766,9 @@ impl App {
             Some(DialogKind::WorkspaceAdd(_)) => self.handle_workspace_add_key(key).await,
             Some(DialogKind::AgentStreamOverlay(_)) => {
                 self.handle_agent_stream_overlay_key(key, modifiers);
+            }
+            Some(DialogKind::AgentsList(_)) => {
+                self.handle_agents_list_key(key);
             }
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
@@ -5255,6 +5258,42 @@ impl App {
         }
     }
 
+    fn handle_agents_list_key(&mut self, key: KeyCode) {
+        let count = self.state.agent_definitions.len();
+        let agents_state = match self.state.dialog_stack.top_mut() {
+            Some(DialogKind::AgentsList(s)) => s,
+            _ => return,
+        };
+        if count == 0 {
+            self.state.dialog_stack.pop();
+            return;
+        }
+        match key {
+            KeyCode::Up | KeyCode::Char('k') => {
+                agents_state.selected = if agents_state.selected == 0 {
+                    count.saturating_sub(1)
+                } else {
+                    agents_state.selected - 1
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                agents_state.selected = (agents_state.selected + 1) % count;
+            }
+            KeyCode::Enter => {
+                let agent_name = self.state.agent_definitions[agents_state.selected]
+                    .name
+                    .clone();
+                self.state.dialog_stack.pop();
+                self.state.input.clear();
+                self.state.input.push_str(&format!("/{agent_name} "));
+            }
+            KeyCode::Esc => {
+                self.state.dialog_stack.pop();
+            }
+            _ => {}
+        }
+    }
+
     fn handle_circuits_list_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
         match key {
             KeyCode::Esc => {
@@ -5345,6 +5384,21 @@ impl App {
             MigrationPhase::Preview => match key {
                 KeyCode::Enter => {
                     let result = crate::migrate::converter::apply_migration(&checklist.items);
+                    let command_names: Vec<&str> = self
+                        .state
+                        .commands
+                        .slash_commands()
+                        .filter_map(|c| c.slash)
+                        .collect();
+                    let project_agents_dir = std::path::PathBuf::from(".caboose/agents");
+                    let global_agents_dir = dirs::config_dir()
+                        .map(|d| d.join("caboose/agents"))
+                        .unwrap_or_else(|| std::path::PathBuf::from(".caboose/agents"));
+                    self.state.agent_definitions = crate::agents::load_agents_validated(
+                        Some(&project_agents_dir),
+                        Some(&global_agents_dir),
+                        &command_names,
+                    );
                     checklist.phase = MigrationPhase::Done(result.format_summary());
                 }
                 KeyCode::Esc => {
@@ -6325,10 +6379,9 @@ impl App {
             return true;
         }
 
-        self.state
-            .last_text_input_at
-            .is_some_and(|t| Instant::now().duration_since(t) <= Duration::from_millis(PASTE_LIKE_RECENT_MS))
-            && self.state.rapid_input_streak >= PASTE_LIKE_ENTER_THRESHOLD
+        self.state.last_text_input_at.is_some_and(|t| {
+            Instant::now().duration_since(t) <= Duration::from_millis(PASTE_LIKE_RECENT_MS)
+        }) && self.state.rapid_input_streak >= PASTE_LIKE_ENTER_THRESHOLD
     }
 
     /// Handle `/mcp` slash command with subcommands: list, restart.
@@ -6669,6 +6722,8 @@ impl App {
 
     /// Switch to a new provider/model combination.
     fn select_model(&mut self, provider_name: &str, model_id: &str) {
+        let old_provider_name = self.state.active_provider_name.clone();
+        let old_model_name = self.state.active_model_name.clone();
         match self
             .state
             .providers
@@ -6691,12 +6746,39 @@ impl App {
                     crate::provider::models_dev::context_window(&self.state.active_model_name)
                         .map(|cw| format!(" ({}k context)", cw / 1000))
                         .unwrap_or_default();
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!(
-                        "Switched to {}/{}{}",
-                        self.state.active_provider_name, self.state.active_model_name, cw_display,
-                    ),
-                });
+                let switch_handoff = self.build_model_switch_handoff_context(
+                    &old_provider_name,
+                    &old_model_name,
+                    &self.state.active_provider_name,
+                    &self.state.active_model_name,
+                );
+                if let Some(handoff_text) = switch_handoff {
+                    self.persist_message("model_switch_context", &handoff_text);
+                    self.state.agent.conversation.messages.push(
+                        crate::agent::conversation::Message {
+                            role: crate::agent::conversation::Role::User,
+                            content: crate::agent::conversation::Content::Text(handoff_text),
+                            tool_call_id: None,
+                        },
+                    );
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "Switched to {}/{}{}. Handoff summary injected for continuity.",
+                            self.state.active_provider_name,
+                            self.state.active_model_name,
+                            cw_display
+                        ),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "Switched to {}/{}{}",
+                            self.state.active_provider_name,
+                            self.state.active_model_name,
+                            cw_display,
+                        ),
+                    });
+                }
 
                 // Persist last-used provider + model + recent history
                 let mut prefs = crate::config::prefs::TuiPrefs::load();
@@ -7896,6 +7978,11 @@ impl App {
         let agent_id = uuid::Uuid::new_v4();
         let (approval_tx, approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
 
+        let agent_auto_approve = agent_def
+            .as_ref()
+            .and_then(|d| d.auto_approve)
+            .unwrap_or(false);
+
         let base_sha_ret = base_sha.clone();
         self.state.sub_agents.push(crate::sub_agent::SubAgent {
             id: agent_id,
@@ -7908,7 +7995,7 @@ impl App {
             cost_usd: 0.0,
             stream: Vec::new(),
             approval_tx: Some(approval_tx),
-            auto_approve: false,
+            auto_approve: agent_auto_approve,
         });
 
         // Clamp permission mode
@@ -7936,16 +8023,16 @@ impl App {
         };
 
         // Resolve model for custom agents
+        let mut provider_name = self.state.active_provider_name.clone();
         let model_name = if let Some(ref def) = agent_def {
             if let Some(ref model_str) = def.model {
-                match crate::agents::resolve_model_shorthand(model_str) {
-                    Some(resolved) => resolved.to_string(),
-                    None => {
-                        eprintln!(
-                            "warning: agent '{}' has unknown model '{}', using current model",
-                            def.name, model_str
-                        );
-                        self.state.active_model_name.clone()
+                if let Some((provider_override, model_override)) = model_str.split_once('/') {
+                    provider_name = provider_override.to_string();
+                    model_override.to_string()
+                } else {
+                    match crate::agents::resolve_model_shorthand(model_str) {
+                        Some(resolved) => resolved.to_string(),
+                        None => model_str.clone(),
                     }
                 }
             } else {
@@ -7973,7 +8060,7 @@ impl App {
         let provider_arc = match self
             .state
             .providers
-            .get_provider_arc(Some(&self.state.active_provider_name), Some(&model_name))
+            .get_provider_arc(Some(&provider_name), Some(&model_name))
         {
             Ok(p) => p,
             Err(e) => {
@@ -7987,7 +8074,10 @@ impl App {
                     crate::sub_agent::worktree::remove_worktree(&wt, &br)
                 })
                 .await;
-                return Err(format!("spawn_agent: no active provider: {e}"));
+                return Err(format!(
+                    "spawn_agent: no provider/model available for {}/{}: {e}",
+                    provider_name, model_name
+                ));
             }
         };
 
@@ -8239,24 +8329,32 @@ impl App {
             .iter()
             .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
             .collect();
+
+        // Merge policy varies by permission mode:
+        // - Chug: auto-merge AutoMerge + AutoReconcile, hold only RequiresReview
+        // - Create/Plan: auto-merge only AutoMerge, hold AutoReconcile + RequiresReview
+        let is_chug = matches!(self.state.mode, crate::agent::permission::Mode::Chug);
+        let needs_hold = |o: &crate::sub_agent::conflict::Overlap| -> bool {
+            match o.resolution {
+                crate::sub_agent::conflict::OverlapResolution::RequiresReview => true,
+                crate::sub_agent::conflict::OverlapResolution::AutoReconcile => !is_chug,
+                crate::sub_agent::conflict::OverlapResolution::AutoMerge => false,
+            }
+        };
         let review_ids: std::collections::HashSet<uuid::Uuid> = report
             .overlaps
             .iter()
-            .filter(|o| {
-                matches!(
-                    o.resolution,
-                    crate::sub_agent::conflict::OverlapResolution::RequiresReview
-                )
-            })
+            .filter(|o| needs_hold(o))
             .flat_map(|o| o.participants.iter().map(|p| p.agent_id))
             .collect();
+        let has_holds = !review_ids.is_empty();
 
         if report.overlaps.is_empty() {
             for agent_change in &changes {
                 self.merge_single_agent(agent_change.agent_id).await;
             }
-        } else if !report.requires_review() {
-            // Only safe overlaps were detected — auto-merge or auto-reconcile them.
+        } else if !has_holds {
+            // Only safe overlaps were detected — auto-merge them.
             let warn_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
             self.state
                 .chat_messages
@@ -8271,7 +8369,7 @@ impl App {
                 ),
             });
         } else {
-            // Ambiguous overlaps remain — auto-merge safe participants and hold the rest.
+            // Overlaps need user review — auto-merge safe participants and hold the rest.
             let report_text = crate::sub_agent::conflict::format_conflict_report_text(&report);
             self.state.chat_messages.push(ChatMessage::System {
                 content: report_text,
@@ -10642,6 +10740,89 @@ impl App {
         });
     }
 
+    fn build_model_switch_handoff_context(
+        &self,
+        old_provider: &str,
+        old_model: &str,
+        new_provider: &str,
+        new_model: &str,
+    ) -> Option<String> {
+        if self.state.current_session_id.is_none()
+            || !has_meaningful_model_switch_context(
+                &self.state.chat_messages,
+                !self.state.modified_files.is_empty(),
+                !self.state.tool_counts.is_empty(),
+            )
+        {
+            return None;
+        }
+
+        let user_msgs: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        let modified: std::collections::HashMap<String, crate::skills::handoff::HandoffFileStats> =
+            self.state
+                .modified_files
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        crate::skills::handoff::HandoffFileStats {
+                            additions: v.additions,
+                            deletions: v.deletions,
+                        },
+                    )
+                })
+                .collect();
+
+        let open_tasks: Vec<&str> = self
+            .state
+            .chat_messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                ChatMessage::TaskOutline(outline) => Some(outline),
+                _ => None,
+            })
+            .map(|outline| {
+                outline
+                    .tasks
+                    .iter()
+                    .filter(|t| !matches!(t.status, TaskStatus::Completed | TaskStatus::Cancelled))
+                    .map(|t| t.content.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let focus = format!(
+            "Continuing this existing session after switching models from {old_provider}/{old_model} to {new_provider}/{new_model}. Preserve the current goals, constraints, unfinished tasks, and file-change context."
+        );
+        let ctx = crate::skills::handoff::HandoffContext {
+            session_id: self.state.current_session_id.as_deref(),
+            session_title: self.state.session_title.as_deref(),
+            provider_name: Some(new_provider),
+            model_name: Some(new_model),
+            turn_count: self.state.agent.turn_count,
+            user_messages: user_msgs,
+            modified_files: &modified,
+            tool_counts: &self.state.tool_counts,
+            open_tasks,
+            focus: Some(focus.as_str()),
+        };
+
+        let summary = crate::skills::handoff::build_handoff_summary(&ctx);
+        Some(format!(
+            "[Model switch: {old_provider}/{old_model} -> {new_provider}/{new_model}]\n\n{summary}"
+        ))
+    }
+
     /// Run end-of-session memory extraction if enabled and there are enough observations.
     async fn extract_session_memories(&mut self) {
         let memory_config = self.state.config.memory.clone().unwrap_or_default();
@@ -11014,14 +11195,17 @@ async fn run_spawn_agent_task(
                             };
                         }
                         for file in &mut files {
-                            let base_content =
-                                crate::sub_agent::worktree::read_file_at_commit(&base_sha, &file.path)
-                                    .ok()
-                                    .flatten();
-                            let new_content =
-                                crate::sub_agent::worktree::read_worktree_file(&worktree_path, &file.path)
-                                    .ok()
-                                    .flatten();
+                            let base_content = crate::sub_agent::worktree::read_file_at_commit(
+                                &base_sha, &file.path,
+                            )
+                            .ok()
+                            .flatten();
+                            let new_content = crate::sub_agent::worktree::read_worktree_file(
+                                &worktree_path,
+                                &file.path,
+                            )
+                            .ok()
+                            .flatten();
                             crate::sub_agent::conflict::enrich_file_change_semantics(
                                 file,
                                 base_content.as_deref(),
@@ -11454,6 +11638,29 @@ fn workspace_system_prompt_block(
     block
 }
 
+fn has_meaningful_model_switch_context(
+    chat_messages: &[ChatMessage],
+    has_modified_files: bool,
+    has_tool_counts: bool,
+) -> bool {
+    if has_modified_files || has_tool_counts {
+        return true;
+    }
+
+    let has_user_message = chat_messages
+        .iter()
+        .any(|msg| matches!(msg, ChatMessage::User { .. }));
+    let has_open_tasks = chat_messages.iter().rev().any(|msg| {
+        matches!(
+            msg,
+            ChatMessage::TaskOutline(outline)
+                if outline.tasks.iter().any(|t| !matches!(t.status, TaskStatus::Completed | TaskStatus::Cancelled))
+        )
+    });
+
+    has_user_message || has_open_tasks
+}
+
 #[cfg(test)]
 mod task_text_parse_tests {
     use super::*;
@@ -11488,6 +11695,37 @@ mod task_text_parse_tests {
     fn no_tasks_returns_none() {
         let text = "Just some regular text with no task patterns.";
         assert!(parse_tasks_from_text(text).is_none());
+    }
+}
+
+#[cfg(test)]
+mod model_switch_handoff_tests {
+    use super::*;
+
+    #[test]
+    fn meaningful_model_switch_context_when_user_message_present() {
+        let messages = vec![ChatMessage::User {
+            content: "debug this".into(),
+            images: vec![],
+        }];
+        assert!(has_meaningful_model_switch_context(&messages, false, false));
+    }
+
+    #[test]
+    fn meaningful_model_switch_context_when_open_tasks_present() {
+        let messages = vec![ChatMessage::TaskOutline(TaskOutline {
+            tasks: vec![Task {
+                content: "Fix bug".into(),
+                active_form: "Fixing bug".into(),
+                status: TaskStatus::InProgress,
+            }],
+        })];
+        assert!(has_meaningful_model_switch_context(&messages, false, false));
+    }
+
+    #[test]
+    fn no_model_switch_context_for_empty_idle_state() {
+        assert!(!has_meaningful_model_switch_context(&[], false, false));
     }
 }
 

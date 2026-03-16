@@ -188,10 +188,10 @@ pub fn parse_diff_hunks(diff_output: &str) -> Vec<FileChange> {
             if !line.starts_with("+++") {
                 current_added_lines.push(added.to_string());
             }
-        } else if let Some(removed) = line.strip_prefix('-') {
-            if !line.starts_with("---") {
-                current_removed_lines.push(removed.to_string());
-            }
+        } else if let Some(removed) = line.strip_prefix('-')
+            && !line.starts_with("---")
+        {
+            current_removed_lines.push(removed.to_string());
         }
     }
 
@@ -249,7 +249,7 @@ fn parse_hunk_header(line: &str) -> Option<HunkRange> {
     let start: u32 = parts.first()?.parse().ok()?;
     let count: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
     Some(HunkRange {
-        start,
+        start: start.max(1),
         end: if count == 0 {
             start.max(1)
         } else {
@@ -447,9 +447,7 @@ fn format_file_overlap_details(
     let hunk_details: Vec<String> = participants
         .iter()
         .filter(|p| !p.hunks.is_empty())
-        .map(|p| {
-            format!("{}: {}", p.task, format_hunk_ranges(&p.hunks))
-        })
+        .map(|p| format!("{}: {}", p.task, format_hunk_ranges(&p.hunks)))
         .collect();
     if !hunk_details.is_empty() {
         lines.push(format!("  lines: {}", hunk_details.join(" | ")));
@@ -477,7 +475,10 @@ fn format_file_overlap_details(
             .iter()
             .map(|(_, task, file)| format!("{task}: {}", format_hunk_ranges(&file.hunks)))
             .collect();
-        lines.push(format!("  non-overlapping hunks: {}", changed_by.join(" | ")));
+        lines.push(format!(
+            "  non-overlapping hunks: {}",
+            changed_by.join(" | ")
+        ));
     }
     lines.join("\n")
 }
@@ -599,7 +600,11 @@ fn detect_changed_symbols(
         .map(|text| extract_symbols(&file.path, text))
         .unwrap_or_default()
         .into_iter()
-        .filter(|symbol| file.hunks.iter().any(|h| h.start <= symbol.end && symbol.start <= h.end))
+        .filter(|symbol| {
+            file.hunks
+                .iter()
+                .any(|h| h.start <= symbol.end && symbol.start <= h.end)
+        })
         .map(|symbol| ChangedSymbol {
             name: symbol.name,
             kind: symbol.kind,
@@ -720,9 +725,8 @@ fn parse_symbol_declaration(path: &str, line: &str) -> Option<(SymbolKind, Strin
         .or_else(|| parse_python_symbol(line).filter(|_| ext == "py"))
         .or_else(|| parse_go_symbol(line).filter(|_| ext == "go"))
         .or_else(|| {
-            parse_js_like_symbol(line).filter(|_| {
-                matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs")
-            })
+            parse_js_like_symbol(line)
+                .filter(|_| matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs"))
         })
         .or_else(|| parse_generic_symbol(line))
 }
@@ -776,13 +780,7 @@ fn parse_python_symbol(line: &str) -> Option<(SymbolKind, String, String)> {
         r"^\s*(?:async\s+def|def)\s+([A-Za-z_]\w*)\s*\(",
         SymbolKind::Function,
     )
-    .or_else(|| {
-        capture_decl(
-            line,
-            r"^\s*class\s+([A-Za-z_]\w*)\b",
-            SymbolKind::Class,
-        )
-    })
+    .or_else(|| capture_decl(line, r"^\s*class\s+([A-Za-z_]\w*)\b", SymbolKind::Class))
 }
 
 fn parse_go_symbol(line: &str) -> Option<(SymbolKind, String, String)> {
@@ -888,15 +886,38 @@ fn parse_generic_symbol(line: &str) -> Option<(SymbolKind, String, String)> {
     })
 }
 
-fn capture_decl(line: &str, pattern: &str, kind: SymbolKind) -> Option<(SymbolKind, String, String)> {
-    let regex = Regex::new(pattern).ok()?;
+fn capture_decl(
+    line: &str,
+    pattern: &str,
+    kind: SymbolKind,
+) -> Option<(SymbolKind, String, String)> {
+    use std::cell::RefCell;
+    thread_local! {
+        static CACHE: RefCell<HashMap<&'static str, Regex>> = RefCell::new(HashMap::new());
+    }
+    // All patterns are string literals — cache compiled regexes to avoid
+    // recompiling on every call (~25 distinct patterns used repeatedly).
+    let regex = CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some(re) = map.get(pattern) {
+            return Some(re.clone());
+        }
+        let re = Regex::new(pattern).ok()?;
+        // All callers pass string literals; leak a copy to get a 'static key.
+        let key: &'static str = Box::leak(pattern.to_string().into_boxed_str());
+        map.insert(key, re.clone());
+        Some(re)
+    })?;
     let caps = regex.captures(line)?;
     let name = caps.get(1)?.as_str().to_string();
     Some((kind, name, line.trim().to_string()))
 }
 
 fn is_reserved_symbol_name(name: &str) -> bool {
-    matches!(name, "if" | "for" | "while" | "loop" | "match" | "switch" | "catch")
+    matches!(
+        name,
+        "if" | "for" | "while" | "loop" | "match" | "switch" | "catch"
+    )
 }
 
 fn normalize_signature(signature: &str) -> String {
@@ -1365,7 +1386,12 @@ index abc..def 100644
         ];
 
         let report = cross_agent_check(&changes);
-        assert!(report.overlaps.iter().any(|o| o.details.contains("interface drift")));
+        assert!(
+            report
+                .overlaps
+                .iter()
+                .any(|o| o.details.contains("interface drift"))
+        );
         assert!(report.requires_review());
     }
 

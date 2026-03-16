@@ -58,6 +58,7 @@ mod tests {
             tools: None,
             denied_tools: None,
             worktree: None,
+            auto_approve: None,
             source: AgentSource::Project,
             file_path: std::path::PathBuf::new(),
             system_prompt: String::new(),

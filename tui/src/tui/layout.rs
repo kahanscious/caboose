@@ -149,6 +149,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::AgentStreamOverlay(overlay_state) => {
                 render_agent_stream_overlay(frame, frame.area(), overlay_state, app, &colors);
             }
+            DialogKind::AgentsList(list_state) => {
+                render_agents_list(frame, list_state, app, &colors);
+            }
         }
     }
 }
@@ -1142,7 +1145,8 @@ fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
         return Vec::new();
     }
 
-    lines.iter()
+    lines
+        .iter()
         .flat_map(|line| {
             let plain = line
                 .spans
@@ -1155,7 +1159,10 @@ fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
             }
 
             let chars: Vec<char> = plain.chars().collect();
-            chars.chunks(width).map(|chunk| chunk.iter().collect()).collect()
+            chars
+                .chunks(width)
+                .map(|chunk| chunk.iter().collect())
+                .collect()
         })
         .collect()
 }
@@ -1805,6 +1812,11 @@ fn render_migration_checklist(
                 .iter()
                 .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::ClaudeMd(_)))
                 .count();
+            let agent_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::Agent(_)))
+                .count();
 
             let mut preview_lines: Vec<String> = vec!["Will apply:".to_string(), String::new()];
             if mcp_count > 0 {
@@ -1815,6 +1827,12 @@ fn render_migration_checklist(
             }
             if claude_md_count > 0 {
                 preview_lines.push("  + CLAUDE.md content to CABOOSE.md".to_string());
+            }
+            if agent_count > 0 {
+                preview_lines.push(format!(
+                    "  + {} agent definition(s) to .caboose/agents",
+                    agent_count
+                ));
             }
 
             let height: u16 = (preview_lines.len() as u16 + 5).min(area.height);
@@ -1974,6 +1992,75 @@ fn render_agent_stream_overlay(
         )),
         footer_area,
     );
+}
+
+fn render_agents_list(
+    frame: &mut Frame,
+    list_state: &crate::tui::dialog::AgentsListState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    let agents = &app.agent_definitions;
+
+    let content_rows = agents.len().max(1) as u16;
+    let height: u16 = (content_rows + 5).min(area.height);
+    let width: u16 = 72_u16.min(area.width);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Agents ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if agents.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No agents loaded. Add .md files to .caboose/agents/",
+            Style::default().fg(colors.text_secondary),
+        )));
+    } else {
+        let inner_w = width.saturating_sub(4) as usize;
+        for (i, agent) in agents.iter().enumerate() {
+            let model_tag = agent.model.as_deref().unwrap_or("default");
+            let source_tag = match agent.source {
+                crate::agents::AgentSource::Project => "project",
+                crate::agents::AgentSource::Global => "global",
+            };
+            let right = format!("{model_tag}  {source_tag}");
+            let left_max = inner_w.saturating_sub(right.len() + 2);
+            let left = format!("/{:<10} {}", agent.name, agent.description);
+            let left_truncated = if left.len() > left_max {
+                format!("{}…", &left[..left_max.saturating_sub(1)])
+            } else {
+                left
+            };
+            let padding = inner_w.saturating_sub(left_truncated.len() + right.len());
+            let row = format!("  {left_truncated}{:>pad$}{right}", "", pad = padding);
+
+            let style = if i == list_state.selected {
+                Style::default().fg(colors.text).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(row, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter: invoke | \u{2191}\u{2193}: navigate | Esc: close",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
 }
 
 #[cfg(test)]

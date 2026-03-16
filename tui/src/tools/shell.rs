@@ -33,11 +33,7 @@ pub async fn execute_with_env(input: &Value, additional_secrets: &[String]) -> R
         cmd.current_dir(cwd);
     }
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(timeout_ms),
-        cmd.output(),
-    )
-    .await;
+    let result = tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output()).await;
 
     match result {
         Ok(Ok(output)) => {

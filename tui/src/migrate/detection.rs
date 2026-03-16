@@ -34,8 +34,9 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
             paths
         }
         SourcePlatform::OpenCode => {
-            let mut paths = vec![home.join(".open-code")];
+            let mut paths = vec![home.join(".opencode"), home.join(".open-code")];
             if let Some(config) = dirs::config_dir() {
+                paths.push(config.join("opencode"));
                 paths.push(config.join("open-code"));
             }
             paths

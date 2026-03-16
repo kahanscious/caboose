@@ -1,4 +1,5 @@
 use crate::config::schema::McpServerConfig;
+use crate::migrate::agent_import::{render_caboose_agent_markdown, unique_agent_path};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -52,6 +53,7 @@ pub struct MigrationResult {
     pub mcp_servers_added: Vec<String>,
     pub system_prompt_migrated: bool,
     pub claude_md_converted: Vec<String>,
+    pub agents_imported: Vec<String>,
     #[allow(dead_code)]
     pub warnings: Vec<String>,
 }
@@ -104,6 +106,41 @@ pub fn apply_migration(items: &[crate::tui::dialog::MigrationItem]) -> Migration
                     result.claude_md_converted.push(path.display().to_string());
                 }
             }
+            MigrationItemKind::Agent(agent) => {
+                let agents_dir = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(".caboose")
+                    .join("agents");
+                let _ = std::fs::create_dir_all(&agents_dir);
+                let content = render_caboose_agent_markdown(agent);
+                let (target_path, renamed) = unique_agent_path(&agents_dir, &agent.name, &content);
+                if renamed {
+                    result.warnings.push(format!(
+                        "Agent '{}' already existed; imported copy as {}",
+                        agent.name,
+                        target_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&agent.name)
+                    ));
+                }
+                if let Err(e) = std::fs::write(&target_path, content) {
+                    result.warnings.push(format!(
+                        "Failed to import agent '{}' from {}: {e}",
+                        agent.name,
+                        agent.source_path.display()
+                    ));
+                    continue;
+                }
+                result.agents_imported.push(
+                    target_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&agent.name)
+                        .to_string(),
+                );
+                result.warnings.extend(agent.warnings.clone());
+            }
         }
     }
 
@@ -126,10 +163,18 @@ impl MigrationResult {
         if !self.claude_md_converted.is_empty() {
             parts.push("CLAUDE.md imported to CABOOSE.md".to_string());
         }
+        if !self.agents_imported.is_empty() {
+            parts.push(format!("{} agent(s) imported", self.agents_imported.len()));
+        }
         if parts.is_empty() {
             "No changes applied.".to_string()
         } else {
-            format!("Migration complete: {}", parts.join(", "))
+            let warning_suffix = if self.warnings.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} warning(s))", self.warnings.len())
+            };
+            format!("Migration complete: {}{}", parts.join(", "), warning_suffix)
         }
     }
 }
@@ -177,6 +222,7 @@ mod tests {
             mcp_servers_added: vec!["server1".into(), "server2".into()],
             system_prompt_migrated: true,
             claude_md_converted: vec!["path".into()],
+            agents_imported: vec![],
             warnings: vec![],
         };
         let summary = result.format_summary();
@@ -191,6 +237,7 @@ mod tests {
             mcp_servers_added: vec!["s1".into()],
             system_prompt_migrated: false,
             claude_md_converted: vec![],
+            agents_imported: vec![],
             warnings: vec![],
         };
         let summary = result.format_summary();

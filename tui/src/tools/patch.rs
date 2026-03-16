@@ -123,7 +123,10 @@ pub async fn execute(input: &Value) -> Result<ToolResult> {
 }
 
 /// Apply a single file entry from the patch.
-async fn apply_file_entry(entry: &PatchFileEntry, root: Option<&std::path::Path>) -> Result<String> {
+async fn apply_file_entry(
+    entry: &PatchFileEntry,
+    root: Option<&std::path::Path>,
+) -> Result<String> {
     let resolved_path = resolve_patch_path(&entry.file_path, root);
     match entry.status {
         FileStatus::Deleted => {

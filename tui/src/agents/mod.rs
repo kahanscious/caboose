@@ -15,6 +15,7 @@ pub struct AgentDefinition {
     pub tools: Option<Vec<String>>,
     pub denied_tools: Option<Vec<String>>,
     pub worktree: Option<bool>,
+    pub auto_approve: Option<bool>,
     #[allow(dead_code)]
     pub source: AgentSource,
     #[allow(dead_code)]
@@ -31,6 +32,7 @@ struct AgentFrontmatter {
     tools: Option<Vec<String>>,
     denied_tools: Option<Vec<String>>,
     worktree: Option<bool>,
+    auto_approve: Option<bool>,
 }
 
 /// Parse a markdown agent file into an AgentDefinition.
@@ -71,6 +73,7 @@ pub fn parse_agent_file(
         tools: fm.tools,
         denied_tools: fm.denied_tools,
         worktree: fm.worktree,
+        auto_approve: fm.auto_approve,
         source,
         file_path: file_path.to_path_buf(),
         system_prompt: body.to_string(),
@@ -442,6 +445,7 @@ mod tests {
                 tools: None,
                 denied_tools: None,
                 worktree: None,
+                auto_approve: None,
                 source: AgentSource::Project,
                 file_path: PathBuf::new(),
                 system_prompt: String::new(),
@@ -453,6 +457,7 @@ mod tests {
                 tools: None,
                 denied_tools: None,
                 worktree: None,
+                auto_approve: None,
                 source: AgentSource::Global,
                 file_path: PathBuf::new(),
                 system_prompt: String::new(),
@@ -484,5 +489,22 @@ mod tests {
     fn resolve_model_unknown_returns_none() {
         assert!(resolve_model_shorthand("gpt-5").is_none());
         assert!(resolve_model_shorthand("unknown").is_none());
+    }
+
+    #[test]
+    fn parse_auto_approve_field() {
+        let content =
+            "---\nname: fast-linter\ndescription: Lints code\nauto_approve: true\n---\nLint it.";
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
+        assert_eq!(def.auto_approve, Some(true));
+    }
+
+    #[test]
+    fn parse_auto_approve_default_is_none() {
+        let content = "---\nname: helper\ndescription: General helper\n---\nDo things.";
+        let def =
+            parse_agent_file(content, std::path::Path::new("a.md"), AgentSource::Project).unwrap();
+        assert!(def.auto_approve.is_none());
     }
 }
