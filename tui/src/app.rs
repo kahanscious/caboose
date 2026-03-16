@@ -176,6 +176,8 @@ pub struct State {
     pub skill_creation: Option<crate::skills::creation::SkillCreationState>,
     /// Pending handoff summary awaiting user confirmation (y/n).
     pub pending_handoff: Option<String>,
+    /// When true, the model picker spawns a handoff subagent instead of switching models.
+    pub handoff_agent_pending: bool,
     /// Embedded terminal panel (lazy — spawned on first Ctrl+=).
     pub terminal_panel: Option<crate::terminal::panel::TerminalPanel>,
     /// Whether the terminal panel has input focus (clicks route to PTY).
@@ -877,6 +879,7 @@ impl App {
                 rendered_chat_text: RefCell::new(Vec::new()),
                 skill_creation: None,
                 pending_handoff: None,
+                handoff_agent_pending: false,
                 terminal_panel: None,
                 terminal_focused: false,
                 terminal_area: Cell::new(None),
@@ -2594,6 +2597,17 @@ impl App {
             return;
         }
 
+        // Ctrl+H: handoff to another model via subagent
+        if key == KeyCode::Char('h')
+            && modifiers.contains(KeyModifiers::CONTROL)
+            && !self.state.dialog_stack.has_overlay()
+            && self.state.current_session_id.is_some()
+        {
+            self.state.handoff_agent_pending = true;
+            self.open_model_dropdown().await;
+            return;
+        }
+
         // Check command registry for keybind match (only when no overlay captures input)
         if !self.state.dialog_stack.has_overlay()
             && let Some(cmd) = self.state.commands.find_keybind(key, modifiers)
@@ -2601,6 +2615,7 @@ impl App {
         {
             // /model needs async model loading — handle specially
             if cmd.id == "model.open" {
+                self.state.handoff_agent_pending = false;
                 self.open_model_dropdown().await;
                 return;
             }
@@ -4585,7 +4600,12 @@ impl App {
                 });
                 self.state.slash_auto = None;
                 self.state.input.clear();
-                if self.state.roundhouse_model_add {
+                if self.state.handoff_agent_pending {
+                    self.state.handoff_agent_pending = false;
+                    if let Some((provider, model_id)) = selection {
+                        self.spawn_handoff_agent(&provider, &model_id).await;
+                    }
+                } else if self.state.roundhouse_model_add {
                     self.state.roundhouse_model_add = false;
                     if let Some((provider_id, display_name, model_id)) = display_for_roundhouse
                         && let Some(DialogKind::RoundhouseProviderPicker(picker)) =
@@ -10821,6 +10841,91 @@ impl App {
         Some(format!(
             "[Model switch: {old_provider}/{old_model} -> {new_provider}/{new_model}]\n\n{summary}"
         ))
+    }
+
+    /// Spawn a handoff subagent with the selected model to consult another model
+    /// with the current session context.
+    async fn spawn_handoff_agent(&mut self, provider_name: &str, model_id: &str) {
+        // Build handoff summary
+        let handoff = self.build_model_switch_handoff_context(
+            &self.state.active_provider_name,
+            &self.state.active_model_name,
+            provider_name,
+            model_id,
+        );
+        let summary = handoff.unwrap_or_else(|| {
+            format!(
+                "[Handoff to {provider_name}/{model_id}]\n\n\
+                 No meaningful context to summarize — session is new or empty."
+            )
+        });
+
+        // Build the task: handoff context + instruction to continue
+        let task = format!(
+            "{summary}\n\n\
+             Review this handoff and continue where the previous model left off. \
+             Focus on any open tasks or unfinished work described above."
+        );
+
+        let spawn_args = serde_json::json!({
+            "task": task,
+        });
+
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("Handoff: spawning subagent with {provider_name}/{model_id}..."),
+        });
+
+        // Temporarily override active provider/model for spawn_agent_setup
+        let orig_provider = self.state.active_provider_name.clone();
+        let orig_model = self.state.active_model_name.clone();
+        self.state.active_provider_name = provider_name.to_string();
+        self.state.active_model_name = model_id.to_string();
+
+        match self.spawn_agent_setup(&spawn_args).await {
+            Ok((agent_id, input, provider, config, tx, task, branch, worktree_path, base_sha)) => {
+                let placeholder_idx = self.state.chat_messages.len();
+                self.state
+                    .chat_messages
+                    .push(ChatMessage::Tool(ToolMessage {
+                        name: "spawn_agent".to_string(),
+                        args: spawn_args.clone(),
+                        output: None,
+                        status: ToolStatus::Running,
+                        expanded: false,
+                        file_path: None,
+                        diff_preview: None,
+                        diff_expanded: false,
+                    }));
+                let tool_use_id = format!("handoff-{}", uuid::Uuid::new_v4());
+                let handle = tokio::spawn(run_spawn_agent_task(
+                    agent_id,
+                    tool_use_id.clone(),
+                    task,
+                    branch,
+                    worktree_path,
+                    base_sha,
+                    input,
+                    provider,
+                    config,
+                    tx,
+                ));
+                self.state.spawn_agent_handles.push(SpawnAgentHandle {
+                    tool_use_id,
+                    arguments: spawn_args,
+                    chat_placeholder_idx: placeholder_idx,
+                    handle,
+                });
+            }
+            Err(err_msg) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Handoff agent failed: {err_msg}"),
+                });
+            }
+        }
+
+        // Restore original provider/model
+        self.state.active_provider_name = orig_provider;
+        self.state.active_model_name = orig_model;
     }
 
     /// Run end-of-session memory extraction if enabled and there are enough observations.
