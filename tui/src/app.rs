@@ -3003,108 +3003,15 @@ impl App {
                             }
                             return;
                         }
-                        if slash == "init" {
-                            self.handle_init_command();
-                            return;
-                        }
-                        if slash == "mcp" {
-                            self.open_mcp_picker();
-                            return;
-                        }
-                        if slash.starts_with("mcp ") {
-                            self.handle_mcp_command(slash).await;
-                            return;
-                        }
-                        if slash == "workspace" || slash.starts_with("workspace ") {
-                            self.handle_workspace_command(slash);
-                            return;
-                        }
-                        // /model needs async model loading — handle specially
-                        if slash == "model" {
-                            self.open_model_dropdown().await;
-                            return;
-                        }
-                        // /memories — display current memory contents
-                        if slash == "memories" {
-                            self.handle_memories_command();
-                            return;
-                        }
-                        // /forget — list memories for removal
-                        if slash == "forget" {
-                            self.handle_forget_command();
-                            return;
-                        }
-                        // /create-skill — LLM-guided skill creation
-                        if slash.starts_with("create-skill") {
-                            let args = slash.strip_prefix("create-skill").unwrap_or("").trim();
-                            self.handle_create_skill_command(args);
-                            return;
-                        }
-                        // /settings — open settings picker
-                        if slash == "settings" {
-                            self.open_settings_picker();
-                            return;
-                        }
-                        // /rewind — open checkpoint picker
-                        if slash == "rewind" {
-                            self.open_rewind_picker();
-                            return;
-                        }
-                        // /roundhouse — parse --critique / --no-critique flags
-                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
-                            if slash.contains("--no-critique") {
-                                self.state.roundhouse_critique_override = Some(false);
-                            } else if slash.contains("--critique") {
-                                self.state.roundhouse_critique_override = Some(true);
-                            } else {
-                                self.state.roundhouse_critique_override = None;
+                        if self.handle_shared_slash(slash).await {
+                            // /pins on home screen should switch to chat
+                            if slash == "pins" {
+                                self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
                             }
-                        }
-                        // /roundhouse execute|cancel — subcommands
-                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
-                            self.handle_roundhouse_subcommand(sub.trim());
-                            return;
-                        }
-                        // /circuit <interval> "prompt" | stop <id> | stop-all
-                        if let Some(args) = slash.strip_prefix("circuit ") {
-                            self.handle_circuit_command(args.trim()).await;
-                            return;
-                        }
-                        // /watch pr <number> | /watch mr <number>
-                        if let Some(args) = slash.strip_prefix("watch ") {
-                            self.handle_watch_command(args.trim()).await;
-                            return;
-                        }
-                        // /pin, /pins, /unpin
-                        if slash == "pin" || slash.starts_with("pin ") {
-                            self.handle_pin_command(slash);
-                            return;
-                        }
-                        if slash == "pins" {
-                            self.handle_pins_command();
-                            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
-                            return;
-                        }
-                        if slash == "unpin" || slash.starts_with("unpin ") {
-                            self.handle_unpin_command(slash);
-                            return;
-                        }
-                        // /new — extract memories and clean up cold storage before clearing session
-                        if slash == "new" {
-                            self.extract_session_memories().await;
-                            if let Some(ref store) = self.state.agent.cold_store {
-                                let _ = store.cleanup();
-                            }
-                        }
-                        if let Some(cmd) = self.state.commands.find_slash(slash)
-                            && (cmd.available)(&self.state)
-                        {
-                            let action = (cmd.execute)(&mut self.state);
-                            self.process_action(action).await;
                             return;
                         }
 
-                        // Try skill resolution after command registry check
+                        // Try skill resolution after shared slash dispatch
                         {
                             // Reload skills and agents from disk before resolution (picks up external changes)
                             let skills_disabled = self
@@ -3938,17 +3845,7 @@ impl App {
                             }
                             return;
                         }
-                        if slash == "init" {
-                            self.handle_init_command();
-                            return;
-                        }
-                        // /create-skill — LLM-guided skill creation
-                        if slash.starts_with("create-skill") {
-                            let args = slash.strip_prefix("create-skill").unwrap_or("").trim();
-                            self.handle_create_skill_command(args);
-                            return;
-                        }
-                        // /cancel — cancel skill creation
+                        // Chat-only slash commands
                         if slash == "cancel" && self.state.skill_creation.is_some() {
                             self.state.skill_creation = None;
                             self.state.chat_messages.push(ChatMessage::System {
@@ -3956,104 +3853,17 @@ impl App {
                             });
                             return;
                         }
-                        if slash == "mcp" {
-                            self.open_mcp_picker();
-                            return;
-                        }
-                        if slash.starts_with("mcp ") {
-                            self.handle_mcp_command(slash).await;
-                            return;
-                        }
-                        if slash == "workspace" || slash.starts_with("workspace ") {
-                            self.handle_workspace_command(slash);
-                            return;
-                        }
-                        // /model needs async model loading — handle specially
-                        if slash == "model" {
-                            self.open_model_dropdown().await;
-                            return;
-                        }
-                        // /memories — display current memory contents
-                        if slash == "memories" {
-                            self.handle_memories_command();
-                            return;
-                        }
-                        // /forget — list memories for removal
-                        if slash == "forget" {
-                            self.handle_forget_command();
-                            return;
-                        }
-                        // /settings — open settings picker
-                        if slash == "settings" {
-                            self.open_settings_picker();
-                            return;
-                        }
-                        // /rewind — open checkpoint picker
-                        if slash == "rewind" {
-                            self.open_rewind_picker();
-                            return;
-                        }
-                        // /fork — fork current session
                         if slash == "fork" {
                             self.handle_fork_command();
                             return;
                         }
-                        // /handoff — build handoff summary
                         if slash == "handoff" || slash.starts_with("handoff ") {
                             let args = slash.strip_prefix("handoff").unwrap_or("").trim();
                             self.handle_handoff_command(args).await;
                             return;
                         }
-                        // /roundhouse — parse --critique / --no-critique flags
-                        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
-                            if slash.contains("--no-critique") {
-                                self.state.roundhouse_critique_override = Some(false);
-                            } else if slash.contains("--critique") {
-                                self.state.roundhouse_critique_override = Some(true);
-                            } else {
-                                self.state.roundhouse_critique_override = None;
-                            }
-                        }
-                        // /roundhouse execute|cancel — subcommands
-                        if let Some(sub) = slash.strip_prefix("roundhouse ") {
-                            self.handle_roundhouse_subcommand(sub.trim());
-                            return;
-                        }
-                        // /circuit <interval> "prompt" | stop <id> | stop-all
-                        if let Some(args) = slash.strip_prefix("circuit ") {
-                            self.handle_circuit_command(args.trim()).await;
-                            return;
-                        }
-                        // /watch pr <number> | /watch mr <number>
-                        if let Some(args) = slash.strip_prefix("watch ") {
-                            self.handle_watch_command(args.trim()).await;
-                            return;
-                        }
-                        // /pin, /pins, /unpin
-                        if slash == "pin" || slash.starts_with("pin ") {
-                            self.handle_pin_command(slash);
-                            return;
-                        }
-                        if slash == "pins" {
-                            self.handle_pins_command();
-                            return;
-                        }
-                        if slash == "unpin" || slash.starts_with("unpin ") {
-                            self.handle_unpin_command(slash);
-                            return;
-                        }
-                        // /new — extract memories and clean up cold storage before clearing session
-                        if slash == "new" {
-                            self.extract_session_memories().await;
-                            if let Some(ref store) = self.state.agent.cold_store {
-                                let _ = store.cleanup();
-                            }
-                        }
-                        if let Some(cmd) = self.state.commands.find_slash(slash)
-                            && (cmd.available)(&self.state)
-                        {
-                            let action = (cmd.execute)(&mut self.state);
-                            self.process_action(action).await;
+                        // Shared slash commands
+                        if self.handle_shared_slash(slash).await {
                             return;
                         }
                     }
@@ -10679,6 +10489,103 @@ impl App {
                 "Session forked from {short_parent_id}. You're now in a new branch with full conversation history."
             ),
         });
+    }
+
+    /// Shared slash command dispatch — handles commands common to both home and chat screens.
+    /// Returns true if the command was handled.
+    async fn handle_shared_slash(&mut self, slash: &str) -> bool {
+        if slash == "init" {
+            self.handle_init_command();
+            return true;
+        }
+        if slash == "mcp" {
+            self.open_mcp_picker();
+            return true;
+        }
+        if slash.starts_with("mcp ") {
+            self.handle_mcp_command(slash).await;
+            return true;
+        }
+        if slash == "workspace" || slash.starts_with("workspace ") {
+            self.handle_workspace_command(slash);
+            return true;
+        }
+        if slash == "model" {
+            self.state.handoff_agent_pending = false;
+            self.open_model_dropdown().await;
+            return true;
+        }
+        if slash == "memories" {
+            self.handle_memories_command();
+            return true;
+        }
+        if slash == "forget" {
+            self.handle_forget_command();
+            return true;
+        }
+        if slash.starts_with("create-skill") {
+            let args = slash.strip_prefix("create-skill").unwrap_or("").trim();
+            self.handle_create_skill_command(args);
+            return true;
+        }
+        if slash == "settings" {
+            self.open_settings_picker();
+            return true;
+        }
+        if slash == "rewind" {
+            self.open_rewind_picker();
+            return true;
+        }
+        // /roundhouse — parse --critique / --no-critique flags
+        if slash == "roundhouse" || slash.starts_with("roundhouse ") {
+            if slash.contains("--no-critique") {
+                self.state.roundhouse_critique_override = Some(false);
+            } else if slash.contains("--critique") {
+                self.state.roundhouse_critique_override = Some(true);
+            } else {
+                self.state.roundhouse_critique_override = None;
+            }
+        }
+        if let Some(sub) = slash.strip_prefix("roundhouse ") {
+            self.handle_roundhouse_subcommand(sub.trim());
+            return true;
+        }
+        if let Some(args) = slash.strip_prefix("circuit ") {
+            self.handle_circuit_command(args.trim()).await;
+            return true;
+        }
+        if let Some(args) = slash.strip_prefix("watch ") {
+            self.handle_watch_command(args.trim()).await;
+            return true;
+        }
+        if slash == "pin" || slash.starts_with("pin ") {
+            self.handle_pin_command(slash);
+            return true;
+        }
+        if slash == "pins" {
+            self.handle_pins_command();
+            return true;
+        }
+        if slash == "unpin" || slash.starts_with("unpin ") {
+            self.handle_unpin_command(slash);
+            return true;
+        }
+        // /new — extract memories and clean up cold storage before clearing session
+        if slash == "new" {
+            self.extract_session_memories().await;
+            if let Some(ref store) = self.state.agent.cold_store {
+                let _ = store.cleanup();
+            }
+        }
+        // Command registry fallback
+        if let Some(cmd) = self.state.commands.find_slash(slash)
+            && (cmd.available)(&self.state)
+        {
+            let action = (cmd.execute)(&mut self.state);
+            self.process_action(action).await;
+            return true;
+        }
+        false
     }
 
     /// Handle the /handoff command — build summary and prompt for new session.
