@@ -704,6 +704,10 @@ impl App {
             }
         };
 
+        // Session pins
+        // (At construction time pins are empty; they are injected dynamically
+        // when loaded from a resumed session or added via /pin.)
+
         // Inject spawn_agent guidance
         let system_prompt = {
             let mut prompt = system_prompt;
@@ -926,6 +930,39 @@ impl App {
         Ok(app)
     }
 
+    /// Sync session pins into the agent's system prompt.
+    ///
+    /// Strips any existing `## Session Pins` section and, if pins are non-empty,
+    /// appends a fresh one right before the `## Subagents` section.
+    fn sync_pins_to_system_prompt(&mut self) {
+        let prompt = &mut self.state.agent.conversation.system_prompt;
+
+        // Remove any existing pins section
+        if let Some(start) = prompt.find("\n\n## Session Pins") {
+            // Find where the next section begins (or end of string)
+            let after = &prompt[start + 1..];
+            let end = after
+                .find("\n\n## ")
+                .map(|pos| start + 1 + pos)
+                .unwrap_or(prompt.len());
+            prompt.replace_range(start..end, "");
+        }
+
+        // Insert pins before the Subagents section (if present)
+        if !self.state.pins.is_empty() {
+            let mut pins_block =
+                String::from("\n\n## Session Pins (user-set rules for this session)\n");
+            for (i, pin) in self.state.pins.iter().enumerate() {
+                pins_block.push_str(&format!("{}. {pin}\n", i + 1));
+            }
+            if let Some(pos) = prompt.find("\n\n## Subagents") {
+                prompt.insert_str(pos, &pins_block);
+            } else {
+                prompt.push_str(&pins_block);
+            }
+        }
+    }
+
     /// Restore a session from the database, loading messages into the chat.
     fn restore_session(&mut self, session_id: &str) {
         let session = match self.state.sessions.get(session_id) {
@@ -947,6 +984,7 @@ impl App {
         self.state.current_session_id = Some(session.id.clone());
         self.state.pins = session.pins.clone();
         self.state.pins_expanded = false;
+        self.sync_pins_to_system_prompt();
         self.state.agent.init_cold_store(&session.id);
         self.state.session_title = session.title.clone();
         self.state.agent.session_allows.clear();
@@ -3917,6 +3955,7 @@ impl App {
                                 return;
                             }
                             self.state.pins.push(text.clone());
+                            self.sync_pins_to_system_prompt();
                             if let Some(ref sid) = self.state.current_session_id {
                                 let _ = self.state.sessions.update_pins(sid, &self.state.pins);
                             }
@@ -3957,6 +3996,7 @@ impl App {
                                 } else {
                                     let count = self.state.pins.len();
                                     self.state.pins.clear();
+                                    self.sync_pins_to_system_prompt();
                                     if let Some(ref sid) = self.state.current_session_id {
                                         let _ =
                                             self.state.sessions.update_pins(sid, &self.state.pins);
@@ -3975,6 +4015,7 @@ impl App {
                                     });
                                 } else {
                                     let removed = self.state.pins.remove(n - 1);
+                                    self.sync_pins_to_system_prompt();
                                     if let Some(ref sid) = self.state.current_session_id {
                                         let _ =
                                             self.state.sessions.update_pins(sid, &self.state.pins);
