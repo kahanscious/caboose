@@ -232,9 +232,9 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
     let pin_bar_height = if app.pins.is_empty() {
         0
     } else if app.pins_expanded {
-        (app.pins.len() + 1) as u16
+        (app.pins.len() + 2) as u16 // header + pins + padding
     } else {
-        1
+        2 // collapsed line + padding
     };
 
     let mut v_constraints: Vec<Constraint> = vec![
