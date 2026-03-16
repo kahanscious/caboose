@@ -4,8 +4,7 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-/// Tools allowed during the planning phase (read-only)
-const PLANNING_TOOLS: &[&str] = &["read_file", "glob", "grep", "list_directory"];
+use crate::tools::names;
 
 /// Maximum number of tool-use loops before forcing completion
 const MAX_TOOL_ROUNDS: usize = 20;
@@ -14,7 +13,7 @@ const MAX_TOOL_ROUNDS: usize = 20;
 pub fn planning_tool_subset(all_tools: &[ToolDefinition]) -> Vec<ToolDefinition> {
     all_tools
         .iter()
-        .filter(|t| PLANNING_TOOLS.contains(&t.name.as_str()))
+        .filter(|t| names::PLANNING_TOOLS.contains(&t.name.as_str()))
         .cloned()
         .collect()
 }
@@ -58,16 +57,16 @@ pub enum PlannerUpdate {
 /// Only handles read_file, glob, grep, list_directory.
 async fn execute_read_only_tool(name: &str, input: &Value) -> Result<String, String> {
     let result = match name {
-        "read_file" => crate::tools::read::execute(input)
+        names::READ_FILE => crate::tools::read::execute(input)
             .await
             .map_err(|e| e.to_string())?,
-        "glob" => crate::tools::glob::execute(input)
+        names::GLOB => crate::tools::glob::execute(input)
             .await
             .map_err(|e| e.to_string())?,
-        "grep" => crate::tools::grep::execute(input)
+        names::GREP => crate::tools::grep::execute(input)
             .await
             .map_err(|e| e.to_string())?,
-        "list_directory" => crate::tools::read::execute_list_dir(input)
+        names::LIST_DIRECTORY => crate::tools::read::execute_list_dir(input)
             .await
             .map_err(|e| e.to_string())?,
         _ => {
@@ -245,22 +244,22 @@ async fn run_planner_inner(
 
             // Build a brief args summary for the "running" state
             let args_summary = match name.as_str() {
-                "read_file" => input_val
+                names::READ_FILE => input_val
                     .get("file_path")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
-                "glob" => input_val
+                names::GLOB => input_val
                     .get("pattern")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
-                "grep" => input_val
+                names::GREP => input_val
                     .get("pattern")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
-                "list_directory" => input_val
+                names::LIST_DIRECTORY => input_val
                     .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or(".")
@@ -288,19 +287,19 @@ async fn run_planner_inner(
                 name.clone()
             } else {
                 match name.as_str() {
-                    "read_file" => {
+                    names::READ_FILE => {
                         let line_count = output.lines().count();
                         format!("{args_summary} ({line_count} lines)")
                     }
-                    "glob" => {
+                    names::GLOB => {
                         let match_count = output.lines().count();
                         format!("{args_summary} ({match_count} matches)")
                     }
-                    "grep" => {
+                    names::GREP => {
                         let match_count = output.lines().count();
                         format!("{args_summary} ({match_count} results)")
                     }
-                    "list_directory" => args_summary.clone(),
+                    names::LIST_DIRECTORY => args_summary.clone(),
                     _ => name.clone(),
                 }
             };

@@ -6,6 +6,7 @@ pub mod fetch;
 pub mod glob;
 pub mod grep;
 pub mod lsp;
+pub mod names;
 pub mod patch;
 pub mod read;
 pub mod shell;
