@@ -51,40 +51,6 @@ pub fn reindex_from_lines(conn: &Connection, lines: &[(&str, &str)]) -> Result<(
     Ok(())
 }
 
-/// Search memories by keyword using FTS5. Returns results ranked by relevance.
-#[allow(dead_code)]
-pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MemoryHit>> {
-    // FTS5 query — use simple prefix matching
-    let fts_query = query
-        .split_whitespace()
-        .map(|w| format!("\"{}\"", w.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-
-    if fts_query.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut stmt = conn.prepare(
-        "SELECT mi.content, mi.source, rank
-         FROM memory_fts
-         JOIN memory_index mi ON mi.rowid = memory_fts.rowid
-         WHERE memory_fts MATCH ?1
-         ORDER BY rank
-         LIMIT ?2",
-    )?;
-
-    let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
-        Ok(MemoryHit {
-            content: row.get(0)?,
-            source: row.get(1)?,
-            rank: row.get(2)?,
-        })
-    })?;
-
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,36 +71,11 @@ mod tests {
         ];
         reindex_from_lines(&conn, &lines).unwrap();
 
-        let results = search(&conn, "bun npm", 10).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].content.contains("bun"));
-    }
-
-    #[test]
-    fn search_returns_ranked_results() {
-        let conn = test_conn();
-        let lines = vec![
-            ("project", "Project uses React with TypeScript"),
-            ("project", "TypeScript strict mode enabled"),
-            ("global", "Prefer TypeScript over JavaScript"),
-        ];
-        reindex_from_lines(&conn, &lines).unwrap();
-
-        let results = search(&conn, "TypeScript", 10).unwrap();
-        assert!(results.len() >= 2);
-    }
-
-    #[test]
-    fn search_respects_limit() {
-        let conn = test_conn();
-        let lines: Vec<_> = (0..20)
-            .map(|i| ("project", format!("Memory item {i} about Rust")))
-            .collect();
-        let refs: Vec<_> = lines.iter().map(|(s, c)| (*s, c.as_str())).collect();
-        reindex_from_lines(&conn, &refs).unwrap();
-
-        let results = search(&conn, "Rust", 5).unwrap();
-        assert_eq!(results.len(), 5);
+        // Verify rows were inserted
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_index", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
     }
 
     #[test]
@@ -143,9 +84,9 @@ mod tests {
         reindex_from_lines(&conn, &[("project", "old fact")]).unwrap();
         reindex_from_lines(&conn, &[("project", "new fact")]).unwrap();
 
-        let results = search(&conn, "old", 10).unwrap();
-        assert!(results.is_empty());
-        let results = search(&conn, "new", 10).unwrap();
-        assert_eq!(results.len(), 1);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_index", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

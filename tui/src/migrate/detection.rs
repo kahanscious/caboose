@@ -51,15 +51,6 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
     }
 }
 
-/// Check which platforms have detectable configs
-#[allow(dead_code)]
-pub fn detect_installed_platforms() -> Vec<SourcePlatform> {
-    SourcePlatform::all()
-        .into_iter()
-        .filter(|p| config_paths(p).iter().any(|path| path.exists()))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

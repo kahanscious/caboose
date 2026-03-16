@@ -57,19 +57,6 @@ pub fn scan_codex(config_dirs: &[PathBuf]) -> CodexConfig {
     result
 }
 
-/// Summary of what's available for import
-#[allow(dead_code)]
-pub fn importable_items(config: &CodexConfig) -> Vec<String> {
-    let mut items = Vec::new();
-    if config.instructions.is_some() {
-        items.push("Configuration instructions".to_string());
-    }
-    if config.instructions_md.is_some() {
-        items.push("Instructions file".to_string());
-    }
-    items
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,36 +137,5 @@ mod tests {
         let config = scan_codex(&[dir.path().to_path_buf()]);
         assert_eq!(config.instructions.as_deref(), Some("Be brief"));
         assert_eq!(config.instructions_md.as_deref(), Some("Extended notes"));
-    }
-
-    #[test]
-    fn test_importable_items_empty() {
-        let config = CodexConfig::default();
-        assert!(importable_items(&config).is_empty());
-    }
-
-    #[test]
-    fn test_importable_items_with_data() {
-        let config = CodexConfig {
-            config_path: None,
-            instructions: Some("cfg instructions".into()),
-            instructions_md: Some("md content".into()),
-        };
-        let items = importable_items(&config);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0], "Configuration instructions");
-        assert_eq!(items[1], "Instructions file");
-    }
-
-    #[test]
-    fn test_importable_items_instructions_only() {
-        let config = CodexConfig {
-            config_path: None,
-            instructions: Some("only cfg".into()),
-            instructions_md: None,
-        };
-        let items = importable_items(&config);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0], "Configuration instructions");
     }
 }

@@ -215,28 +215,6 @@ pub fn render_provider_error(
     lines
 }
 
-/// Render a queued user message — dimmed with a "queued" indicator.
-#[allow(dead_code)]
-pub fn render_queued_message(content: &str, colors: &Colors) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    lines.push(Line::from(vec![
-        Span::styled("◌ ", Style::default().fg(colors.text_dim)),
-        Span::styled("You", Style::default().fg(colors.text_dim)),
-        Span::styled(" (queued)", Style::default().fg(colors.text_dim).italic()),
-    ]));
-
-    for text_line in content.lines() {
-        lines.push(Line::from(Span::styled(
-            text_line.to_string(),
-            Style::default().fg(colors.text_dim),
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines
-}
-
 /// Detect if a line is a table separator (e.g., |------|-----|)
 fn is_table_separator(line: &str) -> bool {
     let trimmed = line.trim();

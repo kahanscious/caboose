@@ -174,25 +174,6 @@ fn parse_string_list(value: &serde_yml::Value) -> Vec<String> {
     }
 }
 
-/// Summary of what's available for import
-#[allow(dead_code)]
-pub fn importable_items(config: &ClaudeCodeConfig) -> Vec<String> {
-    let mut items = Vec::new();
-    if !config.mcp_servers.is_empty() {
-        items.push(format!("{} MCP server(s)", config.mcp_servers.len()));
-    }
-    if config.system_prompt.is_some() {
-        items.push("System prompt".into());
-    }
-    for path in &config.claude_md_paths {
-        items.push(format!("CLAUDE.md ({})", path.display()));
-    }
-    for agent in &config.agents {
-        items.push(format!("Agent ({})", agent.name));
-    }
-    items
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,33 +185,6 @@ mod tests {
         assert!(config.mcp_servers.is_empty());
         assert!(config.system_prompt.is_none());
         assert!(config.agents.is_empty());
-    }
-
-    #[test]
-    fn test_importable_items_empty() {
-        let config = ClaudeCodeConfig {
-            settings_path: None,
-            claude_md_paths: Vec::new(),
-            mcp_servers: Vec::new(),
-            system_prompt: None,
-            agents: Vec::new(),
-            permission_mode: None,
-        };
-        assert!(importable_items(&config).is_empty());
-    }
-
-    #[test]
-    fn test_importable_items_with_data() {
-        let config = ClaudeCodeConfig {
-            settings_path: None,
-            claude_md_paths: vec![PathBuf::from("/proj/CLAUDE.md")],
-            mcp_servers: vec![("server1".into(), serde_json::json!({}))],
-            system_prompt: Some("test prompt".into()),
-            agents: vec![],
-            permission_mode: None,
-        };
-        let items = importable_items(&config);
-        assert_eq!(items.len(), 3);
     }
 
     #[test]

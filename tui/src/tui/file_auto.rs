@@ -44,16 +44,6 @@ pub fn extract_at_prefix(input: &str) -> Option<&str> {
     Some(&input[at_pos + 1..])
 }
 
-/// Filter file paths that start with the given prefix.
-#[allow(dead_code)]
-pub fn filter_file_matches<'a>(prefix: &str, files: &[&'a str]) -> Vec<&'a str> {
-    files
-        .iter()
-        .filter(|f| f.starts_with(prefix))
-        .copied()
-        .collect()
-}
-
 /// Score a directory path against a query string for workspace dir scanning.
 /// Returns `Some(score)` if it matches (lower = better), `None` if no match.
 pub fn score_path_for_dir(path: &str, query: &str) -> Option<u32> {
@@ -186,20 +176,6 @@ mod tests {
     #[test]
     fn extract_at_prefix_no_space_before_at() {
         assert_eq!(extract_at_prefix("email@domain"), None);
-    }
-
-    #[test]
-    fn filter_matches_basic() {
-        let files = vec!["src/main.rs", "src/app.rs", "src/lib.rs", "README.md"];
-        let matches = filter_file_matches("src/m", &files);
-        assert_eq!(matches, vec!["src/main.rs"]);
-    }
-
-    #[test]
-    fn filter_matches_empty_prefix() {
-        let files = vec!["a.rs", "b.rs"];
-        let matches = filter_file_matches("", &files);
-        assert_eq!(matches.len(), 2);
     }
 
     #[test]

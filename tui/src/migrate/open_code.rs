@@ -466,22 +466,6 @@ fn dedupe_tool_vec(values: Vec<String>) -> Option<Vec<String>> {
     }
 }
 
-/// Summary of what's available for import
-#[allow(dead_code)]
-pub fn importable_items(config: &OpenCodeConfig) -> Vec<String> {
-    let mut items = Vec::new();
-    if !config.mcp_servers.is_empty() {
-        items.push(format!("{} MCP server(s)", config.mcp_servers.len()));
-    }
-    if config.system_prompt.is_some() {
-        items.push("Custom instructions".to_string());
-    }
-    for agent in &config.agents {
-        items.push(format!("Agent ({})", agent.name));
-    }
-    items
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,29 +538,6 @@ mod tests {
 
         let config = scan_open_code(&[dir.path().to_path_buf()], None);
         assert_eq!(config.system_prompt.as_deref(), Some("From config"));
-    }
-
-    #[test]
-    fn test_importable_items_empty() {
-        let config = OpenCodeConfig::default();
-        assert!(importable_items(&config).is_empty());
-    }
-
-    #[test]
-    fn test_importable_items_with_data() {
-        let config = OpenCodeConfig {
-            config_path: None,
-            mcp_servers: vec![
-                ("s1".into(), serde_json::json!({})),
-                ("s2".into(), serde_json::json!({})),
-            ],
-            system_prompt: Some("prompt".into()),
-            agents: vec![],
-        };
-        let items = importable_items(&config);
-        assert_eq!(items.len(), 2);
-        assert!(items[0].contains("2 MCP server(s)"));
-        assert_eq!(items[1], "Custom instructions");
     }
 
     #[test]

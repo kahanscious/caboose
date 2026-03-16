@@ -38,19 +38,6 @@ pub fn backoff_delay(base: Duration, attempt: u32) -> Duration {
     Duration::from_millis(delay_ms + padding_ms)
 }
 
-/// Calculate backoff delay, respecting server-provided Retry-After if available.
-///
-/// Note: currently unused by RetryProvider because Retry-After duration is lost
-/// when provider errors are flattened to anyhow strings. Kept for future use when
-/// structured error propagation is added.
-#[allow(dead_code)]
-pub fn effective_delay(base: Duration, attempt: u32, retry_after: Option<Duration>) -> Duration {
-    match retry_after {
-        Some(server_delay) => server_delay.max(backoff_delay(base, attempt)),
-        None => backoff_delay(base, attempt),
-    }
-}
-
 /// Parse the Retry-After header value (seconds) into a Duration.
 pub fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse::<u64>().ok().map(Duration::from_secs)
@@ -72,12 +59,6 @@ impl RetryProvider {
             inner,
             policy: RetryPolicy::default(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_policy(mut self, policy: RetryPolicy) -> Self {
-        self.policy = policy;
-        self
     }
 }
 
@@ -203,21 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn effective_delay_respects_retry_after() {
-        let base = Duration::from_secs(2);
-        let server = Duration::from_secs(30);
-        let delay = effective_delay(base, 0, Some(server));
-        assert!(delay >= Duration::from_secs(30));
-    }
-
-    #[test]
-    fn effective_delay_uses_backoff_when_no_retry_after() {
-        let base = Duration::from_secs(2);
-        let delay = effective_delay(base, 0, None);
-        assert!(delay.as_millis() >= 2000 && delay.as_millis() <= 2500);
-    }
-
-    #[test]
     fn parse_retry_after_valid() {
         assert_eq!(parse_retry_after("30"), Some(Duration::from_secs(30)));
         assert_eq!(parse_retry_after(" 5 "), Some(Duration::from_secs(5)));
@@ -244,6 +210,13 @@ mod retry_provider_tests {
     use futures::StreamExt;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    impl RetryProvider {
+        fn with_test_policy(mut self, policy: RetryPolicy) -> Self {
+            self.policy = policy;
+            self
+        }
+    }
 
     /// A mock provider that fails N times then succeeds.
     struct FailingProvider {
@@ -301,7 +274,7 @@ mod retry_provider_tests {
     #[tokio::test]
     async fn retry_provider_retries_on_server_error() {
         let inner = FailingProvider::new(2);
-        let provider = RetryProvider::new(Arc::new(inner)).with_policy(RetryPolicy {
+        let provider = RetryProvider::new(Arc::new(inner)).with_test_policy(RetryPolicy {
             base_delay: Duration::from_millis(1),
             max_retries: 5,
         });
@@ -319,7 +292,7 @@ mod retry_provider_tests {
     #[tokio::test]
     async fn retry_provider_gives_up_after_max_retries() {
         let inner = FailingProvider::new(100);
-        let provider = RetryProvider::new(Arc::new(inner)).with_policy(RetryPolicy {
+        let provider = RetryProvider::new(Arc::new(inner)).with_test_policy(RetryPolicy {
             base_delay: Duration::from_millis(1),
             max_retries: 3,
         });
@@ -368,10 +341,11 @@ mod retry_provider_tests {
             }
         }
 
-        let provider = RetryProvider::new(Arc::new(AuthFailProvider)).with_policy(RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_retries: 5,
-        });
+        let provider =
+            RetryProvider::new(Arc::new(AuthFailProvider)).with_test_policy(RetryPolicy {
+                base_delay: Duration::from_millis(1),
+                max_retries: 5,
+            });
         let mut stream = provider.stream(&[], &[]);
         let mut got_provider_error = false;
         while let Some(result) = stream.next().await {

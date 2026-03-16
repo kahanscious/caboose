@@ -120,50 +120,15 @@ pub const CATALOG: &[ProviderEntry] = &[
     },
 ];
 
-/// Get popular providers (for the top section of the picker).
-#[allow(dead_code)]
-pub fn popular() -> impl Iterator<Item = &'static ProviderEntry> {
-    CATALOG.iter().filter(|e| e.popular)
-}
-
-/// Get non-popular providers (for the "Other" section), alphabetical by display_name.
-#[allow(dead_code)]
-pub fn other() -> impl Iterator<Item = &'static ProviderEntry> {
-    CATALOG.iter().filter(|e| !e.popular)
-}
-
 /// Look up a provider by ID.
 #[allow(dead_code)]
 pub fn by_id(id: &str) -> Option<&'static ProviderEntry> {
     CATALOG.iter().find(|e| e.id == id)
 }
 
-/// Get local providers (no API key required).
-#[allow(dead_code)]
-pub fn local() -> impl Iterator<Item = &'static ProviderEntry> {
-    CATALOG.iter().filter(|e| e.is_local())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn catalog_has_local_providers() {
-        let locals: Vec<_> = local().collect();
-        assert_eq!(locals.len(), 4);
-        assert!(locals.iter().any(|p| p.id == "ollama"));
-        assert!(locals.iter().any(|p| p.id == "lmstudio"));
-        assert!(locals.iter().any(|p| p.id == "llamacpp"));
-        assert!(locals.iter().any(|p| p.id == "custom"));
-    }
-
-    #[test]
-    fn local_providers_have_empty_env_var() {
-        for p in local() {
-            assert!(p.env_var.is_empty(), "{} should have empty env_var", p.id);
-        }
-    }
 
     #[test]
     fn is_local_correct() {
