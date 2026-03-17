@@ -79,6 +79,9 @@ pub struct Config {
     /// Registered secondary workspaces for this project. Key is the workspace name.
     #[serde(default)]
     pub workspaces: std::collections::HashMap<String, schema::WorkspaceConfig>,
+    /// Image compression configuration
+    #[serde(default)]
+    pub images: Option<schema::ImagesConfig>,
 }
 
 impl Config {
@@ -176,6 +179,9 @@ impl Config {
         }
         if other.services.is_some() {
             self.services = other.services;
+        }
+        if other.images.is_some() {
+            self.images = other.images;
         }
         if other.permission_mode.is_some() {
             self.permission_mode = other.permission_mode;

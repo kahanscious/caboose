@@ -636,6 +636,10 @@ impl App {
                  Use `read_file` with `offset`/`limit` for targeted reads. \
                  Batch independent tool calls in a single response. \
                  Don't re-read files already in context unless they've been modified.\n\n\
+                 ## Images\n\n\
+                 The user may attach images to their messages (screenshots, diagrams, photos). \
+                 When images are present, you can see and analyze them. Describe what you see \
+                 and use the visual context to inform your response.\n\n\
                  ## Tasks\n\n\
                  Use `todo_write` for multi-step work (3+ steps) to show progress in the sidebar. \
                  Each call replaces the entire list. Keep task names short. \
@@ -1566,6 +1570,7 @@ impl App {
                             self.handle_key(key.code, key.modifiers).await;
                         }
                         Event::Paste(text) => {
+
                             self.handle_paste(&text);
                         }
                         Event::Mouse(mouse) => {
@@ -3899,12 +3904,55 @@ impl App {
                         } else {
                             std::env::current_dir().unwrap_or_default().join(path)
                         };
-                        match crate::attachment::read_image_attachment(&full_path) {
-                            Ok(att) => self.state.attachments.push(att),
+                        match crate::attachment::read_image_attachment(&full_path, &self.images_config()) {
+                            Ok(att) => {
+                                if let Some(ref info) = att.compression {
+                                    let msg = format!(
+                                        "Compressed {}: {} → {}",
+                                        att.display_name,
+                                        crate::attachment::format_size(info.original_size),
+                                        crate::attachment::format_size(info.compressed_size),
+                                    );
+                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                }
+                                self.state.attachments.push(att);
+                            }
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
                                     content: format!("Failed to attach {path_str}: {e}"),
                                 });
+                            }
+                        }
+                    }
+
+                    // Also detect bare image paths in the message text (e.g. from drag-and-drop
+                    // that landed in the input area instead of triggering Event::Paste)
+                    let (bare_paths, cleaned_text) =
+                        crate::attachment::extract_bare_image_paths(&msg_to_send);
+                    if !bare_paths.is_empty() {
+                        msg_to_send = cleaned_text;
+                        for path in &bare_paths {
+                            match crate::attachment::read_image_attachment(path, &self.images_config()) {
+                                Ok(att) => {
+                                    if let Some(ref info) = att.compression {
+                                        let msg = format!(
+                                            "Compressed {}: {} → {}",
+                                            att.display_name,
+                                            crate::attachment::format_size(info.original_size),
+                                            crate::attachment::format_size(info.compressed_size),
+                                        );
+                                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                    }
+                                    self.state.attachments.push(att);
+                                }
+                                Err(e) => {
+                                    self.state.chat_messages.push(ChatMessage::Error {
+                                        content: format!(
+                                            "Failed to attach {}: {e}",
+                                            path.display()
+                                        ),
+                                    });
+                                }
                             }
                         }
                     }
@@ -4794,6 +4842,10 @@ impl App {
         false
     }
 
+    fn images_config(&self) -> crate::config::schema::ImagesConfig {
+        self.state.config.images.clone().unwrap_or_default()
+    }
+
     /// Count of selectable items in current picker mode.
     fn picker_item_count(&self) -> usize {
         use crate::tui::slash_auto::DropdownMode;
@@ -4948,8 +5000,19 @@ impl App {
                         }
                     }
                     BrowseAction::AttachImage(path) => {
-                        match crate::attachment::read_image_attachment(&path) {
-                            Ok(att) => self.state.attachments.push(att),
+                        match crate::attachment::read_image_attachment(&path, &self.images_config()) {
+                            Ok(att) => {
+                                if let Some(ref info) = att.compression {
+                                    let msg = format!(
+                                        "Compressed {}: {} → {}",
+                                        att.display_name,
+                                        crate::attachment::format_size(info.original_size),
+                                        crate::attachment::format_size(info.compressed_size),
+                                    );
+                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                }
+                                self.state.attachments.push(att);
+                            }
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
                                     content: format!("Failed to attach: {e}"),
@@ -6132,15 +6195,21 @@ impl App {
                 // Other overlays don't accept paste
             }
             None => {
-                // Check if paste is a single file path to an image — auto-attach
-                let trimmed = text.trim();
-                if !trimmed.is_empty()
-                    && !trimmed.contains('\n')
-                    && crate::attachment::is_image_path(std::path::Path::new(trimmed))
-                    && std::path::Path::new(trimmed).exists()
-                {
-                    match crate::attachment::read_image_attachment(std::path::Path::new(trimmed)) {
+                // Check if paste contains image file paths (drag-and-drop or pasted paths)
+                let (image_paths, remainder) = crate::attachment::try_attach_pasted_images(text);
+
+                for path in &image_paths {
+                    match crate::attachment::read_image_attachment(path, &self.images_config()) {
                         Ok(att) => {
+                            if let Some(ref info) = att.compression {
+                                let msg = format!(
+                                    "Compressed {}: {} → {}",
+                                    att.display_name,
+                                    crate::attachment::format_size(info.original_size),
+                                    crate::attachment::format_size(info.compressed_size),
+                                );
+                                self.state.chat_messages.push(ChatMessage::System { content: msg });
+                            }
                             self.state.attachments.push(att);
                         }
                         Err(e) => {
@@ -6149,21 +6218,32 @@ impl App {
                             });
                         }
                     }
+                }
+
+                // If everything was image paths, we're done
+                if remainder.is_empty() && !image_paths.is_empty() {
                     return;
                 }
 
+                // Use remainder (non-image lines) as the paste text
+                let effective_text: &str = if image_paths.is_empty() {
+                    text
+                } else {
+                    remainder.as_str()
+                };
+
                 // Base screen (Home or Chat) — paste into input with threshold check
-                let line_count = text.lines().count();
-                let char_count = text.len();
+                let line_count = effective_text.lines().count();
+                let char_count = effective_text.len();
                 if line_count > PASTE_THRESHOLD_LINES || char_count > PASTE_THRESHOLD_CHARS {
                     self.state.dialog_stack.push(DialogKind::PasteConfirm {
-                        text: text.to_string(),
+                        text: effective_text.to_string(),
                         line_count,
                         char_count,
                     });
                 } else {
-                    self.state.input.push_str(text);
-                    self.record_text_input_activity(text.len().max(16));
+                    self.state.input.push_str(effective_text);
+                    self.record_text_input_activity(effective_text.len().max(16));
                 }
             }
         }

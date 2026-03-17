@@ -402,6 +402,36 @@ pub enum WorkspaceAccess {
     ReadOnly,
 }
 
+/// Image compression configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImagesConfig {
+    /// Whether image compression is enabled (default: true).
+    enabled: Option<bool>,
+    /// Maximum width or height in pixels before resizing (default: 2000).
+    max_dimension: Option<u32>,
+    /// JPEG quality for the first re-encode pass (default: 80).
+    jpeg_quality: Option<u8>,
+}
+
+impl ImagesConfig {
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    pub fn max_dimension(&self) -> u32 {
+        self.max_dimension.unwrap_or(2000)
+    }
+
+    pub fn jpeg_quality(&self) -> u8 {
+        self.jpeg_quality.unwrap_or(80)
+    }
+
+    /// Low-quality fallback: half of `jpeg_quality`, clamped to minimum 20.
+    pub fn jpeg_quality_low(&self) -> u8 {
+        (self.jpeg_quality() / 2).max(20)
+    }
+}
+
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
@@ -897,5 +927,37 @@ command = ".caboose/hooks/preserve-context.sh"
         let config: HooksConfig = toml::from_str("").unwrap();
         assert!(config.pre_tool_use.is_empty());
         assert!(config.session_start.is_empty());
+    }
+
+    #[test]
+    fn images_config_defaults() {
+        let cfg: ImagesConfig = toml::from_str("").unwrap();
+        assert!(cfg.enabled());
+        assert_eq!(cfg.max_dimension(), 2000);
+        assert_eq!(cfg.jpeg_quality(), 80);
+    }
+
+    #[test]
+    fn images_config_custom_values() {
+        let cfg: ImagesConfig = toml::from_str(
+            r#"
+            enabled = false
+            max_dimension = 1024
+            jpeg_quality = 60
+            "#,
+        )
+        .unwrap();
+        assert!(!cfg.enabled());
+        assert_eq!(cfg.max_dimension(), 1024);
+        assert_eq!(cfg.jpeg_quality(), 60);
+    }
+
+    #[test]
+    fn images_config_quality_low_derived() {
+        let cfg: ImagesConfig = toml::from_str("jpeg_quality = 80").unwrap();
+        assert_eq!(cfg.jpeg_quality_low(), 40);
+
+        let cfg2: ImagesConfig = toml::from_str("jpeg_quality = 30").unwrap();
+        assert_eq!(cfg2.jpeg_quality_low(), 20); // clamped to min 20
     }
 }
