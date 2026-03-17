@@ -3927,6 +3927,27 @@ impl App {
                         }
                     }
 
+                    // Also detect bare image paths in the message text (e.g. from drag-and-drop
+                    // that landed in the input area instead of triggering Event::Paste)
+                    let (bare_paths, cleaned_text) =
+                        crate::attachment::extract_bare_image_paths(&msg_to_send);
+                    if !bare_paths.is_empty() {
+                        msg_to_send = cleaned_text;
+                        for path in &bare_paths {
+                            match crate::attachment::read_image_attachment(path) {
+                                Ok(att) => self.state.attachments.push(att),
+                                Err(e) => {
+                                    self.state.chat_messages.push(ChatMessage::Error {
+                                        content: format!(
+                                            "Failed to attach {}: {e}",
+                                            path.display()
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
                     // Collect image metadata for chat display before draining
                     let image_info: Vec<(String, usize)> = self
                         .state

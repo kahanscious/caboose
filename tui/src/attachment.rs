@@ -197,6 +197,30 @@ pub fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String) {
     (image_paths, remainder)
 }
 
+/// Extract bare image file paths from message text (no `@` prefix required).
+/// Finds absolute paths to existing image files embedded in the message and returns
+/// them along with the text with those paths removed.
+pub fn extract_bare_image_paths(text: &str) -> (Vec<PathBuf>, String) {
+    let mut image_paths = Vec::new();
+    let mut remaining_lines = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let unescaped = unescape_shell_path(trimmed);
+        let path = Path::new(&unescaped);
+
+        // Only match absolute paths to avoid false positives on regular words
+        if path.is_absolute() && is_image_path(path) && path.exists() {
+            image_paths.push(path.to_path_buf());
+        } else {
+            remaining_lines.push(line);
+        }
+    }
+
+    let remainder = remaining_lines.join("\n");
+    (image_paths, remainder)
+}
+
 /// Extract `@file` references from input text that point to image files.
 pub fn extract_at_image_paths(text: &str) -> Vec<String> {
     let mut results = Vec::new();
@@ -450,6 +474,43 @@ mod tests {
         let (paths, remainder) = try_attach_pasted_images("just some regular text");
         assert!(paths.is_empty());
         assert_eq!(remainder, "just some regular text");
+    }
+
+    #[test]
+    fn extract_bare_image_path_from_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("screenshot.png");
+        std::fs::write(&img, &[0x89]).unwrap();
+
+        let msg = format!("{}\nwhat's in this image", img.display());
+        let (paths, remainder) = extract_bare_image_paths(&msg);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], img);
+        assert_eq!(remainder, "what's in this image");
+    }
+
+    #[test]
+    fn extract_bare_ignores_relative_paths() {
+        // Relative paths should NOT be matched to avoid false positives
+        let (paths, remainder) = extract_bare_image_paths("check screenshot.png please");
+        assert!(paths.is_empty());
+        assert_eq!(remainder, "check screenshot.png please");
+    }
+
+    #[test]
+    fn extract_bare_shell_escaped_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("Screen shot 2026.png");
+        std::fs::write(&img, &[0x89]).unwrap();
+
+        let msg = format!(
+            "{}/Screen\\ shot\\ 2026.png\ndescribe this",
+            dir.path().display()
+        );
+        let (paths, remainder) = extract_bare_image_paths(&msg);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], img);
+        assert_eq!(remainder, "describe this");
     }
 
     #[test]
