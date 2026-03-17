@@ -1294,21 +1294,35 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
         crate::tui::approval::render(frame, a_area, &header, &args_val, false);
     }
 
-    // Render attachment chips
+    // Render attachment chips (dimmed when model lacks vision)
     if let Some(att_area) = attach_area {
-        let chips: Vec<Span> = app
+        let style = if app.model_supports_vision {
+            Style::default().fg(colors.text).bg(colors.bg_elevated)
+        } else {
+            Style::default()
+                .fg(colors.text_muted)
+                .bg(colors.bg_elevated)
+                .add_modifier(ratatui::style::Modifier::DIM)
+        };
+
+        let mut chips: Vec<Span> = app
             .attachments
             .iter()
             .flat_map(|att| {
                 vec![
-                    Span::styled(
-                        format!(" [image: {}] ", att.display_name),
-                        Style::default().fg(colors.text).bg(colors.bg_elevated),
-                    ),
+                    Span::styled(format!(" [image: {}] ", att.display_name), style),
                     Span::raw(" "),
                 ]
             })
             .collect();
+
+        if !app.model_supports_vision && !app.attachments.is_empty() {
+            chips.push(Span::styled(
+                " (model doesn't support images) ",
+                Style::default().fg(colors.error),
+            ));
+        }
+
         let chip_line = Line::from(chips);
         frame.render_widget(Paragraph::new(chip_line), att_area);
     }
