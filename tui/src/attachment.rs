@@ -41,7 +41,7 @@ pub fn media_type_from_ext(path: &Path) -> Option<String> {
 }
 
 /// Read an image file and create an Attachment.
-pub fn read_image_attachment(path: &Path) -> Result<Attachment, String> {
+pub fn read_image_attachment(path: &Path, config: &crate::config::schema::ImagesConfig) -> Result<Attachment, String> {
     if !is_image_path(path) {
         return Err(format!("Not a supported image format: {}", path.display()));
     }
@@ -63,11 +63,28 @@ pub fn read_image_attachment(path: &Path) -> Result<Attachment, String> {
     let media_type = media_type_from_ext(path)
         .ok_or_else(|| format!("Unknown media type for {}", path.display()))?;
 
-    let display_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image")
-        .to_string();
+    let _original_size = data.len();
+    let _original_media_type = media_type.clone();
+
+    // Compress/resize if needed
+    let (data, media_type) = compress_image(&data, &media_type, config)
+        .unwrap_or_else(|_| (data, media_type));
+
+    // Update display name if format changed to JPEG
+    let display_name = if media_type == "image/jpeg"
+        && !path.extension().is_some_and(|e| {
+            let e = e.to_ascii_lowercase();
+            e == "jpg" || e == "jpeg"
+        })
+    {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+        format!("{stem}.jpg")
+    } else {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image")
+            .to_string()
+    };
 
     Ok(Attachment {
         path: path.to_path_buf(),
@@ -99,6 +116,7 @@ pub fn attachment_from_rgba(
     rgba: Vec<u8>,
     width: usize,
     height: usize,
+    config: &crate::config::schema::ImagesConfig,
 ) -> Result<Attachment, String> {
     let w: u32 = width
         .try_into()
@@ -108,18 +126,35 @@ pub fn attachment_from_rgba(
         .map_err(|_| format!("Image dimensions too large: {width}x{height}"))?;
 
     let expected_len = (width as u64) * (height as u64) * 4;
-    if expected_len > MAX_IMAGE_SIZE {
-        return Err(format!(
-            "Image data too large: {} for {width}x{height}",
-            format_size(expected_len as usize),
-        ));
-    }
     if rgba.len() != expected_len as usize {
         return Err(format!(
             "RGBA data length mismatch: expected {expected_len} bytes for {width}x{height}, got {}",
             rgba.len()
         ));
     }
+
+    // Resize RGBA buffer directly if dimensions exceed limit
+    // (avoids encode → decode → resize → re-encode round-trip)
+    let max_dim = config.max_dimension();
+    let (rgba, w, h) = if config.enabled() && (w > max_dim || h > max_dim) {
+        let img_buf = image::RgbaImage::from_raw(w, h, rgba)
+            .ok_or_else(|| format!("Failed to create image buffer from {w}x{h} RGBA data"))?;
+        let dynamic = image::DynamicImage::ImageRgba8(img_buf);
+        let resized = dynamic.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3);
+        let resized_rgba = resized.to_rgba8();
+        let new_w = resized_rgba.width();
+        let new_h = resized_rgba.height();
+        (resized_rgba.into_raw(), new_w, new_h)
+    } else {
+        // Only enforce raw-data size limit when not resizing
+        if expected_len > MAX_IMAGE_SIZE {
+            return Err(format!(
+                "Image data too large: {} for {width}x{height}",
+                format_size(expected_len as usize),
+            ));
+        }
+        (rgba, w, h)
+    };
 
     // Encode as PNG
     let mut png_bytes = Vec::new();
@@ -581,14 +616,14 @@ mod tests {
 
     #[test]
     fn read_image_attachment_nonexistent() {
-        let result = read_image_attachment(Path::new("/nonexistent/photo.png"));
+        let result = read_image_attachment(Path::new("/nonexistent/photo.png"), &default_images_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot read"));
     }
 
     #[test]
     fn read_image_attachment_wrong_extension() {
-        let result = read_image_attachment(Path::new("file.txt"));
+        let result = read_image_attachment(Path::new("file.txt"), &default_images_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Not a supported image format"));
     }
@@ -603,7 +638,7 @@ mod tests {
             .unwrap();
         drop(f);
 
-        let att = read_image_attachment(&img_path).unwrap();
+        let att = read_image_attachment(&img_path, &default_images_config()).unwrap();
         assert_eq!(att.media_type, "image/png");
         assert_eq!(att.display_name, "test.png");
         assert_eq!(att.data.len(), 8);
@@ -619,7 +654,7 @@ mod tests {
             0, 0, 255, 255, // blue
             255, 255, 0, 255, // yellow
         ];
-        let att = attachment_from_rgba(rgba, 2, 2).unwrap();
+        let att = attachment_from_rgba(rgba, 2, 2, &default_images_config()).unwrap();
         assert_eq!(att.media_type, "image/png");
         assert!(att.display_name.starts_with("clipboard-"));
         assert!(att.display_name.ends_with(".png"));
@@ -629,7 +664,7 @@ mod tests {
 
     #[test]
     fn attachment_from_rgba_rejects_oversized_dimensions() {
-        let result = attachment_from_rgba(vec![], usize::MAX, 1);
+        let result = attachment_from_rgba(vec![], usize::MAX, 1, &default_images_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too large"));
     }
@@ -637,7 +672,7 @@ mod tests {
     #[test]
     fn attachment_from_rgba_rejects_mismatched_data() {
         // 2x2 image needs 16 bytes of RGBA, but we give 4
-        let result = attachment_from_rgba(vec![0, 0, 0, 0], 2, 2);
+        let result = attachment_from_rgba(vec![0, 0, 0, 0], 2, 2, &default_images_config());
         assert!(result.is_err());
     }
 
@@ -808,5 +843,32 @@ mod tests {
         let text = "Check @screenshot.png and also @diagram.webp but not @readme.md";
         let paths = extract_at_image_paths(text);
         assert_eq!(paths, vec!["screenshot.png", "diagram.webp"]);
+    }
+
+    #[test]
+    fn read_image_attachment_compresses_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("big.png");
+        let png = make_test_png(3000, 2000);
+        std::fs::write(&img_path, &png).unwrap();
+
+        let config = default_images_config();
+        let att = read_image_attachment(&img_path, &config).unwrap();
+        let decoded = image::load_from_memory(&att.data).unwrap();
+        assert!(decoded.width() <= 2000);
+        assert!(decoded.height() <= 2000);
+    }
+
+    #[test]
+    fn attachment_from_rgba_resizes_large_clipboard() {
+        let config = default_images_config();
+        let width = 3000usize;
+        let height = 2000usize;
+        let rgba = vec![255u8; width * height * 4];
+        let att = attachment_from_rgba(rgba, width, height, &config).unwrap();
+        let decoded = image::load_from_memory(&att.data).unwrap();
+        assert!(decoded.width() <= 2000);
+        assert!(decoded.height() <= 2000);
+        assert_eq!(att.media_type, "image/png");
     }
 }

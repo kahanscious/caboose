@@ -2953,7 +2953,7 @@ impl App {
                 // Try clipboard image first, then fall back to text
                 if let Some(att) =
                     crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
-                        crate::attachment::attachment_from_rgba(rgba, w, h).ok()
+                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
                     })
                 {
                     self.state.attachments.push(att);
@@ -3639,7 +3639,7 @@ impl App {
                 // Try clipboard image first, then fall back to text
                 if let Some(att) =
                     crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
-                        crate::attachment::attachment_from_rgba(rgba, w, h).ok()
+                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
                     })
                 {
                     self.state.attachments.push(att);
@@ -3917,7 +3917,7 @@ impl App {
                         } else {
                             std::env::current_dir().unwrap_or_default().join(path)
                         };
-                        match crate::attachment::read_image_attachment(&full_path) {
+                        match crate::attachment::read_image_attachment(&full_path, &self.images_config()) {
                             Ok(att) => self.state.attachments.push(att),
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
@@ -3934,7 +3934,7 @@ impl App {
                     if !bare_paths.is_empty() {
                         msg_to_send = cleaned_text;
                         for path in &bare_paths {
-                            match crate::attachment::read_image_attachment(path) {
+                            match crate::attachment::read_image_attachment(path, &self.images_config()) {
                                 Ok(att) => self.state.attachments.push(att),
                                 Err(e) => {
                                     self.state.chat_messages.push(ChatMessage::Error {
@@ -4833,6 +4833,10 @@ impl App {
         false
     }
 
+    fn images_config(&self) -> crate::config::schema::ImagesConfig {
+        self.state.config.images.clone().unwrap_or_default()
+    }
+
     /// Count of selectable items in current picker mode.
     fn picker_item_count(&self) -> usize {
         use crate::tui::slash_auto::DropdownMode;
@@ -4987,7 +4991,7 @@ impl App {
                         }
                     }
                     BrowseAction::AttachImage(path) => {
-                        match crate::attachment::read_image_attachment(&path) {
+                        match crate::attachment::read_image_attachment(&path, &self.images_config()) {
                             Ok(att) => self.state.attachments.push(att),
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
@@ -6175,7 +6179,7 @@ impl App {
                 let (image_paths, remainder) = crate::attachment::try_attach_pasted_images(text);
 
                 for path in &image_paths {
-                    match crate::attachment::read_image_attachment(path) {
+                    match crate::attachment::read_image_attachment(path, &self.images_config()) {
                         Ok(att) => {
                             self.state.attachments.push(att);
                         }
