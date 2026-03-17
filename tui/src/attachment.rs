@@ -145,6 +145,24 @@ pub fn attachment_from_rgba(
     })
 }
 
+/// Remove shell-style backslash escapes from a path string.
+/// e.g. `Screen\ shot\ 2026.png` → `Screen shot 2026.png`
+fn unescape_shell_path(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Take the next char literally (space, parens, etc.)
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Detect image file paths in pasted text (e.g. from terminal drag-and-drop).
 /// Returns (image_paths_found, remaining_text_to_insert).
 pub fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String) {
@@ -164,8 +182,11 @@ pub fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String) {
             })
             .unwrap_or(trimmed);
 
-        let path = Path::new(unquoted);
-        if !unquoted.is_empty() && is_image_path(path) && path.exists() {
+        // Unescape shell-style backslash sequences (e.g. Warp pastes "Screen\ shot.png")
+        let unescaped = unescape_shell_path(unquoted);
+        let path = Path::new(&unescaped);
+
+        if !unescaped.is_empty() && is_image_path(path) && path.exists() {
             image_paths.push(path.to_path_buf());
         } else {
             remaining_lines.push(line);
@@ -388,6 +409,40 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], img);
         assert!(remainder.is_empty());
+    }
+
+    #[test]
+    fn try_attach_shell_escaped_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("Screen shot 2026.png");
+        std::fs::write(&img, &[0x89]).unwrap();
+
+        // Warp and other terminals paste paths with backslash-escaped spaces
+        let escaped = format!("{}Screen\\ shot\\ 2026.png", dir.path().display());
+        // Ensure the dir path separator is included
+        let escaped = if escaped.contains("//") {
+            escaped
+        } else {
+            format!("{}/Screen\\ shot\\ 2026.png", dir.path().display())
+        };
+        let (paths, remainder) = try_attach_pasted_images(&escaped);
+        assert_eq!(paths.len(), 1, "should detect shell-escaped image path");
+        assert_eq!(paths[0], img);
+        assert!(remainder.is_empty());
+    }
+
+    #[test]
+    fn unescape_shell_path_works() {
+        assert_eq!(unescape_shell_path("Screen\\ shot.png"), "Screen shot.png");
+        assert_eq!(
+            unescape_shell_path("no\\ spaces\\ here.png"),
+            "no spaces here.png"
+        );
+        assert_eq!(unescape_shell_path("noescape.png"), "noescape.png");
+        assert_eq!(
+            unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"),
+            "/path/to/Screen shot (1).png"
+        );
     }
 
     #[test]
