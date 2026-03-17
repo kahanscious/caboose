@@ -586,6 +586,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "suggest.run",
+        name: "Suggest Improvements",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("suggest"),
+        available: |state| state.config.suggest.as_ref().map_or(true, |c| c.enabled),
+        execute: |_state| Action::None, // Handled in app.rs handle_suggest_command
+    });
+
+    registry.register(Command {
         id: "scm.watch",
         name: "Watch PR/MR",
         category: Category::Tools,

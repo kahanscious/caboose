@@ -9355,6 +9355,38 @@ impl App {
             .push(ChatMessage::System { content });
     }
 
+    /// Handle `/suggest` — run codebase scans and inject digest into conversation.
+    async fn handle_suggest_command(&mut self) {
+        // Switch to chat screen if on home
+        self.state.dialog_stack.base = Screen::Chat;
+
+        // Show scanning message
+        self.state
+            .chat_messages
+            .push(ChatMessage::System {
+                content: "Scanning codebase...".to_string(),
+            });
+
+        // Run the suggest pipeline
+        let suggest_config = self.state.config.suggest.as_ref();
+        let digest = crate::suggest::run_suggest(suggest_config).await;
+
+        // Update scanning message
+        if let Some(ChatMessage::System { content }) = self.state.chat_messages.last_mut() {
+            if content == "Scanning codebase..." {
+                *content = "Scan complete — analyzing findings...".to_string();
+            }
+        }
+
+        // Inject digest as user message and trigger agent stream
+        if let Some(ref provider) = self.provider {
+            let tool_defs = self.build_tool_defs();
+            self.state
+                .agent
+                .send_message(digest, provider.as_ref(), &tool_defs);
+        }
+    }
+
     /// Handle key presses during skill creation preview phase.
     /// Returns true if the key was consumed.
     fn handle_skill_creation_key(&mut self, key: crossterm::event::KeyCode) -> bool {
@@ -10779,6 +10811,10 @@ impl App {
         }
         if slash == "rewind" {
             self.open_rewind_picker();
+            return true;
+        }
+        if slash == "suggest" {
+            self.handle_suggest_command().await;
             return true;
         }
         // /roundhouse — parse --critique / --no-critique flags
