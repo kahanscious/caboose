@@ -9,11 +9,11 @@
 
 caboose already has full image plumbing — `ContentBlock::Image`, provider serialization for anthropic/openai/gemini/openrouter, `@file` image references, vision model detection, and session persistence. what's missing is the **input layer**: getting images from the user's clipboard or drag-and-drop into the attachment queue.
 
-this spec covers two new input methods and a small UI addition:
+this spec covers two new input methods and a small UI enhancement:
 
 1. clipboard image paste (Cmd+V / Ctrl+V)
 2. drag-and-drop via pasted file path detection
-3. attachment indicator pills in the input area
+3. non-vision model warning on existing attachment pills
 
 ---
 
@@ -34,15 +34,29 @@ extend `clipboard.rs` to read images from the system clipboard via `arboard::Cli
 4. if no image → fall through to existing text paste behavior
 5. attachment indicator appears in input area
 
+### clipboard fallback behavior
+
+`arboard::get_image()` returns `Err` for both "clipboard has text" and "clipboard not accessible". the handler must:
+
+- try `get_image()` first
+- on `Err`, fall through to `get_text()` (not bail)
+- only fail silently if both return `Err`
+
+this ensures text paste still works when `get_image()` fails for non-image reasons.
+
 ### new dependency
 
-add the `png` crate for encoding raw RGBA → PNG. lightweight (~50KB), no transitive deps. avoid the full `image` crate — it's heavy and we only need encoding.
+add the `png` crate for encoding raw RGBA → PNG. lightweight (~50KB), transitive deps are `miniz_oxide`, `adler`, `crc32fast` — all already pulled in via `flate2`. avoid the full `image` crate — it's heavy and we only need encoding.
+
+### `Attachment.path` for clipboard images
+
+`Attachment` has a required `path: PathBuf` field. clipboard images have no real file path. use a synthetic path: `PathBuf::from(format!("clipboard-{}.png", unix_timestamp))`. this keeps the struct non-optional and gives a meaningful `display_name`.
 
 ### files touched
 
-- `tui/src/clipboard.rs` — add `read_image_from_clipboard() -> Option<(Vec<u8>, u32, u32)>` (raw RGBA + dimensions)
-- `tui/src/attachment.rs` — add `attachment_from_rgba(data: Vec<u8>, width: u32, height: u32) -> Result<Attachment>` (PNG encode + wrap)
-- `tui/src/app.rs` — modify Ctrl+V / Cmd+V handler to try image clipboard first
+- `tui/src/clipboard.rs` — add `read_image_from_clipboard() -> Option<(Vec<u8>, usize, usize)>` (raw RGBA + dimensions as `usize` to match `arboard::ImageData`)
+- `tui/src/attachment.rs` — add `attachment_from_rgba(data: Vec<u8>, width: usize, height: usize) -> Result<Attachment>` (checked cast to `u32` for PNG encoder, PNG encode, wrap)
+- `tui/src/app.rs` — modify Ctrl+V / Cmd+V handler: replace direct `get_text()` with image-first probe, then text fallback
 - `Cargo.toml` — add `png` crate
 
 ---
@@ -63,7 +77,7 @@ when a user drags a file onto the terminal, most modern terminals (iTerm2, Kitty
 
 ### detection heuristic
 
-```
+```rust
 fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String)
 ```
 
@@ -80,30 +94,35 @@ fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String)
 - **multiple files** — supported; newline-separated paths are split and each checked
 - **user intentionally pasting a path as text** — unlikely for image file paths; they can type manually if needed
 
+### migration note
+
+`app.rs` already has a single-line paste path handler (around line 6136). the new multi-line `try_attach_pasted_images()` replaces it — the old single-line logic must be removed or it will short-circuit before the new multi-line logic runs.
+
+### edge cases (additional)
+
+- **file exists but not readable (permissions)** — `read_image_attachment()` returns an error; surface as flash message in footer, do not silently fall through to text insertion
+
 ### files touched
 
-- `tui/src/app.rs` — add `Event::Paste` handler that runs the detection heuristic before inserting text
+- `tui/src/app.rs` — replace existing `Event::Paste` single-line handler with new multi-line detection heuristic
 - `tui/src/attachment.rs` — add `try_attach_pasted_images()` function
 
 ---
 
-## 3. attachment indicator in input area
+## 3. non-vision model warning on attachment pills
 
-### what changes
+### what already exists
 
-render attachment pills above or at the start of the input area so the user sees what's queued before sending.
+attachment pill rendering is already implemented in `tui/src/tui/layout.rs` (lines 1190–1313). pills show `[image: {display_name}]` in accent color. backspace-to-remove works. send-time rejection for non-vision models exists in `app.rs` (lines 3927–3932).
 
-### rendering
+### what changes (additive only)
 
-- when `self.state.attachments` is non-empty, render a row of pills: `[img: clipboard-1710601234.png] [img: screenshot.png]`
-- use railroad theme accent color for pills
-- backspace on empty input pops last attachment (already implemented)
-- if current model doesn't support vision: dim/strikethrough pills + footer hint "current model doesn't support images"
+- when `model_supports_vision` is false and attachments are present, dim/strikethrough the pills and show a footer hint: "current model doesn't support images"
+- this is purely visual — the rejection logic at send time already exists
 
 ### files touched
 
-- `tui/src/tui/layout.rs` or input rendering area — add attachment pill row
-- `tui/src/tui/chat.rs` — potentially adjust spacing if pill row is above input
+- `tui/src/tui/layout.rs` — add conditional dim styling when `model_supports_vision` is false
 
 ---
 
@@ -125,8 +144,10 @@ already implemented and tested:
 | vision model detection (`supports_vision`) | done | `provider/mod.rs` |
 | session persistence (sqlite) | done | `agent/conversation.rs` |
 | transcript rendering (`[image: file]`) | done | `agent/conversation.rs` |
-| file autocomplete for images | done | `tui/file_auto.rs` |
+| file autocomplete (finds image files) | done | `tui/src/tui/file_auto.rs` |
 | backspace-to-remove attachment | done | `app.rs` |
+| attachment pill rendering | done | `tui/src/tui/layout.rs` (lines 1190–1313) |
+| non-vision model send-time rejection | done | `app.rs` (lines 3927–3932) |
 
 providers without vision (deepseek, groq, mistral) — the existing `model_supports_vision` check rejects gracefully. no changes needed.
 
@@ -145,6 +166,7 @@ providers without vision (deepseek, groq, mistral) — the existing `model_suppo
   - non-existent paths → falls through to text
   - quoted paths (`"/path/to/image.png"`) → trimmed and matched
   - non-image paths (`/path/to/file.rs`) → treated as text
+  - existing file but not readable (permissions error) → flash error, not silent fall-through
 
 ### manual testing
 
