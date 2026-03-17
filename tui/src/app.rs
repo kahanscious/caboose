@@ -804,6 +804,12 @@ impl App {
             .map(|p| p.model().to_string())
             .unwrap_or_else(|| "no key configured".to_string());
 
+        // Infer model capabilities from provider/model name at startup.
+        // These will be updated with accurate values when the model picker fetches the model list.
+        // All Claude models support thinking and vision; others need API confirmation
+        let startup_supports_thinking = active_provider_name == "anthropic";
+        let startup_supports_vision = active_provider_name == "anthropic";
+
         let (sub_agent_tx, sub_agent_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
 
@@ -862,8 +868,8 @@ impl App {
                 post_tool_hooks: crate::hooks::PostToolHooks::new(),
                 mode,
                 model_supports_tools: true,
-                model_supports_vision: true, // default true for Anthropic models
-                model_supports_thinking: true, // default true for Anthropic models
+                model_supports_vision: startup_supports_vision,
+                model_supports_thinking: startup_supports_thinking,
                 thinking_mode: crate::provider::ThinkingMode::Off,
                 home_tip_index: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
