@@ -24,6 +24,7 @@ mod scm;
 mod session;
 mod skills;
 mod sub_agent;
+mod suggest;
 mod terminal;
 mod tools;
 mod tui;
