@@ -370,6 +370,39 @@ pub fn save_behavior_max_session_cost(max_cost: Option<f64>) {
     let _ = std::fs::write(&path, toml::to_string_pretty(&config).unwrap_or_default());
 }
 
+/// Persist the suggest.enabled toggle to the global config file.
+pub fn save_suggest_enabled(enabled: bool) {
+    let path = match dirs::config_dir() {
+        Some(d) => d.join("caboose").join("config.toml"),
+        None => return,
+    };
+
+    let mut config: toml::Value = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or(toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let Some(table) = config.as_table_mut() else {
+        return;
+    };
+    let suggest = table
+        .entry("suggest")
+        .or_insert(toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .unwrap();
+
+    suggest.insert("enabled".into(), toml::Value::Boolean(enabled));
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, toml::to_string_pretty(&config).unwrap_or_default());
+}
+
 /// Persist a local provider entry to the global config file.
 ///
 /// Creates or replaces the `[local_providers.<name>]` section in the global

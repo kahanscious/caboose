@@ -4713,6 +4713,15 @@ impl App {
                                         .get_or_insert_with(Default::default);
                                     mem_config.auto_extract = enabled;
                                 }
+                                "suggest.enabled" => {
+                                    let suggest_config = self
+                                        .state
+                                        .config
+                                        .suggest
+                                        .get_or_insert_with(Default::default);
+                                    suggest_config.enabled = enabled;
+                                    crate::config::save_suggest_enabled(enabled);
+                                }
                                 _ => {}
                             }
                         }
@@ -10327,6 +10336,24 @@ impl App {
                         .map(|v| v.label().to_string())
                         .collect(),
                 ),
+            },
+            {
+                let suggest_enabled = self
+                    .state
+                    .config
+                    .suggest
+                    .as_ref()
+                    .map_or(true, |c| c.enabled);
+                crate::tui::slash_auto::SettingsItem {
+                    key: "suggest.enabled".to_string(),
+                    label: "Suggest".to_string(),
+                    value: if suggest_enabled {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    },
+                    kind: crate::tui::slash_auto::SettingsKind::Toggle,
+                }
             },
             {
                 let mut migrate_choices = vec!["(none)".to_string()];
