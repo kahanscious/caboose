@@ -806,9 +806,7 @@ impl App {
 
         // Infer model capabilities from provider/model name at startup.
         // These will be updated with accurate values when the model picker fetches the model list.
-        // All Claude models support thinking and vision; others need API confirmation
-        let startup_supports_thinking = active_provider_name == "anthropic";
-        let startup_supports_vision = active_provider_name == "anthropic";
+        // Capabilities default to false; updated from provider model list at startup below
 
         let (sub_agent_tx, sub_agent_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
@@ -868,8 +866,8 @@ impl App {
                 post_tool_hooks: crate::hooks::PostToolHooks::new(),
                 mode,
                 model_supports_tools: true,
-                model_supports_vision: startup_supports_vision,
-                model_supports_thinking: startup_supports_thinking,
+                model_supports_vision: false,
+                model_supports_thinking: false,
                 thinking_mode: crate::provider::ThinkingMode::Off,
                 home_tip_index: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -950,11 +948,28 @@ impl App {
                 api_key.to_string(),
                 app.state.active_model_name.clone(),
             );
-            if let Ok((_models, pricing_entries)) = or_provider.list_models_with_pricing().await {
-                for (model_id, model_pricing) in pricing_entries {
-                    app.state.pricing.insert(model_id, model_pricing);
+            if let Ok((models, pricing_entries)) = or_provider.list_models_with_pricing().await {
+                for (model_id, model_pricing) in &pricing_entries {
+                    app.state.pricing.insert(model_id.clone(), *model_pricing);
+                }
+                // Set capabilities for the active model from the fetched list
+                if let Some(info) = models.iter().find(|m| m.id == app.state.active_model_name) {
+                    app.state.model_supports_tools = info.supports_tools;
+                    app.state.model_supports_vision = info.supports_vision;
+                    app.state.model_supports_thinking = info.supports_thinking;
                 }
             }
+        }
+
+        // For non-OpenRouter providers, look up capabilities from the provider's model list
+        if app.state.active_provider_name != "openrouter"
+            && let Some(ref provider) = app.provider
+            && let Ok(models) = provider.list_models().await
+            && let Some(info) = models.iter().find(|m| m.id == app.state.active_model_name)
+        {
+            app.state.model_supports_tools = info.supports_tools;
+            app.state.model_supports_vision = info.supports_vision;
+            app.state.model_supports_thinking = info.supports_thinking;
         }
 
         // If --session was provided, restore that session
