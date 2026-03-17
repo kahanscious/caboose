@@ -105,11 +105,17 @@ impl GeminiProvider {
         );
         let generation_config = match mode {
             ThinkingMode::Off => None,
-            ThinkingMode::On => Some(GenerationConfig {
-                thinking_config: Some(ThinkingConfig {
-                    thinking_budget: 10_000,
-                }),
-            }),
+            level => {
+                let thinking_budget = match level {
+                    ThinkingMode::Low => 2_000,
+                    ThinkingMode::Medium => 10_000,
+                    ThinkingMode::High => 32_000,
+                    ThinkingMode::Off => unreachable!(),
+                };
+                Some(GenerationConfig {
+                    thinking_config: Some(ThinkingConfig { thinking_budget }),
+                })
+            }
         };
 
         GenerateContentRequest {

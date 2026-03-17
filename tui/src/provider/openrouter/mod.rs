@@ -138,7 +138,9 @@ impl OpenRouterProvider {
         );
         let reasoning_effort = match mode {
             ThinkingMode::Off => None,
-            ThinkingMode::On => Some("high".to_string()),
+            ThinkingMode::Low => Some("low".to_string()),
+            ThinkingMode::Medium => Some("medium".to_string()),
+            ThinkingMode::High => Some("high".to_string()),
         };
 
         ChatRequest {

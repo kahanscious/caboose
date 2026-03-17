@@ -104,9 +104,14 @@ impl AnthropicProvider {
         );
         let thinking = match mode {
             ThinkingMode::Off => None,
-            ThinkingMode::On => Some(ThinkingParam {
+            level => Some(ThinkingParam {
                 thinking_type: "enabled".to_string(),
-                budget_tokens: 10_000,
+                budget_tokens: match level {
+                    ThinkingMode::Low => 2_000,
+                    ThinkingMode::Medium => 10_000,
+                    ThinkingMode::High => 32_000,
+                    ThinkingMode::Off => unreachable!(),
+                },
             }),
         };
 

@@ -19,35 +19,114 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
-/// Thinking/reasoning toggle for models that support extended thinking.
+/// Thinking/reasoning level for models that support extended thinking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ThinkingMode {
     /// Thinking disabled — no reasoning tokens requested.
     #[default]
     Off = 0,
-    /// Thinking enabled.
-    On = 1,
+    /// Low reasoning effort.
+    Low = 1,
+    /// Medium reasoning effort (default when toggling on).
+    Medium = 2,
+    /// High reasoning effort.
+    High = 3,
 }
 
 impl ThinkingMode {
-    /// Toggle between Off and On.
+    /// Toggle between Off and Medium. Non-medium levels toggle to Off.
     pub fn toggle(self) -> Self {
         match self {
-            Self::Off => Self::On,
-            Self::On => Self::Off,
+            Self::Off => Self::Medium,
+            _ => Self::Off,
         }
     }
 
     pub fn is_on(self) -> bool {
-        matches!(self, Self::On)
+        !matches!(self, Self::Off)
     }
 
     pub fn from_u8(v: u8) -> Self {
         match v {
-            1 => Self::On,
+            1 => Self::Low,
+            2 => Self::Medium,
+            3 => Self::High,
             _ => Self::Off,
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// All variants for use in pickers.
+    pub const ALL: &[ThinkingMode] = &[Self::Off, Self::Low, Self::Medium, Self::High];
+}
+
+impl std::fmt::Display for ThinkingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+#[cfg(test)]
+mod thinking_mode_tests {
+    use super::ThinkingMode;
+
+    #[test]
+    fn toggle_off_to_medium() {
+        assert_eq!(ThinkingMode::Off.toggle(), ThinkingMode::Medium);
+    }
+
+    #[test]
+    fn toggle_medium_to_off() {
+        assert_eq!(ThinkingMode::Medium.toggle(), ThinkingMode::Off);
+    }
+
+    #[test]
+    fn toggle_low_to_off() {
+        assert_eq!(ThinkingMode::Low.toggle(), ThinkingMode::Off);
+    }
+
+    #[test]
+    fn toggle_high_to_off() {
+        assert_eq!(ThinkingMode::High.toggle(), ThinkingMode::Off);
+    }
+
+    #[test]
+    fn is_on() {
+        assert!(!ThinkingMode::Off.is_on());
+        assert!(ThinkingMode::Low.is_on());
+        assert!(ThinkingMode::Medium.is_on());
+        assert!(ThinkingMode::High.is_on());
+    }
+
+    #[test]
+    fn from_u8_all_variants() {
+        assert_eq!(ThinkingMode::from_u8(0), ThinkingMode::Off);
+        assert_eq!(ThinkingMode::from_u8(1), ThinkingMode::Low);
+        assert_eq!(ThinkingMode::from_u8(2), ThinkingMode::Medium);
+        assert_eq!(ThinkingMode::from_u8(3), ThinkingMode::High);
+        assert_eq!(ThinkingMode::from_u8(99), ThinkingMode::Off);
+    }
+
+    #[test]
+    fn label_values() {
+        assert_eq!(ThinkingMode::Off.label(), "off");
+        assert_eq!(ThinkingMode::Low.label(), "low");
+        assert_eq!(ThinkingMode::Medium.label(), "medium");
+        assert_eq!(ThinkingMode::High.label(), "high");
+    }
+
+    #[test]
+    fn display_impl() {
+        assert_eq!(format!("{}", ThinkingMode::Medium), "medium");
     }
 }
 
