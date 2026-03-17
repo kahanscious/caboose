@@ -180,6 +180,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "reasoning.level",
+        name: "Reasoning Level",
+        category: Category::Provider,
+        keybind: None,
+        slash: Some("reasoning"),
+        available: |state| state.model_supports_thinking,
+        execute: |_state| Action::None, // Handled in handle_shared_slash
+    });
+
+    registry.register(Command {
         id: "provider.connect",
         name: "Connect Provider",
         category: Category::Provider,

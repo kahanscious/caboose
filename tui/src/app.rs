@@ -4682,6 +4682,17 @@ impl App {
                                         .max_session_cost = new_max;
                                     crate::config::save_behavior_max_session_cost(new_max);
                                 }
+                                "reasoning.level" => {
+                                    let new_mode = crate::provider::ThinkingMode::ALL
+                                        .iter()
+                                        .find(|m| m.label() == item.value)
+                                        .copied()
+                                        .unwrap_or_default();
+                                    self.state.thinking_mode = new_mode;
+                                    if let Some(ref provider) = self.provider {
+                                        provider.set_thinking_mode(new_mode);
+                                    }
+                                }
                                 "migrate" => {
                                     if item.value != "(none)" {
                                         let platform_label = item.value.clone();
@@ -10606,6 +10617,32 @@ impl App {
         if slash.starts_with("create-skill") {
             let args = slash.strip_prefix("create-skill").unwrap_or("").trim();
             self.handle_create_skill_command(args);
+            return true;
+        }
+        if slash == "reasoning" {
+            if !self.state.model_supports_thinking {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "current model does not support reasoning".to_string(),
+                });
+                return true;
+            }
+            let current = self.state.thinking_mode.label().to_string();
+            let items = vec![crate::tui::slash_auto::SettingsItem {
+                key: "reasoning.level".to_string(),
+                label: "Reasoning Level".to_string(),
+                value: current,
+                kind: crate::tui::slash_auto::SettingsKind::Choice(
+                    crate::provider::ThinkingMode::ALL
+                        .iter()
+                        .map(|l| l.label().to_string())
+                        .collect(),
+                ),
+            }];
+            self.state.slash_auto = Some(crate::tui::slash_auto::SlashAutoState {
+                selected: 0,
+                mode: crate::tui::slash_auto::DropdownMode::Settings { items },
+                filter: String::new(),
+            });
             return true;
         }
         if slash == "settings" {
