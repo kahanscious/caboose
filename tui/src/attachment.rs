@@ -89,6 +89,63 @@ pub fn format_size(bytes: usize) -> String {
     }
 }
 
+#[allow(dead_code)] // used in app.rs Ctrl+V handlers (wired in next commit)
+/// Create an Attachment from raw RGBA pixel data (e.g. from clipboard).
+/// Encodes the data as PNG. Returns an error if dimensions are invalid.
+pub fn attachment_from_rgba(
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+) -> Result<Attachment, String> {
+    let w: u32 = width
+        .try_into()
+        .map_err(|_| format!("Image dimensions too large: {width}x{height}"))?;
+    let h: u32 = height
+        .try_into()
+        .map_err(|_| format!("Image dimensions too large: {width}x{height}"))?;
+
+    let expected_len = (width as u64) * (height as u64) * 4;
+    if expected_len > MAX_IMAGE_SIZE {
+        return Err(format!(
+            "Image data too large: {} for {width}x{height}",
+            format_size(expected_len as usize),
+        ));
+    }
+    if rgba.len() != expected_len as usize {
+        return Err(format!(
+            "RGBA data length mismatch: expected {expected_len} bytes for {width}x{height}, got {}",
+            rgba.len()
+        ));
+    }
+
+    // Encode as PNG
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("PNG header error: {e}"))?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|e| format!("PNG encode error: {e}"))?;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let display_name = format!("clipboard-{timestamp}.png");
+
+    Ok(Attachment {
+        path: PathBuf::from(&display_name),
+        media_type: "image/png".to_string(),
+        data: png_bytes,
+        display_name,
+    })
+}
+
 /// Extract `@file` references from input text that point to image files.
 pub fn extract_at_image_paths(text: &str) -> Vec<String> {
     let mut results = Vec::new();
@@ -187,6 +244,37 @@ mod tests {
         assert_eq!(att.display_name, "test.png");
         assert_eq!(att.data.len(), 8);
         assert_eq!(att.path, img_path);
+    }
+
+    #[test]
+    fn attachment_from_rgba_produces_valid_png() {
+        // 2x2 RGBA image
+        let rgba = vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            255, 255, 0, 255, // yellow
+        ];
+        let att = attachment_from_rgba(rgba, 2, 2).unwrap();
+        assert_eq!(att.media_type, "image/png");
+        assert!(att.display_name.starts_with("clipboard-"));
+        assert!(att.display_name.ends_with(".png"));
+        // Verify PNG magic bytes
+        assert_eq!(&att.data[..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn attachment_from_rgba_rejects_oversized_dimensions() {
+        let result = attachment_from_rgba(vec![], usize::MAX, 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn attachment_from_rgba_rejects_mismatched_data() {
+        // 2x2 image needs 16 bytes of RGBA, but we give 4
+        let result = attachment_from_rgba(vec![0, 0, 0, 0], 2, 2);
+        assert!(result.is_err());
     }
 
     #[test]
