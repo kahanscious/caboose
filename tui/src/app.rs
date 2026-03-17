@@ -10668,6 +10668,7 @@ impl App {
         }
         if slash == "reasoning" {
             if !self.state.model_supports_thinking {
+                self.state.dialog_stack.base = Screen::Chat;
                 self.state.chat_messages.push(ChatMessage::Error {
                     content: format!(
                         "{} does not support reasoning",
