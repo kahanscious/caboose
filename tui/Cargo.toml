@@ -68,6 +68,9 @@ xz2 = "0.1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Image encoding
+png = "0.17"
+
 # Syntax highlighting
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
