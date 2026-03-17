@@ -147,14 +147,22 @@ pub fn attachment_from_rgba(
 
 /// Remove shell-style backslash escapes from a path string.
 /// e.g. `Screen\ shot\ 2026.png` → `Screen shot 2026.png`
+///
+/// Only unescapes `\` before shell-special characters (space, parens, brackets,
+/// quotes, etc.) to avoid mangling Windows path separators like `C:\Users\`.
 fn unescape_shell_path(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
+    let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
-            // Take the next char literally (space, parens, etc.)
-            if let Some(next) = chars.next() {
-                result.push(next);
+            if let Some(&next) = chars.peek() {
+                if " ()[]'\"!#$&;|{}".contains(next) {
+                    // Shell escape — drop the backslash, keep the character
+                    result.push(chars.next().unwrap());
+                } else {
+                    // Not a shell escape (likely Windows path separator) — keep as-is
+                    result.push(c);
+                }
             }
         } else {
             result.push(c);
@@ -436,19 +444,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn try_attach_shell_escaped_path() {
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("Screen shot 2026.png");
         std::fs::write(&img, &[0x89]).unwrap();
 
         // Warp and other terminals paste paths with backslash-escaped spaces
-        let escaped = format!("{}Screen\\ shot\\ 2026.png", dir.path().display());
-        // Ensure the dir path separator is included
-        let escaped = if escaped.contains("//") {
-            escaped
-        } else {
-            format!("{}/Screen\\ shot\\ 2026.png", dir.path().display())
-        };
+        let escaped = format!("{}/Screen\\ shot\\ 2026.png", dir.path().display());
         let (paths, remainder) = try_attach_pasted_images(&escaped);
         assert_eq!(paths.len(), 1, "should detect shell-escaped image path");
         assert_eq!(paths[0], img);
@@ -466,6 +469,11 @@ mod tests {
         assert_eq!(
             unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"),
             "/path/to/Screen shot (1).png"
+        );
+        // Windows path separators should be preserved
+        assert_eq!(
+            unescape_shell_path("C:\\Users\\test\\photo.png"),
+            "C:\\Users\\test\\photo.png"
         );
     }
 
@@ -498,6 +506,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn extract_bare_shell_escaped_path() {
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("Screen shot 2026.png");
