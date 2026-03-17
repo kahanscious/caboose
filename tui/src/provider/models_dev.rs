@@ -60,15 +60,6 @@ fn runtime_cache() -> &'static Mutex<HashMap<String, u32>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Store a model's context window in the runtime cache.
-/// Called when provider APIs return model metadata.
-#[allow(dead_code)]
-pub fn cache_context_window(model_id: &str, context_window: u32) {
-    if let Ok(mut cache) = runtime_cache().lock() {
-        cache.insert(model_id.to_string(), context_window);
-    }
-}
-
 /// Bulk-insert context windows from a list of ModelInfo.
 pub fn cache_from_model_list(models: &[(String, Option<u32>)]) {
     if let Ok(mut cache) = runtime_cache().lock() {
@@ -146,14 +137,14 @@ mod tests {
 
     #[test]
     fn runtime_cache_provides_fallback() {
-        cache_context_window("arcee-ai/some-model:free", 131_072);
+        cache_from_model_list(&[("arcee-ai/some-model:free".to_string(), Some(131_072))]);
         assert_eq!(context_window("arcee-ai/some-model:free"), Some(131_072));
     }
 
     #[test]
     fn static_table_wins_over_cache() {
         // Even if cached with a different value, static table takes priority
-        cache_context_window("gpt-4o", 999_999);
+        cache_from_model_list(&[("gpt-4o".to_string(), Some(999_999))]);
         assert_eq!(context_window("gpt-4o"), Some(128_000));
     }
 }

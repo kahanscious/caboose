@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[allow(dead_code)]
 pub fn slug(task: &str) -> String {
     let s: String = task
         .to_lowercase()
@@ -28,7 +27,6 @@ pub fn slug(task: &str) -> String {
     truncated.trim_matches('-').to_string()
 }
 
-#[allow(dead_code)]
 pub fn unique_slug(task: &str, existing: &[String]) -> String {
     let base = slug(task);
     if !existing.contains(&base) {
@@ -44,12 +42,10 @@ pub fn unique_slug(task: &str, existing: &[String]) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn branch_name(slug: &str) -> String {
     format!("agent/{slug}")
 }
 
-#[allow(dead_code)]
 pub fn worktree_path(slug: &str) -> PathBuf {
     PathBuf::from(format!(".worktrees/agent-{slug}"))
 }
@@ -65,7 +61,6 @@ pub enum WorktreeError {
 }
 
 /// Verify `.worktrees/` is listed in `.gitignore`.
-#[allow(dead_code)]
 pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
     let status = Command::new("git")
         .args(["check-ignore", "-q", ".worktrees"])
@@ -77,8 +72,27 @@ pub fn check_worktrees_ignored() -> Result<(), WorktreeError> {
     }
 }
 
+/// Run `git diff --unified=0` between a base SHA and a branch.
+/// Must be called via spawn_blocking.
+pub fn run_diff(base_sha: &str, branch: &str) -> Result<String, WorktreeError> {
+    let out = Command::new("git")
+        .args(["diff", "--unified=0", &format!("{base_sha}...{branch}")])
+        .output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        // diff can return non-zero for binary files etc., but stderr tells us
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.is_empty() {
+            // Non-zero exit but no error — treat output as valid
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(WorktreeError::GitFailed(stderr.into()))
+        }
+    }
+}
+
 /// Create a worktree at `path` with new branch `branch` from current HEAD.
-#[allow(dead_code)]
 pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["worktree", "add", &path.to_string_lossy(), "-b", branch])
@@ -94,7 +108,6 @@ pub fn create_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
 
 /// Merge `branch` into the current branch with `--no-ff`.
 /// On conflict, aborts the merge and returns Err.
-#[allow(dead_code)]
 pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["merge", "--no-ff", branch])
@@ -102,14 +115,13 @@ pub fn merge_branch(branch: &str) -> Result<(), WorktreeError> {
     if out.status.success() {
         return Ok(());
     }
-    let _ = Command::new("git").args(["merge", "--abort"]).status();
+    let _ = Command::new("git").args(["merge", "--abort"]).output();
     Err(WorktreeError::GitFailed(
         String::from_utf8_lossy(&out.stderr).into(),
     ))
 }
 
 /// Remove a worktree and (best-effort) delete its branch.
-#[allow(dead_code)]
 pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
     let out = Command::new("git")
         .args(["worktree", "remove", &path.to_string_lossy()])
@@ -119,22 +131,95 @@ pub fn remove_worktree(path: &Path, branch: &str) -> Result<(), WorktreeError> {
             String::from_utf8_lossy(&out.stderr).into(),
         ));
     }
-    let _ = Command::new("git").args(["branch", "-d", branch]).status();
+    let _ = Command::new("git").args(["branch", "-d", branch]).output();
     Ok(())
 }
 
-/// Get the name of the currently checked-out branch.
-#[allow(dead_code)]
-pub fn current_branch() -> Result<String, WorktreeError> {
-    let out = Command::new("git")
-        .args(["branch", "--show-current"])
+/// Commit all staged and unstaged changes in a worktree branch.
+/// Returns Ok(true) when a commit was created, Ok(false) when there was nothing to commit.
+pub fn commit_worktree(path: &Path, message: &str) -> Result<bool, WorktreeError> {
+    let status = Command::new("git")
+        .args(["-C", &path.to_string_lossy(), "status", "--porcelain"])
         .output()?;
+    if !status.status.success() {
+        return Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&status.stderr).into(),
+        ));
+    }
+    if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+        return Ok(false);
+    }
+
+    let add = Command::new("git")
+        .args(["-C", &path.to_string_lossy(), "add", "-A"])
+        .output()?;
+    if !add.status.success() {
+        return Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&add.stderr).into(),
+        ));
+    }
+
+    let commit = Command::new("git")
+        .args([
+            "-C",
+            &path.to_string_lossy(),
+            "-c",
+            "user.name=Caboose",
+            "-c",
+            "user.email=caboose@local",
+            "commit",
+            "-m",
+            message,
+            "--no-gpg-sign",
+        ])
+        .output()?;
+    if commit.status.success() {
+        Ok(true)
+    } else {
+        Err(WorktreeError::GitFailed(
+            String::from_utf8_lossy(&commit.stderr).into(),
+        ))
+    }
+}
+
+/// Get the current HEAD commit SHA.
+pub fn current_head_sha() -> Result<String, WorktreeError> {
+    let out = Command::new("git").args(["rev-parse", "HEAD"]).output()?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
         Err(WorktreeError::GitFailed(
             String::from_utf8_lossy(&out.stderr).into(),
         ))
+    }
+}
+
+/// Read a file from a specific commit. Returns Ok(None) if the file does not exist there.
+pub fn read_file_at_commit(commit: &str, path: &str) -> Result<Option<String>, WorktreeError> {
+    let spec = format!("{commit}:{path}");
+    let out = Command::new("git").args(["show", &spec]).output()?;
+    if out.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&out.stdout).to_string()));
+    }
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("exists on disk, but not in") || stderr.contains("does not exist in") {
+        Ok(None)
+    } else {
+        Err(WorktreeError::GitFailed(stderr.into()))
+    }
+}
+
+/// Read a file from a subagent worktree. Returns Ok(None) when the file is absent.
+pub fn read_worktree_file(
+    worktree_root: &Path,
+    relative_path: &str,
+) -> Result<Option<String>, WorktreeError> {
+    let path = worktree_root.join(relative_path);
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(WorktreeError::Io(err)),
     }
 }
 

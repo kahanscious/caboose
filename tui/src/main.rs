@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod agent;
+mod agents;
 mod app;
 mod attachment;
 mod checkpoint;
@@ -72,44 +73,26 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// Run the background circuit daemon
-    Daemon {
-        #[command(subcommand)]
-        action: Option<DaemonAction>,
-    },
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum DaemonAction {
-    /// Start the daemon
-    Start,
-    /// Stop the daemon
-    Stop,
-    /// List active circuits
-    List,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing — suppress logs to stderr in non-interactive mode
-    // unless debug is enabled
+    // Initialize tracing.
+    // In TUI mode, user-facing failures should stay inside the chat UI rather
+    // than leaking raw log lines under the alternate screen. Keep stderr
+    // logging only for debug mode and non-interactive runs.
     let is_interactive = cli.prompt.is_none() && std::io::stdin().is_terminal();
-    let filter = if cli.debug {
-        "debug"
-    } else if is_interactive {
-        // In TUI mode, suppress rmcp/hyper/reqwest info logs — they bleed
-        // through crossterm's alternate screen as raw text.
-        "info,rmcp=warn,hyper=warn,reqwest=warn"
-    } else {
-        "warn"
-    };
-    tracing_subscriber::fmt()
+    let filter = if cli.debug { "debug" } else { "warn" };
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .init();
+        .with_target(false);
+    if cli.debug || !is_interactive {
+        subscriber.with_writer(std::io::stderr).init();
+    } else {
+        subscriber.with_writer(std::io::sink).init();
+    }
 
     // Load config
     let config = config::Config::load()?;
@@ -124,85 +107,6 @@ async fn main() -> Result<()> {
         match command {
             Command::Update { check } => {
                 return update::run(check).await;
-            }
-            Command::Daemon { action } => {
-                match action {
-                    Some(DaemonAction::Start) | None => {
-                        if circuits::daemon::is_daemon_running() {
-                            eprintln!("daemon is already running");
-                            std::process::exit(1);
-                        }
-                        return circuits::daemon::run_daemon().await;
-                    }
-                    Some(DaemonAction::Stop) => {
-                        if !circuits::daemon::is_daemon_running() {
-                            eprintln!("no daemon running");
-                            std::process::exit(1);
-                        }
-                        if let Some(port) = circuits::ipc::read_daemon_port() {
-                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
-                            {
-                                Ok(mut stream) => {
-                                    use circuits::ipc::*;
-                                    let _ =
-                                        send_message(&mut stream, &DaemonRequest::Shutdown).await;
-                                    eprintln!("daemon stop requested");
-                                }
-                                Err(e) => {
-                                    eprintln!("could not connect to daemon: {e}");
-                                    // Stale lockfile — clean it up
-                                    let _ = circuits::daemon::remove_lockfile();
-                                }
-                            }
-                        } else {
-                            eprintln!("could not read daemon port from lockfile");
-                        }
-                        return Ok(());
-                    }
-                    Some(DaemonAction::List) => {
-                        if !circuits::daemon::is_daemon_running() {
-                            eprintln!("no daemon running");
-                            std::process::exit(1);
-                        }
-                        if let Some(port) = circuits::ipc::read_daemon_port() {
-                            match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await
-                            {
-                                Ok(mut stream) => {
-                                    use circuits::ipc::*;
-                                    let _ = send_message(&mut stream, &DaemonRequest::ListCircuits)
-                                        .await;
-                                    let mut reader = tokio::io::BufReader::new(&mut stream);
-                                    match read_message::<DaemonResponse>(&mut reader).await {
-                                        Ok(DaemonResponse::CircuitList(circuits)) => {
-                                            if circuits.is_empty() {
-                                                println!("no circuits");
-                                            } else {
-                                                for c in &circuits {
-                                                    println!(
-                                                        "{} | {:?} | {} | {}s",
-                                                        c.id, c.status, c.prompt, c.interval_secs
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Ok(DaemonResponse::Error(e)) => {
-                                            eprintln!("daemon error: {e}")
-                                        }
-                                        Ok(_) => eprintln!("unexpected response"),
-                                        Err(e) => eprintln!("failed to read response: {e}"),
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("could not connect to daemon: {e}");
-                                    let _ = circuits::daemon::remove_lockfile();
-                                }
-                            }
-                        } else {
-                            eprintln!("could not read daemon port from lockfile");
-                        }
-                        return Ok(());
-                    }
-                }
             }
         }
     }

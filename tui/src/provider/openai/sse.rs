@@ -276,7 +276,8 @@ mod tests {
     #[test]
     fn reasoning_field_emits_thinking_delta() {
         let mut acc = SseAccumulator::new();
-        let chunk = r#"{"choices":[{"delta":{"reasoning":"Let me think..."},"finish_reason":null}]}"#;
+        let chunk =
+            r#"{"choices":[{"delta":{"reasoning":"Let me think..."},"finish_reason":null}]}"#;
         let events = acc.process(chunk);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], StreamEvent::ThinkingDelta(t) if t == "Let me think..."));

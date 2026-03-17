@@ -7,7 +7,7 @@ pub mod permission;
 pub mod tools;
 
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -562,9 +562,11 @@ impl AgentLoop {
                     lines_removed: 0,
                 },
                 _ => {
+                    let normalized_arguments =
+                        normalize_tool_arguments(&tc.name, &tc.arguments, &self.primary_root);
                     match tools::execute_tool(
                         &tc.name,
-                        &tc.arguments,
+                        &normalized_arguments,
                         &self.additional_secrets,
                         Some(mcp_manager),
                         None,
@@ -631,7 +633,10 @@ impl AgentLoop {
         for (tc, result) in tool_calls.iter().zip(results.iter()) {
             if tc.name == "read_file"
                 && !result.is_error
-                && let Some(path_str) = tc.arguments.get("path").and_then(|v| v.as_str())
+                && let Some(path_str) =
+                    normalize_tool_arguments(&tc.name, &tc.arguments, &self.primary_root)
+                        .get("path")
+                        .and_then(|v| v.as_str())
             {
                 let path = PathBuf::from(path_str);
                 self.recent_files.retain(|p| p != &path);
@@ -831,7 +836,7 @@ impl AgentLoop {
     fn finalize_compaction(&mut self) {
         let summary = std::mem::take(&mut self.streaming_text);
         if !summary.is_empty() {
-            self.conversation.replace_with_summary(summary);
+            self.conversation.replace_with_summary(&summary);
         }
         self.last_input_tokens = 0;
         self.last_output_tokens = 0;
@@ -967,5 +972,81 @@ impl AgentLoop {
         }
 
         out
+    }
+}
+
+fn normalize_tool_arguments(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    primary_root: &Path,
+) -> serde_json::Value {
+    let mut normalized = arguments.clone();
+    let Some(object) = normalized.as_object_mut() else {
+        return normalized;
+    };
+
+    match tool_name {
+        "read_file" | "write_file" | "edit_file" | "list_directory" | "grep" | "diagnostics" => {
+            normalize_path_field(object, "path", primary_root);
+            normalize_path_field(object, "file_path", primary_root);
+            normalize_path_field(object, "filename", primary_root);
+        }
+        "glob" => {
+            if let Some(path) = object.get("path").and_then(|v| v.as_str()) {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(resolve_tool_path(primary_root, path)),
+                );
+            } else {
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(primary_root.display().to_string()),
+                );
+            }
+        }
+        "lsp" => {
+            normalize_path_field(object, "path", primary_root);
+        }
+        "run_command" => {
+            if !object.contains_key("cwd") {
+                object.insert(
+                    "cwd".to_string(),
+                    serde_json::Value::String(primary_root.display().to_string()),
+                );
+            } else {
+                normalize_path_field(object, "cwd", primary_root);
+            }
+        }
+        "apply_patch" => {
+            object.insert(
+                "root".to_string(),
+                serde_json::Value::String(primary_root.display().to_string()),
+            );
+        }
+        _ => {}
+    }
+
+    normalized
+}
+
+fn normalize_path_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    primary_root: &Path,
+) {
+    if let Some(path) = object.get(key).and_then(|v| v.as_str()) {
+        object.insert(
+            key.to_string(),
+            serde_json::Value::String(resolve_tool_path(primary_root, path)),
+        );
+    }
+}
+
+fn resolve_tool_path(primary_root: &Path, path: &str) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_string_lossy().to_string()
+    } else {
+        primary_root.join(candidate).to_string_lossy().to_string()
     }
 }

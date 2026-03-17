@@ -407,9 +407,8 @@ impl Provider for OpenAiProvider {
                     let vision = m.id.contains("gpt-4o")
                         || m.id.contains("gpt-4-turbo")
                         || m.id.contains("gpt-4-vision");
-                    let thinking = m.id.starts_with("o1")
-                        || m.id.starts_with("o3")
-                        || m.id.starts_with("o4");
+                    let thinking =
+                        m.id.starts_with("o1") || m.id.starts_with("o3") || m.id.starts_with("o4");
                     ModelInfo {
                         name: m.id.clone(),
                         id: m.id,

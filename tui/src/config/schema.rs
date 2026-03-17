@@ -313,6 +313,10 @@ pub struct RoundhouseSchemaConfig {
     pub planning_timeout: Option<u64>,
     /// Max tokens per secondary LLM during planning
     pub per_llm_token_budget: Option<u64>,
+    /// Timeout for each LLM during critique phase (seconds)
+    pub critique_timeout: Option<u64>,
+    /// Enable/disable the critique phase (default: true)
+    pub critique: Option<bool>,
 }
 
 /// Circuits (scheduled recurring tasks) configuration.
@@ -320,8 +324,6 @@ pub struct RoundhouseSchemaConfig {
 pub struct CircuitsConfig {
     /// Max concurrent circuits (default 5)
     pub max_concurrent: Option<usize>,
-    /// Enable persistent circuits / daemon (default true)
-    pub persistent_enabled: Option<bool>,
 }
 
 /// Configuration for a local LLM provider instance.

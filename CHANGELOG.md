@@ -5,7 +5,15 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - Unreleased
+## [0.4.0] - Unreleased
+
+### Added
+
+- **Conflict detection layer** — proactive hunk-level analysis before merging parallel agent results. Detects overlapping file edits, add-vs-add, delete-vs-modify, and rename conflicts. Non-overlapping edits auto-merge; blocking overlaps surface a structured report with per-agent line ranges for user approval. Agents enter a `Review` state after execution, waiting for all siblings before any merge.
+
+---
+
+## [0.3.0] - 2026-03-13
 
 ### Added
 

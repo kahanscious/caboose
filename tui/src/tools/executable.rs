@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// Discovered schema from running `path --schema`.
 #[derive(Debug, Clone)]
 pub struct DiscoveredSchema {
-    #[allow(dead_code)] // Used in tests; available for future use
+    #[cfg_attr(not(test), allow(dead_code))]
     pub name: String,
     pub description: String,
     pub args: Option<HashMap<String, CliToolArg>>,
@@ -231,7 +231,7 @@ mod tests {
         dir: &std::path::Path,
         name: &str,
         unix: &str,
-        windows: &str,
+        _windows: &str,
     ) -> std::path::PathBuf {
         #[cfg(unix)]
         {
@@ -245,7 +245,7 @@ mod tests {
         {
             let _ = unix; // suppress unused warning
             let p = dir.join(format!("{name}.cmd"));
-            std::fs::write(&p, windows).unwrap();
+            std::fs::write(&p, _windows).unwrap();
             p
         }
     }

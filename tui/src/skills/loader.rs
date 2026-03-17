@@ -70,27 +70,6 @@ pub fn load_user_skills_with_global(workspace: &Path, global_dir: &Path) -> Vec<
     skills
 }
 
-/// Load with validation against built-in command names.
-#[allow(dead_code)]
-pub fn load_user_skills_validated(workspace: &Path, command_names: &[&str]) -> Vec<Skill> {
-    let mut skills = load_user_skills(workspace);
-    skills.retain(|s| {
-        if command_names
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(&s.name))
-        {
-            tracing::warn!(
-                "Skipping skill '{}' — name conflicts with built-in command",
-                s.name
-            );
-            false
-        } else {
-            true
-        }
-    });
-    skills
-}
-
 /// Scan a single directory for .md files and folder skills.
 fn scan_directory(dir: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();
@@ -372,21 +351,6 @@ mod tests {
         let review: Vec<_> = skills.iter().filter(|s| s.name == "review").collect();
         assert_eq!(review.len(), 1);
         assert!(review[0].template.contains("Project version"));
-    }
-
-    #[test]
-    fn rejects_skill_with_builtin_command_name() {
-        let dir = TempDir::new().unwrap();
-        let skills_dir = dir.path().join(".caboose").join("skills");
-        std::fs::create_dir_all(&skills_dir).unwrap();
-        std::fs::write(skills_dir.join("model.md"), "Bad\nThis shadows /model.").unwrap();
-
-        let commands = vec![
-            "model", "connect", "compact", "new", "sessions", "title", "memories", "forget", "mcp",
-            "settings", "init", "quit", "skills",
-        ];
-        let skills = load_user_skills_validated(dir.path(), &commands);
-        assert!(skills.is_empty(), "Should reject skill named 'model'");
     }
 
     #[test]

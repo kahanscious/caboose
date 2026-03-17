@@ -1,4 +1,6 @@
+pub mod conflict;
 pub mod executor;
+#[cfg(test)]
 pub mod pipeline;
 pub mod worktree;
 
@@ -6,41 +8,43 @@ use std::path::PathBuf;
 use std::time::Instant;
 use uuid::Uuid;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SubAgentStreamLine {
     pub kind: StreamLineKind,
     pub text: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum StreamLineKind {
-    Thinking,
     ToolCall,
     ToolResult,
     Text,
     Error,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentState {
-    Pending,
     Running,
     WaitingApproval { tool_name: String },
+    Review,
     Done,
-    Failed { message: String },
-    Conflict { report: String },
+    Failed,
+    Conflict,
 }
 
-#[allow(dead_code)]
+impl SubAgentState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Done | Self::Failed | Self::Conflict)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubAgent {
     pub id: Uuid,
     pub task: String,
     pub branch: String,
     pub worktree_path: PathBuf,
+    pub base_sha: String,
     pub state: SubAgentState,
     pub started_at: Option<Instant>,
     pub cost_usd: f64,
@@ -52,7 +56,13 @@ pub struct SubAgent {
     pub auto_approve: bool,
 }
 
-#[allow(dead_code)]
+impl SubAgent {
+    pub fn elapsed_secs(&self) -> u64 {
+        self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
 impl SubAgent {
     pub fn new(task: String, branch: String, worktree_path: PathBuf) -> Self {
         Self {
@@ -60,7 +70,8 @@ impl SubAgent {
             task,
             branch,
             worktree_path,
-            state: SubAgentState::Pending,
+            base_sha: String::new(),
+            state: SubAgentState::Running,
             started_at: None,
             cost_usd: 0.0,
             stream: Vec::new(),
@@ -68,14 +79,9 @@ impl SubAgent {
             auto_approve: false,
         }
     }
-
-    pub fn elapsed_secs(&self) -> u64 {
-        self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
-    }
 }
 
 /// Format elapsed seconds. Under 1h: "XmYYs". At or over 1h: "XhYYm".
-#[allow(dead_code)]
 pub fn format_elapsed(secs: u64) -> String {
     if secs < 3600 {
         let m = secs / 60;
@@ -89,7 +95,6 @@ pub fn format_elapsed(secs: u64) -> String {
 }
 
 /// Events sent from subagent executor tasks to the main thread.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SubAgentEvent {
     StreamLine {
@@ -104,22 +109,6 @@ pub enum SubAgentEvent {
         id: Uuid,
         cost_usd: f64,
     },
-    AgentMerged {
-        id: Uuid,
-        task: String,
-        elapsed_secs: u64,
-        cost_usd: f64,
-    },
-    AgentFailed {
-        id: Uuid,
-        task: String,
-        message: String,
-    },
-    AgentConflict {
-        id: Uuid,
-        task: String,
-        worktree_path: PathBuf,
-    },
     /// Subagent needs user approval to proceed.
     /// `id` is the SubAgent's UUID — use it to find the correct `approval_tx`
     /// in `State::sub_agents`.
@@ -132,24 +121,25 @@ pub enum SubAgentEvent {
 
 /// Result from a completed spawn_agent background task.
 /// Returned via JoinHandle to the main event loop.
-#[allow(dead_code)]
 pub struct SpawnAgentResult {
     pub agent_id: Uuid,
     pub tool_use_id: String,
     pub task: String,
     pub result_text: String,
     pub is_error: bool,
+    pub produced_changes: bool,
     pub final_state: SubAgentState,
     pub cost_usd: f64,
+    pub changes: Option<crate::sub_agent::conflict::AgentChanges>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskPipeline {
     pub stages: Vec<TaskStage>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskStage {
     pub tasks: Vec<String>,
@@ -166,7 +156,7 @@ mod tests {
             "agent/auth-refactor".to_string(),
             std::path::PathBuf::from(".worktrees/agent-auth-refactor"),
         );
-        assert!(matches!(agent.state, SubAgentState::Pending));
+        assert!(matches!(agent.state, SubAgentState::Running));
         assert_eq!(agent.task, "auth refactor");
         assert_eq!(agent.cost_usd, 0.0);
         assert!(agent.stream.is_empty());

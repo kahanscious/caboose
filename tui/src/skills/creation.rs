@@ -106,32 +106,6 @@ When you're ready to generate, you MUST use the generate_skill tool. Do not outp
     )
 }
 
-/// Build the fallback system prompt (providers without tool support).
-#[allow(dead_code)]
-pub fn fallback_system_prompt(name: &str, goal: &str) -> String {
-    format!(
-        r#"You are a skill creation assistant for the Caboose app. Your job is to help the user create a well-structured skill template.
-
-The user wants to create a skill called "{name}" with this goal: "{goal}"
-
-## Your process:
-1. Ask 2-5 focused clarifying questions to understand the user's intent, constraints, and desired behavior. Ask one question at a time.
-2. Once you have enough context, output the complete skill template.
-
-## Skill template format:
-A skill is a markdown document with YAML frontmatter (name, description) and a template body with $ARGS placeholders.
-
-## Rules:
-- Keep questions focused and one at a time
-- Always include $ARGS in the generated skill
-- Write in second person ("You should...", "Your task is...")
-- Be specific and actionable
-
-## Important:
-When ready, output ONLY the complete skill template markdown. Start directly with the YAML frontmatter (---)."#
-    )
-}
-
 /// Resolve the target directory for a given scope.
 pub fn skill_dir(scope: SkillScope) -> Option<PathBuf> {
     match scope {
@@ -228,14 +202,6 @@ mod tests {
         assert!(prompt.contains("deploy"));
         assert!(prompt.contains("automate deployment"));
         assert!(prompt.contains("generate_skill"));
-    }
-
-    #[test]
-    fn fallback_prompt_includes_name_and_goal() {
-        let prompt = fallback_system_prompt("deploy", "automate deployment");
-        assert!(prompt.contains("deploy"));
-        assert!(prompt.contains("automate deployment"));
-        assert!(!prompt.contains("generate_skill")); // no tool ref in fallback
     }
 
     #[test]

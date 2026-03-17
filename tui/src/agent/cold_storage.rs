@@ -60,21 +60,6 @@ impl ColdStore {
         Ok(tool_use_id.to_string())
     }
 
-    /// Recall previously stored content by output ID.
-    ///
-    /// Returns `None` if the file does not exist (e.g. after cleanup).
-    #[allow(dead_code)]
-    pub fn recall(&self, output_id: &str) -> Result<Option<String>> {
-        let safe_name = sanitize_filename(output_id);
-        let file_path = self.base_dir.join(format!("{safe_name}.txt"));
-        if file_path.exists() {
-            let content = std::fs::read_to_string(&file_path)?;
-            Ok(Some(content))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Delete the entire session cold storage directory.
     pub fn cleanup(&self) -> Result<()> {
         if self.base_dir.exists() {
@@ -126,7 +111,13 @@ pub fn build_stub(output_id: &str, tool_name: &str, tool_args: &str, content: &s
         format!("{}B", byte_size)
     };
 
-    let first_lines: String = content.lines().take(3).collect::<Vec<_>>().join("\n");
+    let first_lines: String = content.lines().take(3).fold(String::new(), |mut acc, s| {
+        if !acc.is_empty() {
+            acc.push('\n');
+        }
+        acc.push_str(s);
+        acc
+    });
 
     if tool_args.is_empty() {
         format!("[stored: {output_id}] {tool_name} → {line_count} lines, {size_str}\n{first_lines}")
@@ -142,34 +133,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_store_and_recall() {
+    fn test_store_creates_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ColdStore::new("test-session");
-        // Override base_dir to use a temp directory
         store.base_dir = dir.path().join("cold").join("test-session");
 
         let content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
         let id = store.store("tool-call-42", content).unwrap();
         assert_eq!(id, "tool-call-42");
 
-        // Recall should return the same content
-        let recalled = store.recall(&id).unwrap();
-        assert_eq!(recalled, Some(content.to_string()));
-
         // Cleanup should remove the directory
         store.cleanup().unwrap();
-        let recalled_after = store.recall(&id).unwrap();
-        assert_eq!(recalled_after, None);
-    }
-
-    #[test]
-    fn test_recall_nonexistent() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut store = ColdStore::new("test-session");
-        store.base_dir = dir.path().join("cold").join("test-session");
-
-        let result = store.recall("does-not-exist").unwrap();
-        assert_eq!(result, None);
+        assert!(!store.base_dir.exists());
     }
 
     #[test]
@@ -285,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_and_recall_with_special_chars_in_id() {
+    fn test_store_with_special_chars_in_id() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ColdStore::new("test-sanitize");
         store.base_dir = dir.path().join("cold").join("test-sanitize");
@@ -293,9 +268,5 @@ mod tests {
         let content = "hello world";
         let id = store.store("tool/call:42", content).unwrap();
         assert_eq!(id, "tool/call:42"); // returned id is the original
-
-        // Recall with the same original id should work
-        let recalled = store.recall("tool/call:42").unwrap();
-        assert_eq!(recalled, Some(content.to_string()));
     }
 }

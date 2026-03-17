@@ -94,7 +94,7 @@ pub struct ModelInfo {
     pub supports_thinking: bool,
 }
 
-/// Trait that all LLM providers must implement.
+/// Trait that all LLM providers must implement to provide a unified interface for streaming chat completions.
 pub trait Provider: Send + Sync {
     /// Stream a chat completion response.
     fn stream(

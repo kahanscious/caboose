@@ -471,12 +471,6 @@ impl LspClient {
         Ok(diags.get(&uri).cloned().unwrap_or_default())
     }
 
-    /// Current server state.
-    #[allow(dead_code)]
-    pub fn state(&self) -> &ServerState {
-        &self.state
-    }
-
     /// Graceful shutdown: send shutdown request + exit notification.
     pub async fn shutdown(mut self) {
         self.state = ServerState::ShuttingDown;

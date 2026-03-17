@@ -86,24 +86,7 @@ pub enum ToolDecision {
     Blocked(String),
 }
 
-/// Read-only tools that are safe in all modes.
-const READ_TOOLS: &[&str] = &[
-    "read_file",
-    "glob",
-    "grep",
-    "list_directory",
-    "fetch",
-    "lsp",
-    "diagnostics",
-    "web_search",
-];
-
-/// Task management tools — mutate UI-only state (no filesystem side effects).
-/// Auto-execute in all modes since they only update the in-memory task outline.
-const TASK_TOOLS: &[&str] = &["todo_write", "todo_read"];
-
-/// File-write tools.
-const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "apply_patch"];
+use crate::tools::names::{self, RUN_COMMAND};
 
 /// Returns true if `path` is an absolute path that does NOT start with `primary_root`.
 /// Relative paths are assumed to be in the primary workspace (return false).
@@ -159,9 +142,9 @@ pub fn check_permission(
 ) -> ToolDecision {
     // Cross-workspace write check: write/edit targeting a secondary workspace
     // always requires approval, regardless of mode.
-    // Note: apply_patch is excluded here — it has no top-level `path` field in
-    // tool_input (path is embedded in the diff body). apply_patch cross-workspace
-    // detection is deferred to a future enhancement.
+    // Note: apply_patch is excluded here — it has no top-level `path` field
+    // (paths are embedded in the diff body). apply_patch enforces workspace
+    // boundaries in patch.rs via validate_path_in_workspace() instead.
     if let Some(root) = primary_root
         && matches!(tool_name, "write_file" | "edit_file")
     {
@@ -182,9 +165,12 @@ pub fn check_permission(
     // Read-only tools: block access to paths outside primary root and registered workspaces.
     // This enforces that the agent only reads files the user has explicitly granted access to.
     // fetch and web_search have no file path — skip path check for them.
-    if READ_TOOLS.contains(&tool_name) {
+    if names::READ_TOOLS.contains(&tool_name) {
         if let Some(root) = primary_root
-            && !matches!(tool_name, "fetch" | "web_search" | "lsp" | "diagnostics")
+            && !matches!(
+                tool_name,
+                names::FETCH | names::WEB_SEARCH | names::LSP | names::DIAGNOSTICS
+            )
             && let Some(path) = extract_read_path(tool_name, tool_input)
             && !is_path_allowed(&path, root, allowed_workspace_paths)
         {
@@ -196,7 +182,7 @@ pub fn check_permission(
     }
 
     // Task management tools auto-execute in all modes (UI-only state, no filesystem mutation)
-    if TASK_TOOLS.contains(&tool_name) {
+    if names::TASK_TOOLS.contains(&tool_name) {
         return ToolDecision::AutoExecute;
     }
 
@@ -223,8 +209,8 @@ pub fn check_permission(
 
         PermissionMode::Plan => {
             // Plan mode: block writes, commands, MCP tools, CLI tools, and exec tools
-            if WRITE_TOOLS.contains(&tool_name)
-                || tool_name == "run_command"
+            if names::WRITE_TOOLS.contains(&tool_name)
+                || tool_name == RUN_COMMAND
                 || is_mcp_tool
                 || is_cli_tool
                 || is_exec_tool
@@ -238,9 +224,10 @@ pub fn check_permission(
         }
 
         PermissionMode::Default => {
-            if WRITE_TOOLS.contains(&tool_name) || is_mcp_tool || is_cli_tool || is_exec_tool {
+            if names::WRITE_TOOLS.contains(&tool_name) || is_mcp_tool || is_cli_tool || is_exec_tool
+            {
                 ToolDecision::RequireApproval
-            } else if tool_name == "run_command" {
+            } else if tool_name == RUN_COMMAND {
                 check_command_policy(tool_input, allow_list, deny_list)
             } else if is_cli_tool {
                 ToolDecision::RequireApproval
@@ -250,9 +237,9 @@ pub fn check_permission(
         }
 
         PermissionMode::AutoEdit => {
-            if WRITE_TOOLS.contains(&tool_name) {
+            if names::WRITE_TOOLS.contains(&tool_name) {
                 ToolDecision::AutoExecute
-            } else if tool_name == "run_command" {
+            } else if tool_name == RUN_COMMAND {
                 check_command_policy(tool_input, allow_list, deny_list)
             } else if is_mcp_tool || is_cli_tool || is_exec_tool {
                 ToolDecision::RequireApproval

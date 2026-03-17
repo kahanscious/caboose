@@ -34,8 +34,9 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
             paths
         }
         SourcePlatform::OpenCode => {
-            let mut paths = vec![home.join(".open-code")];
+            let mut paths = vec![home.join(".opencode"), home.join(".open-code")];
             if let Some(config) = dirs::config_dir() {
+                paths.push(config.join("opencode"));
                 paths.push(config.join("open-code"));
             }
             paths
@@ -48,15 +49,6 @@ pub fn config_paths(platform: &SourcePlatform) -> Vec<PathBuf> {
             paths
         }
     }
-}
-
-/// Check which platforms have detectable configs
-#[allow(dead_code)]
-pub fn detect_installed_platforms() -> Vec<SourcePlatform> {
-    SourcePlatform::all()
-        .into_iter()
-        .filter(|p| config_paths(p).iter().any(|path| path.exists()))
-        .collect()
 }
 
 #[cfg(test)]

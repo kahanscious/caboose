@@ -11,7 +11,7 @@ use crate::tui::theme::Colors;
 /// Per-state counts for the agents section header pills.
 pub struct AgentCounts {
     pub running: usize,
-    pub pending: usize,
+    pub review: usize,
     pub failed: usize,
 }
 
@@ -20,11 +20,11 @@ pub struct AgentCounts {
 pub fn agent_status_display(state: &SubAgentState) -> (&'static str, &'static str) {
     match state {
         SubAgentState::Running => ("\u{25CF}", "run"), // ●
-        SubAgentState::Pending => ("\u{25CB}", "dim"), // ○
         SubAgentState::WaitingApproval { .. } => ("\u{25CF}", "warn"), // ● amber
+        SubAgentState::Review => ("\u{25CF}", "review"), // ● blue
         SubAgentState::Done => ("\u{2713}", "done"),   // ✓
-        SubAgentState::Failed { .. } => ("\u{2717}", "fail"), // ✗
-        SubAgentState::Conflict { .. } => ("\u{2717}", "fail"), // ✗
+        SubAgentState::Failed => ("\u{2717}", "fail"), // ✗
+        SubAgentState::Conflict => ("\u{2717}", "fail"), // ✗
     }
 }
 
@@ -35,18 +35,13 @@ pub fn agent_counts(agents: &[SubAgent]) -> AgentCounts {
             .iter()
             .filter(|a| matches!(a.state, SubAgentState::Running))
             .count(),
-        pending: agents
+        review: agents
             .iter()
-            .filter(|a| matches!(a.state, SubAgentState::Pending))
+            .filter(|a| matches!(a.state, SubAgentState::Review))
             .count(),
         failed: agents
             .iter()
-            .filter(|a| {
-                matches!(
-                    a.state,
-                    SubAgentState::Failed { .. } | SubAgentState::Conflict { .. }
-                )
-            })
+            .filter(|a| matches!(a.state, SubAgentState::Failed | SubAgentState::Conflict))
             .count(),
     }
 }
@@ -75,13 +70,6 @@ pub fn render_agents_section(
             Style::default().fg(colors.info),
         ));
     }
-    if counts.pending > 0 {
-        header_spans.push(Span::raw("  "));
-        header_spans.push(Span::styled(
-            format!("\u{25CB} {} pending", counts.pending),
-            Style::default().fg(colors.text_dim),
-        ));
-    }
     if counts.failed > 0 {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
@@ -89,8 +77,15 @@ pub fn render_agents_section(
             Style::default().fg(colors.error),
         ));
     }
+    if counts.review > 0 {
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(
+            format!("\u{25CF} {} review", counts.review),
+            Style::default().fg(colors.info),
+        ));
+    }
     // Clickable dismiss when all agents are in terminal state
-    if counts.running == 0 && counts.pending == 0 && !agents.is_empty() {
+    if counts.running == 0 && counts.review == 0 && !agents.is_empty() {
         header_spans.push(Span::raw("  "));
         header_spans.push(Span::styled(
             "\u{25B8} clear",
@@ -117,7 +112,7 @@ pub fn render_agents_section(
             dot_char
         };
         let dot_color = match color_key {
-            "run" => colors.info,
+            "run" | "review" => colors.info,
             "done" => colors.success,
             "fail" => colors.error,
             "warn" => colors.warning,
@@ -126,11 +121,11 @@ pub fn render_agents_section(
 
         let right_status: String = match &agent.state {
             SubAgentState::Running => format_elapsed(agent.elapsed_secs()),
-            SubAgentState::Pending => "pending".to_string(),
             SubAgentState::WaitingApproval { tool_name } => format!("waiting: {tool_name}"),
+            SubAgentState::Review => "review".to_string(),
             SubAgentState::Done => "done".to_string(),
-            SubAgentState::Failed { .. } => "failed".to_string(),
-            SubAgentState::Conflict { .. } => "conflict".to_string(),
+            SubAgentState::Failed => "failed".to_string(),
+            SubAgentState::Conflict => "conflict".to_string(),
         };
 
         // Compute max task name width: width - 2 indent - 1 dot - 1 space - 2 gap - right_status
@@ -171,6 +166,7 @@ pub fn render(
     area: Rect,
     input_tokens: u32,
     output_tokens: u32,
+    session_cost: f64,
     context_window: u32,
     turn_count: u32,
     tokens_per_sec: Option<f64>,
@@ -222,7 +218,7 @@ pub fn render(
             Style::default().fg(colors.brand),
         ),
         Span::styled(
-            "\u{2591}".repeat(empty).to_string(),
+            "\u{2591}".repeat(empty),
             Style::default().fg(colors.text_muted),
         ),
         Span::styled(
@@ -242,12 +238,29 @@ pub fn render(
     )));
 
     // Cost estimate
-    let cost_text = match pricing.estimate_cost(model_id, input_tokens, output_tokens) {
-        Some(cost) => format!("  ${cost:.4}"),
-        None => "  $--".to_string(),
+    let turn_cost = pricing.estimate_cost(model_id, input_tokens, output_tokens);
+    let subagent_cost: f64 = sub_agents.iter().map(|a| a.cost_usd).sum();
+    let total_cost = session_cost + subagent_cost;
+    let cost_text = match turn_cost {
+        Some(cost) => format!("  Turn: ${cost:.4}"),
+        None => "  Turn: $--".to_string(),
     };
     lines.push(Line::from(Span::styled(
         cost_text,
+        Style::default().fg(colors.text_secondary),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  Session: ${session_cost:.4}"),
+        Style::default().fg(colors.text_secondary),
+    )));
+    if subagent_cost > 0.0 {
+        lines.push(Line::from(Span::styled(
+            format!("  Agents: ${subagent_cost:.4}"),
+            Style::default().fg(colors.text_secondary),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("  Total: ${total_cost:.4}"),
         Style::default().fg(colors.text_secondary),
     )));
 
@@ -288,7 +301,13 @@ pub fn render(
     lines.push(Line::from(""));
 
     // --- Files Modified section ---
-    let files_header_line = render_files_modified(&mut lines, modified_files, inner.width, &colors, files_modified_collapsed);
+    let files_header_line = render_files_modified(
+        &mut lines,
+        modified_files,
+        inner.width,
+        &colors,
+        files_modified_collapsed,
+    );
 
     // --- MCP Servers section ---
     lines.push(Line::from(Span::styled(
@@ -356,6 +375,11 @@ pub fn render(
                 let dots = ".".repeat(dot_count);
                 format!("Phase: planning{dots}")
             }
+            crate::roundhouse::RoundhousePhase::Critiquing => {
+                let dot_count = ((tick / 3) % 4) as usize;
+                let dots = ".".repeat(dot_count);
+                format!("Phase: critiquing{dots}")
+            }
             crate::roundhouse::RoundhousePhase::Synthesizing => {
                 let dot_count = ((tick / 3) % 4) as usize;
                 let dots = ".".repeat(dot_count);
@@ -422,10 +446,18 @@ pub fn render(
                 // Show per-LLM status rows
                 lines.push(Line::from(""));
 
+                // During the Critiquing phase, show critique status instead of planning status
+                let show_critique = rh.phase == crate::roundhouse::RoundhousePhase::Critiquing;
+
                 // Primary planner
+                let (primary_status_ref, primary_tick_ref) = if show_critique {
+                    (&rh.primary_critique_status, rh.primary_critique_status_tick)
+                } else {
+                    (&rh.primary_status, rh.primary_status_tick)
+                };
                 let (primary_icon, primary_status_text, primary_color) =
-                    planner_status_parts(&rh.primary_status, &colors, tick, rh.primary_status_tick);
-                let primary_name = truncate_provider_name(&rh.primary_provider, 10);
+                    planner_status_parts(primary_status_ref, &colors, tick, primary_tick_ref);
+                let primary_name = truncate_name(&rh.primary_model, 10);
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
@@ -441,13 +473,14 @@ pub fn render(
 
                 // Secondary planners
                 for secondary in &rh.secondaries {
-                    let (icon, status_text, color) = planner_status_parts(
-                        &secondary.status,
-                        &colors,
-                        tick,
-                        secondary.status_tick,
-                    );
-                    let name = truncate_provider_name(&secondary.provider_name, 10);
+                    let (sec_status_ref, sec_tick_ref) = if show_critique {
+                        (&secondary.critique_status, secondary.critique_status_tick)
+                    } else {
+                        (&secondary.status, secondary.status_tick)
+                    };
+                    let (icon, status_text, color) =
+                        planner_status_parts(sec_status_ref, &colors, tick, sec_tick_ref);
+                    let name = truncate_name(&secondary.model_name, 10);
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(format!("{icon} "), Style::default().fg(color)),
@@ -706,13 +739,17 @@ fn typewriter(text: &str, tick: u64, status_tick: u64) -> String {
     chars[..reveal].iter().collect()
 }
 
-/// Truncate or pad a provider name to at most `max` characters.
-fn truncate_provider_name(name: &str, max: usize) -> String {
-    let char_count = name.chars().count();
+/// Truncate or pad a name to at most `max` characters.
+/// If the name contains a `/`, only the part after the last `/` is used.
+/// Any trailing `:free` suffix is stripped before truncation.
+fn truncate_name(name: &str, max: usize) -> String {
+    let short = name.rsplit('/').next().unwrap_or(name);
+    let short = short.strip_suffix(":free").unwrap_or(short);
+    let char_count = short.chars().count();
     if char_count <= max {
-        name.to_string()
+        short.to_string()
     } else {
-        let truncated: String = name.chars().take(max.saturating_sub(1)).collect();
+        let truncated: String = short.chars().take(max.saturating_sub(1)).collect();
         format!("{truncated}…")
     }
 }
@@ -757,11 +794,20 @@ fn render_files_modified(
                 format!("  {arrow} Files Modified "),
                 Style::default().fg(colors.text_secondary).bold(),
             ),
-            Span::styled(format!("{file_count}"), Style::default().fg(colors.text_muted)),
+            Span::styled(
+                format!("{file_count}"),
+                Style::default().fg(colors.text_muted),
+            ),
             Span::styled(" ", Style::default()),
-            Span::styled(format!("+{total_added}"), Style::default().fg(colors.success)),
+            Span::styled(
+                format!("+{total_added}"),
+                Style::default().fg(colors.success),
+            ),
             Span::styled(" ", Style::default()),
-            Span::styled(format!("-{total_removed}"), Style::default().fg(colors.error)),
+            Span::styled(
+                format!("-{total_removed}"),
+                Style::default().fg(colors.error),
+            ),
         ]));
 
         if !collapsed {
@@ -841,12 +887,6 @@ mod agents_section_tests {
     }
 
     #[test]
-    fn agent_status_dot_pending() {
-        let (dot, _) = agent_status_display(&SubAgentState::Pending);
-        assert_eq!(dot, "○");
-    }
-
-    #[test]
     fn agent_status_dot_done() {
         let (dot, _) = agent_status_display(&SubAgentState::Done);
         assert_eq!(dot, "✓");
@@ -854,17 +894,13 @@ mod agents_section_tests {
 
     #[test]
     fn agent_status_dot_failed() {
-        let (dot, _) = agent_status_display(&SubAgentState::Failed {
-            message: "oops".into(),
-        });
+        let (dot, _) = agent_status_display(&SubAgentState::Failed);
         assert_eq!(dot, "✗");
     }
 
     #[test]
     fn agent_status_dot_conflict() {
-        let (dot, _) = agent_status_display(&SubAgentState::Conflict {
-            report: "conflict".into(),
-        });
+        let (dot, _) = agent_status_display(&SubAgentState::Conflict);
         assert_eq!(dot, "✗");
     }
 
@@ -873,12 +909,10 @@ mod agents_section_tests {
         let agents = vec![
             make_agent(SubAgentState::Running),
             make_agent(SubAgentState::Running),
-            make_agent(SubAgentState::Pending),
             make_agent(SubAgentState::Done),
         ];
         let counts = agent_counts(&agents);
         assert_eq!(counts.running, 2);
-        assert_eq!(counts.pending, 1);
         assert_eq!(counts.failed, 0);
     }
 
@@ -900,19 +934,25 @@ mod agents_section_tests {
         let colors = Colors::default();
         let mut lines = Vec::new();
         let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
-        assert!(result.is_none(), "dismiss should not show when agents still running");
+        assert!(
+            result.is_none(),
+            "dismiss should not show when agents still running"
+        );
     }
 
     #[test]
     fn dismiss_some_when_all_terminal() {
         let agents = vec![
             make_agent(SubAgentState::Done),
-            make_agent(SubAgentState::Failed { message: "err".into() }),
+            make_agent(SubAgentState::Failed),
         ];
         let colors = Colors::default();
         let mut lines = Vec::new();
         let result = render_agents_section(&mut lines, &agents, 40, &colors, 0);
-        assert!(result.is_some(), "dismiss should show when all agents terminal");
+        assert!(
+            result.is_some(),
+            "dismiss should show when all agents terminal"
+        );
     }
 
     #[test]

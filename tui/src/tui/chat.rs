@@ -215,28 +215,6 @@ pub fn render_provider_error(
     lines
 }
 
-/// Render a queued user message — dimmed with a "queued" indicator.
-#[allow(dead_code)]
-pub fn render_queued_message(content: &str, colors: &Colors) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    lines.push(Line::from(vec![
-        Span::styled("◌ ", Style::default().fg(colors.text_dim)),
-        Span::styled("You", Style::default().fg(colors.text_dim)),
-        Span::styled(" (queued)", Style::default().fg(colors.text_dim).italic()),
-    ]));
-
-    for text_line in content.lines() {
-        lines.push(Line::from(Span::styled(
-            text_line.to_string(),
-            Style::default().fg(colors.text_dim),
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines
-}
-
 /// Detect if a line is a table separator (e.g., |------|-----|)
 fn is_table_separator(line: &str) -> bool {
     let trimmed = line.trim();
@@ -284,9 +262,16 @@ fn render_table(table_lines: &[&str], colors: &Colors) -> Vec<Line<'static>> {
         if is_sep {
             let sep: String = widths
                 .iter()
-                .map(|w| "\u{2500}".repeat(*w + 2))
-                .collect::<Vec<_>>()
-                .join("\u{253C}");
+                .enumerate()
+                .fold(String::new(), |mut acc, (i, w)| {
+                    if i > 0 {
+                        acc.push('\u{253C}');
+                    }
+                    for _ in 0..(*w + 2) {
+                        acc.push('\u{2500}');
+                    }
+                    acc
+                });
             result.push(Line::from(Span::styled(
                 sep,
                 Style::default().fg(colors.border),
@@ -679,7 +664,10 @@ pub fn render_thinking_block(
                     "\u{25B6} ", // ▶
                     Style::default().fg(colors.text_muted),
                 ),
-                Span::styled("Thought process", Style::default().fg(colors.text_muted).italic()),
+                Span::styled(
+                    "Thought process",
+                    Style::default().fg(colors.text_muted).italic(),
+                ),
             ]));
         }
     } else {

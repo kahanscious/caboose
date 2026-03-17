@@ -26,48 +26,9 @@ pub fn filtered_env(additional_secrets: &[String]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Check whether a given env var name would be filtered out.
-#[allow(dead_code)]
-pub fn is_secret(key: &str, additional_secrets: &[String]) -> bool {
-    let upper = key.to_uppercase();
-    SECRET_PATTERNS.iter().any(|p| upper.contains(p)) || additional_secrets.iter().any(|s| s == key)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn filters_api_key_pattern() {
-        assert!(is_secret("ANTHROPIC_API_KEY", &[]));
-        assert!(is_secret("OPENAI_API_KEY", &[]));
-        assert!(is_secret("my_api_key", &[]));
-    }
-
-    #[test]
-    fn filters_secret_patterns() {
-        assert!(is_secret("AWS_SECRET_ACCESS_KEY", &[]));
-        assert!(is_secret("GITHUB_TOKEN", &[]));
-        assert!(is_secret("DB_PASSWORD", &[]));
-        assert!(is_secret("SSH_PRIVATE_KEY", &[]));
-        assert!(is_secret("SOME_CREDENTIAL", &[]));
-    }
-
-    #[test]
-    fn keeps_safe_variables() {
-        assert!(!is_secret("HOME", &[]));
-        assert!(!is_secret("PATH", &[]));
-        assert!(!is_secret("TERM", &[]));
-        assert!(!is_secret("SHELL", &[]));
-        assert!(!is_secret("USER", &[]));
-    }
-
-    #[test]
-    fn additional_secrets_exact_match() {
-        let extra = vec!["MY_CUSTOM_VAR".to_string()];
-        assert!(is_secret("MY_CUSTOM_VAR", &extra));
-        assert!(!is_secret("MY_CUSTOM_VAR_2", &extra));
-    }
 
     #[test]
     fn filtered_env_excludes_secrets() {

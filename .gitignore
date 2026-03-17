@@ -1,5 +1,6 @@
 # Rust build artifacts
 tui/target/
+tui/target-*/
 dist/
 *.tar.gz
 *.nupkg
@@ -49,3 +50,5 @@ npm-cache/
 
 # OS
 .DS_STORE
+
+/build-tmp

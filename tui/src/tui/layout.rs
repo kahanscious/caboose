@@ -149,6 +149,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::AgentStreamOverlay(overlay_state) => {
                 render_agent_stream_overlay(frame, frame.area(), overlay_state, app, &colors);
             }
+            DialogKind::AgentsList(list_state) => {
+                render_agents_list(frame, list_state, app, &colors);
+            }
         }
     }
 }
@@ -227,27 +230,84 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
         0u16
     };
     let attachment_height = if app.attachments.is_empty() { 0u16 } else { 1 };
-    let input_height = 4 + extra_lines + queue_height + approval_height + attachment_height;
+    let input_height = 5 + extra_lines + queue_height + approval_height + attachment_height;
 
-    let v_constraints: Vec<Constraint> = vec![
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(input_height),
+    let pin_bar_height = if app.pins.is_empty() {
+        0
+    } else if app.pins_expanded {
+        (app.pins.len() + 2) as u16 // header + pins + padding
+    } else {
+        2 // collapsed line + padding
+    };
+
+    let mut v_constraints: Vec<Constraint> = vec![
+        Constraint::Length(1), // header
     ];
+    if pin_bar_height > 0 {
+        v_constraints.push(Constraint::Length(pin_bar_height));
+    }
+    v_constraints.push(Constraint::Min(1)); // chat
+    v_constraints.push(Constraint::Length(input_height)); // input
 
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(v_constraints)
         .split(main_area);
 
+    let header_idx = 0;
+    let (pin_bar_idx, chat_idx, input_idx) = if pin_bar_height > 0 {
+        (Some(1), 2, 3)
+    } else {
+        (None, 1, 2)
+    };
+
     // --- Header bar ---
-    crate::tui::header::render(frame, v_chunks[0]);
+    crate::tui::header::render(frame, v_chunks[header_idx]);
+
+    // --- Pin bar ---
+    if let Some(idx) = pin_bar_idx {
+        let pin_area = v_chunks[idx];
+        if app.pins_expanded {
+            let mut lines = vec![Line::from(vec![
+                Span::styled("\u{25bc} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    "Pins",
+                    Style::default()
+                        .fg(colors.text)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])];
+            for (i, pin) in app.pins.iter().enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {}. ", i + 1),
+                        Style::default().fg(colors.text_muted),
+                    ),
+                    Span::styled(pin.as_str(), Style::default().fg(colors.text)),
+                ]));
+            }
+            frame.render_widget(Paragraph::new(lines), pin_area);
+        } else {
+            let line = Line::from(vec![
+                Span::styled("\u{25b6} ", Style::default().fg(colors.text_muted)),
+                Span::styled(
+                    format!(
+                        "{} pin{}",
+                        app.pins.len(),
+                        if app.pins.len() == 1 { "" } else { "s" }
+                    ),
+                    Style::default().fg(colors.text),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line), pin_area);
+        }
+    }
 
     // --- Chat area ---
-    render_chat(frame, v_chunks[1], app, colors);
+    render_chat(frame, v_chunks[chat_idx], app, colors);
 
     // --- Input area ---
-    render_input(frame, v_chunks[2], app, colors);
+    render_input(frame, v_chunks[input_idx], app, colors);
 
     // --- Sidebar ---
     if show_sidebar {
@@ -279,6 +339,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             h_chunks[1],
             app.agent.last_input_tokens,
             app.agent.last_output_tokens,
+            app.session_cost,
             app.agent.context_window,
             app.agent.turn_count,
             app.agent.last_tokens_per_sec,
@@ -383,7 +444,11 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         msg_boundaries.push((start_idx, kind));
         let msg_lines = match msg {
             ChatMessage::User { content, images } => {
-                let accent = mode_accent(app.mode, colors);
+                let accent = if app.roundhouse_session.is_some() {
+                    colors.roundhouse
+                } else {
+                    mode_accent(app.mode, colors)
+                };
                 crate::tui::chat::render_user_message(content, images, colors, accent)
             }
             ChatMessage::Assistant {
@@ -568,32 +633,121 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         let accent = colors.roundhouse;
 
         // Primary planner streaming
-        if !rh.primary_streaming_text.is_empty() {
-            let still_streaming = matches!(
-                rh.primary_status,
-                crate::roundhouse::PlannerStatus::Streaming
-                    | crate::roundhouse::PlannerStatus::Thinking
-                    | crate::roundhouse::PlannerStatus::UsingTool(_)
-            );
+        let planner_active = matches!(
+            rh.primary_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if planner_active || !rh.primary_streaming_text.is_empty() {
+            msg_boundaries.push((lines.len(), 2u8));
+            // Header: show tool name if using a tool, otherwise "(planning)"
+            let phase_label = match &rh.primary_status {
+                crate::roundhouse::PlannerStatus::UsingTool(tool) => {
+                    format!("reading {tool}")
+                }
+                _ => "(planning)".to_string(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled("\u{25CF} ", Style::default().fg(accent)),
+                Span::styled(
+                    format!("{} ", rh.primary_model),
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+                Span::styled(phase_label, Style::default().fg(colors.text_muted)),
+            ]));
+            // Render tool calls with running/completed status
+            for tc in &rh.primary_tool_calls {
+                let label = match tc.tool_name.as_str() {
+                    "read_file" => "Read",
+                    "list_directory" => "List",
+                    "glob" => "Glob",
+                    "grep" => "Grep",
+                    _ => tc.tool_name.as_str(),
+                };
+                let (icon_color, summary_text) = match tc.status {
+                    crate::roundhouse::ToolCallStatus::Running => {
+                        let dim = (app.tick / 10) % 2 == 1;
+                        let color = if dim { colors.text_dim } else { colors.warning };
+                        (color, tc.args_summary.clone())
+                    }
+                    crate::roundhouse::ToolCallStatus::Success => (
+                        colors.success,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                    crate::roundhouse::ToolCallStatus::Failed => (
+                        colors.error,
+                        tc.result_summary
+                            .clone()
+                            .unwrap_or_else(|| tc.args_summary.clone()),
+                    ),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("\u{2022} ", Style::default().fg(icon_color)),
+                    Span::styled(label, Style::default().fg(colors.text)),
+                    Span::styled(
+                        format!("  {summary_text}"),
+                        Style::default()
+                            .fg(colors.text_dim)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ]));
+            }
+            if !rh.primary_streaming_text.is_empty() {
+                let parsed =
+                    crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
+                }
+            }
+            if planner_active {
+                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
+                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
+                lines.push(Line::from(Span::styled(
+                    format!("{spinner} "),
+                    Style::default().fg(accent),
+                )));
+            }
+        }
+
+        // Primary critique streaming
+        let critique_active = matches!(
+            rh.primary_critique_status,
+            crate::roundhouse::PlannerStatus::Streaming
+                | crate::roundhouse::PlannerStatus::Thinking
+                | crate::roundhouse::PlannerStatus::UsingTool(_)
+        );
+        if critique_active || !rh.primary_critique_streaming_text.is_empty() {
             msg_boundaries.push((lines.len(), 2u8));
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
-                Span::styled("(planning)", Style::default().fg(colors.text_muted)),
+                Span::styled("(critiquing)", Style::default().fg(colors.text_muted)),
             ]));
-            let parsed =
-                crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
-            if !parsed.is_empty() {
-                let mut sl = parsed;
-                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                    sl.pop();
+            if !rh.primary_critique_streaming_text.is_empty() {
+                let parsed = crate::tui::chat::parse_markdown(
+                    &rh.primary_critique_streaming_text,
+                    colors,
+                    accent,
+                );
+                if !parsed.is_empty() {
+                    let mut sl = parsed;
+                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                        sl.pop();
+                    }
+                    lines.extend(sl);
                 }
-                lines.extend(sl);
             }
-            if still_streaming {
+            if critique_active {
                 const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
                 let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
                 lines.push(Line::from(Span::styled(
@@ -611,7 +765,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             lines.push(Line::from(vec![
                 Span::styled("\u{25CF} ", Style::default().fg(accent)),
                 Span::styled(
-                    format!("{} ", rh.primary_provider),
+                    format!("{} ", rh.primary_model),
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
                 Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
@@ -778,7 +932,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let phrase = THINKING_PHRASES[phrase_idx % THINKING_PHRASES.len()];
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(phrase, chars_visible)),
+                    typewriter(phrase, chars_visible),
                     Style::default().fg(colors.text_muted),
                 )));
             }
@@ -792,7 +946,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                     .unwrap_or(fallback);
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(label, chars_visible)),
+                    typewriter(label, chars_visible),
                     Style::default().fg(colors.text_muted),
                 )));
             }
@@ -800,7 +954,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 let phrase = "Compacting conversation...";
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", typewriter(phrase, chars_visible)),
+                    typewriter(phrase, chars_visible),
                     Style::default().fg(colors.warning),
                 )));
             }
@@ -812,7 +966,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             let phrase = "Generating CABOOSE.md...";
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("  {}", typewriter(phrase, chars_visible)),
+                typewriter(phrase, chars_visible),
                 Style::default().fg(colors.warning),
             )));
         }
@@ -926,17 +1080,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         max_scroll
     };
 
-    // Store plain text for text selection extraction
-    let plain_lines: Vec<String> = lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>()
-        })
-        .collect();
-    *app.rendered_chat_text.borrow_mut() = plain_lines;
+    // Store wrapped plain text rows for text selection extraction.
+    *app.rendered_chat_text.borrow_mut() = flatten_wrapped_rows(&lines, area.width as usize);
 
     // Build paragraph, apply scroll, and render
     let chat = Paragraph::new(lines)
@@ -993,6 +1138,33 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         };
         frame.render_widget(Paragraph::new(indicator), indicator_area);
     }
+}
+
+fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    lines
+        .iter()
+        .flat_map(|line| {
+            let plain = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+
+            if plain.is_empty() {
+                return vec![String::new()];
+            }
+
+            let chars: Vec<char> = plain.chars().collect();
+            chars
+                .chunks(width)
+                .map(|chunk| chunk.iter().collect())
+                .collect()
+        })
+        .collect()
 }
 
 /// Render the input area (with optional queued messages box above).
@@ -1191,6 +1363,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             auto,
             &app.input.content(),
             &app.commands,
+            &app.agent_definitions,
             &app.skills,
             colors,
             true,
@@ -1639,6 +1812,11 @@ fn render_migration_checklist(
                 .iter()
                 .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::ClaudeMd(_)))
                 .count();
+            let agent_count = checklist
+                .items
+                .iter()
+                .filter(|i| i.toggled && matches!(&i.kind, MigrationItemKind::Agent(_)))
+                .count();
 
             let mut preview_lines: Vec<String> = vec!["Will apply:".to_string(), String::new()];
             if mcp_count > 0 {
@@ -1649,6 +1827,12 @@ fn render_migration_checklist(
             }
             if claude_md_count > 0 {
                 preview_lines.push("  + CLAUDE.md content to CABOOSE.md".to_string());
+            }
+            if agent_count > 0 {
+                preview_lines.push(format!(
+                    "  + {} agent definition(s) to .caboose/agents",
+                    agent_count
+                ));
             }
 
             let height: u16 = (preview_lines.len() as u16 + 5).min(area.height);
@@ -1710,7 +1894,6 @@ fn render_agent_stream_overlay(
     state: &State,
     colors: &theme::Colors,
 ) {
-    use ratatui::style::Modifier;
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Paragraph};
 
@@ -1774,12 +1957,6 @@ fn render_agent_stream_overlay(
         .iter()
         .map(|line| {
             let (style, prefix) = match line.kind {
-                crate::sub_agent::StreamLineKind::Thinking => (
-                    Style::default()
-                        .fg(colors.text_dim)
-                        .add_modifier(Modifier::ITALIC),
-                    "",
-                ),
                 crate::sub_agent::StreamLineKind::ToolCall => {
                     (Style::default().fg(colors.info), "")
                 }
@@ -1817,6 +1994,75 @@ fn render_agent_stream_overlay(
     );
 }
 
+fn render_agents_list(
+    frame: &mut Frame,
+    list_state: &crate::tui::dialog::AgentsListState,
+    app: &State,
+    colors: &theme::Colors,
+) {
+    let area = frame.area();
+    let agents = &app.agent_definitions;
+
+    let content_rows = agents.len().max(1) as u16;
+    let height: u16 = (content_rows + 5).min(area.height);
+    let width: u16 = 72_u16.min(area.width);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Agents ")
+        .border_style(Style::default().fg(colors.brand));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if agents.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No agents loaded. Add .md files to .caboose/agents/",
+            Style::default().fg(colors.text_secondary),
+        )));
+    } else {
+        let inner_w = width.saturating_sub(4) as usize;
+        for (i, agent) in agents.iter().enumerate() {
+            let model_tag = agent.model.as_deref().unwrap_or("default");
+            let source_tag = match agent.source {
+                crate::agents::AgentSource::Project => "project",
+                crate::agents::AgentSource::Global => "global",
+            };
+            let right = format!("{model_tag}  {source_tag}");
+            let left_max = inner_w.saturating_sub(right.len() + 2);
+            let left = format!("/{:<10} {}", agent.name, agent.description);
+            let left_truncated = if left.len() > left_max {
+                format!("{}…", &left[..left_max.saturating_sub(1)])
+            } else {
+                left
+            };
+            let padding = inner_w.saturating_sub(left_truncated.len() + right.len());
+            let row = format!("  {left_truncated}{:>pad$}{right}", "", pad = padding);
+
+            let style = if i == list_state.selected {
+                Style::default().fg(colors.text).bg(colors.bg_hover)
+            } else {
+                Style::default().fg(colors.text)
+            };
+            lines.push(Line::from(Span::styled(row, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter: invoke | \u{2191}\u{2193}: navigate | Esc: close",
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1828,12 +2074,18 @@ mod tests {
 
     #[test]
     fn sidebar_min_width_reasonable() {
-        assert!(SIDEBAR_MIN_WIDTH >= 15, "sidebar must fit at least a short label");
+        assert!(
+            SIDEBAR_MIN_WIDTH >= 15,
+            "sidebar must fit at least a short label"
+        );
     }
 
     #[test]
     fn sidebar_max_width_bounded() {
-        assert!(SIDEBAR_MAX_WIDTH <= 120, "sidebar should not exceed half a wide terminal");
+        assert!(
+            SIDEBAR_MAX_WIDTH <= 120,
+            "sidebar should not exceed half a wide terminal"
+        );
     }
 
     #[test]
