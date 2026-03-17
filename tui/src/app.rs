@@ -6226,6 +6226,28 @@ impl App {
                 // Other overlays don't accept paste
             }
             None => {
+                // On Windows, Ctrl+V arrives as Event::Paste (bracketed paste) rather than
+                // a raw key event, so the KeyCode::Char('v')+CONTROL handler never fires.
+                // Try clipboard image here as a fallback.
+                if let Some(att) =
+                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
+                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config())
+                            .ok()
+                    })
+                {
+                    if let Some(ref info) = att.compression {
+                        let msg = format!(
+                            "Compressed {}: {} → {}",
+                            att.display_name,
+                            crate::attachment::format_size(info.original_size),
+                            crate::attachment::format_size(info.compressed_size),
+                        );
+                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                    }
+                    self.state.attachments.push(att);
+                    return;
+                }
+
                 // Check if paste contains image file paths (drag-and-drop or pasted paths)
                 let (image_paths, remainder) = crate::attachment::try_attach_pasted_images(text);
 

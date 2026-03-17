@@ -6,8 +6,26 @@ use arboard::Clipboard;
 /// Returns `Some((rgba_bytes, width, height))` if the clipboard contains an image,
 /// `None` if it contains text or is empty/inaccessible.
 pub fn read_image_from_clipboard() -> Option<(Vec<u8>, usize, usize)> {
-    let mut clipboard = Clipboard::new().ok()?;
-    let img = clipboard.get_image().ok()?;
+    let mut clipboard = match Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Clipboard::new() failed: {e}");
+            return None;
+        }
+    };
+    let img = match clipboard.get_image() {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::debug!("clipboard.get_image() failed: {e}");
+            return None;
+        }
+    };
+    tracing::debug!(
+        "Clipboard image: {}x{}, {} bytes",
+        img.width,
+        img.height,
+        img.bytes.len()
+    );
     Some((img.bytes.into_owned(), img.width, img.height))
 }
 
