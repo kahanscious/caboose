@@ -323,14 +323,14 @@ pub fn build_info_left<'a>(
         Span::styled(provider.to_string(), Style::default().fg(colors.text_dim)),
     ];
 
-    // Show thinking indicator when enabled
+    // Show reasoning level indicator when enabled
     if model_supports_thinking && thinking_mode.is_on() {
         spans.push(Span::styled(
             " \u{00b7} ".to_string(),
             Style::default().fg(colors.text_muted),
         ));
         spans.push(Span::styled(
-            "thinking".to_string(),
+            format!("reasoning: {}", thinking_mode.label()),
             Style::default().fg(colors.info),
         ));
     }
@@ -355,7 +355,7 @@ pub fn build_info_right(
             Style::default().fg(colors.text_muted),
         ));
         spans.push(Span::styled(
-            "thinking",
+            "reasoning",
             Style::default().fg(colors.text_dim),
         ));
     }
