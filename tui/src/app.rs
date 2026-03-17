@@ -10668,8 +10668,11 @@ impl App {
         }
         if slash == "reasoning" {
             if !self.state.model_supports_thinking {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: "current model does not support reasoning".to_string(),
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!(
+                        "{} does not support reasoning",
+                        self.state.active_model_name
+                    ),
                 });
                 return true;
             }
