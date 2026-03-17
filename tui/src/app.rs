@@ -2946,7 +2946,14 @@ impl App {
                 }
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new()
+                // Try clipboard image first, then fall back to text
+                if let Some(att) =
+                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
+                        crate::attachment::attachment_from_rgba(rgba, w, h).ok()
+                    })
+                {
+                    self.state.attachments.push(att);
+                } else if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.handle_paste(&text);
@@ -3625,7 +3632,14 @@ impl App {
                 }
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new()
+                // Try clipboard image first, then fall back to text
+                if let Some(att) =
+                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
+                        crate::attachment::attachment_from_rgba(rgba, w, h).ok()
+                    })
+                {
+                    self.state.attachments.push(att);
+                } else if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
                 {
                     self.handle_paste(&text);

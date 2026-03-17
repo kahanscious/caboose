@@ -89,7 +89,6 @@ pub fn format_size(bytes: usize) -> String {
     }
 }
 
-#[allow(dead_code)] // used in app.rs Ctrl+V handlers (wired in next commit)
 /// Create an Attachment from raw RGBA pixel data (e.g. from clipboard).
 /// Encodes the data as PNG. Returns an error if dimensions are invalid.
 pub fn attachment_from_rgba(

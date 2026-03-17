@@ -2,7 +2,6 @@
 
 use arboard::Clipboard;
 
-#[allow(dead_code)] // used in app.rs Ctrl+V handlers (wired in next commit)
 /// Try to read an image from the system clipboard.
 /// Returns `Some((rgba_bytes, width, height))` if the clipboard contains an image,
 /// `None` if it contains text or is empty/inaccessible.
