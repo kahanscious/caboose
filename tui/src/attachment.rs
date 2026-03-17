@@ -14,6 +14,7 @@ const COMPRESS_THRESHOLD: usize = 3_932_160;
 
 /// Info about compression applied to an attachment.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CompressionInfo {
     pub original_size: usize,
     pub compressed_size: usize,
@@ -77,7 +78,7 @@ pub fn read_image_attachment(path: &Path, config: &crate::config::schema::Images
 
     // Compress/resize if needed
     let (data, media_type) = compress_image(&data, &media_type, config)
-        .unwrap_or_else(|_| (data, media_type));
+        .unwrap_or((data, media_type));
 
     let compression = if data.len() != original_size {
         Some(CompressionInfo {
