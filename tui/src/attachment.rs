@@ -12,6 +12,14 @@ const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
 /// 3.75 MB raw → ~5 MB base64, staying under Anthropic's API limit.
 const COMPRESS_THRESHOLD: usize = 3_932_160;
 
+/// Info about compression applied to an attachment.
+#[derive(Debug, Clone)]
+pub struct CompressionInfo {
+    pub original_size: usize,
+    pub compressed_size: usize,
+    pub format_changed: bool,
+}
+
 /// A pending file attachment.
 #[derive(Debug, Clone)]
 pub struct Attachment {
@@ -19,6 +27,7 @@ pub struct Attachment {
     pub media_type: String,
     pub data: Vec<u8>,
     pub display_name: String,
+    pub compression: Option<CompressionInfo>,
 }
 
 /// Check if a file path has an image extension.
@@ -63,12 +72,22 @@ pub fn read_image_attachment(path: &Path, config: &crate::config::schema::Images
     let media_type = media_type_from_ext(path)
         .ok_or_else(|| format!("Unknown media type for {}", path.display()))?;
 
-    let _original_size = data.len();
-    let _original_media_type = media_type.clone();
+    let original_size = data.len();
+    let original_media_type = media_type.clone();
 
     // Compress/resize if needed
     let (data, media_type) = compress_image(&data, &media_type, config)
         .unwrap_or_else(|_| (data, media_type));
+
+    let compression = if data.len() != original_size {
+        Some(CompressionInfo {
+            original_size,
+            compressed_size: data.len(),
+            format_changed: media_type != original_media_type,
+        })
+    } else {
+        None
+    };
 
     // Update display name if format changed to JPEG
     let display_name = if media_type == "image/jpeg"
@@ -91,6 +110,7 @@ pub fn read_image_attachment(path: &Path, config: &crate::config::schema::Images
         media_type,
         data,
         display_name,
+        compression,
     })
 }
 
@@ -181,6 +201,7 @@ pub fn attachment_from_rgba(
         media_type: "image/png".to_string(),
         data: png_bytes,
         display_name,
+        compression: None,
     })
 }
 

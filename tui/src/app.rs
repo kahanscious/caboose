@@ -2956,6 +2956,15 @@ impl App {
                         crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
                     })
                 {
+                    if let Some(ref info) = att.compression {
+                        let msg = format!(
+                            "Compressed {}: {} → {}",
+                            att.display_name,
+                            crate::attachment::format_size(info.original_size),
+                            crate::attachment::format_size(info.compressed_size),
+                        );
+                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                    }
                     self.state.attachments.push(att);
                 } else if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
@@ -3642,6 +3651,15 @@ impl App {
                         crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
                     })
                 {
+                    if let Some(ref info) = att.compression {
+                        let msg = format!(
+                            "Compressed {}: {} → {}",
+                            att.display_name,
+                            crate::attachment::format_size(info.original_size),
+                            crate::attachment::format_size(info.compressed_size),
+                        );
+                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                    }
                     self.state.attachments.push(att);
                 } else if let Ok(mut clipboard) = arboard::Clipboard::new()
                     && let Ok(text) = clipboard.get_text()
@@ -3918,7 +3936,18 @@ impl App {
                             std::env::current_dir().unwrap_or_default().join(path)
                         };
                         match crate::attachment::read_image_attachment(&full_path, &self.images_config()) {
-                            Ok(att) => self.state.attachments.push(att),
+                            Ok(att) => {
+                                if let Some(ref info) = att.compression {
+                                    let msg = format!(
+                                        "Compressed {}: {} → {}",
+                                        att.display_name,
+                                        crate::attachment::format_size(info.original_size),
+                                        crate::attachment::format_size(info.compressed_size),
+                                    );
+                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                }
+                                self.state.attachments.push(att);
+                            }
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
                                     content: format!("Failed to attach {path_str}: {e}"),
@@ -3935,7 +3964,18 @@ impl App {
                         msg_to_send = cleaned_text;
                         for path in &bare_paths {
                             match crate::attachment::read_image_attachment(path, &self.images_config()) {
-                                Ok(att) => self.state.attachments.push(att),
+                                Ok(att) => {
+                                    if let Some(ref info) = att.compression {
+                                        let msg = format!(
+                                            "Compressed {}: {} → {}",
+                                            att.display_name,
+                                            crate::attachment::format_size(info.original_size),
+                                            crate::attachment::format_size(info.compressed_size),
+                                        );
+                                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                    }
+                                    self.state.attachments.push(att);
+                                }
                                 Err(e) => {
                                     self.state.chat_messages.push(ChatMessage::Error {
                                         content: format!(
@@ -4992,7 +5032,18 @@ impl App {
                     }
                     BrowseAction::AttachImage(path) => {
                         match crate::attachment::read_image_attachment(&path, &self.images_config()) {
-                            Ok(att) => self.state.attachments.push(att),
+                            Ok(att) => {
+                                if let Some(ref info) = att.compression {
+                                    let msg = format!(
+                                        "Compressed {}: {} → {}",
+                                        att.display_name,
+                                        crate::attachment::format_size(info.original_size),
+                                        crate::attachment::format_size(info.compressed_size),
+                                    );
+                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                }
+                                self.state.attachments.push(att);
+                            }
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Error {
                                     content: format!("Failed to attach: {e}"),
@@ -6181,6 +6232,15 @@ impl App {
                 for path in &image_paths {
                     match crate::attachment::read_image_attachment(path, &self.images_config()) {
                         Ok(att) => {
+                            if let Some(ref info) = att.compression {
+                                let msg = format!(
+                                    "Compressed {}: {} → {}",
+                                    att.display_name,
+                                    crate::attachment::format_size(info.original_size),
+                                    crate::attachment::format_size(info.compressed_size),
+                                );
+                                self.state.chat_messages.push(ChatMessage::System { content: msg });
+                            }
                             self.state.attachments.push(att);
                         }
                         Err(e) => {
