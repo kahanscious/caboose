@@ -145,7 +145,6 @@ pub fn attachment_from_rgba(
     })
 }
 
-#[allow(dead_code)] // used in app.rs handle_paste (wired in next commit)
 /// Detect image file paths in pasted text (e.g. from terminal drag-and-drop).
 /// Returns (image_paths_found, remaining_text_to_insert).
 pub fn try_attach_pasted_images(paste: &str) -> (Vec<PathBuf>, String) {

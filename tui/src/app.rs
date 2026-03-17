@@ -6146,14 +6146,11 @@ impl App {
                 // Other overlays don't accept paste
             }
             None => {
-                // Check if paste is a single file path to an image — auto-attach
-                let trimmed = text.trim();
-                if !trimmed.is_empty()
-                    && !trimmed.contains('\n')
-                    && crate::attachment::is_image_path(std::path::Path::new(trimmed))
-                    && std::path::Path::new(trimmed).exists()
-                {
-                    match crate::attachment::read_image_attachment(std::path::Path::new(trimmed)) {
+                // Check if paste contains image file paths (drag-and-drop or pasted paths)
+                let (image_paths, remainder) = crate::attachment::try_attach_pasted_images(text);
+
+                for path in &image_paths {
+                    match crate::attachment::read_image_attachment(path) {
                         Ok(att) => {
                             self.state.attachments.push(att);
                         }
@@ -6163,21 +6160,32 @@ impl App {
                             });
                         }
                     }
+                }
+
+                // If everything was image paths, we're done
+                if remainder.is_empty() && !image_paths.is_empty() {
                     return;
                 }
 
+                // Use remainder (non-image lines) as the paste text
+                let effective_text: &str = if image_paths.is_empty() {
+                    text
+                } else {
+                    remainder.as_str()
+                };
+
                 // Base screen (Home or Chat) — paste into input with threshold check
-                let line_count = text.lines().count();
-                let char_count = text.len();
+                let line_count = effective_text.lines().count();
+                let char_count = effective_text.len();
                 if line_count > PASTE_THRESHOLD_LINES || char_count > PASTE_THRESHOLD_CHARS {
                     self.state.dialog_stack.push(DialogKind::PasteConfirm {
-                        text: text.to_string(),
+                        text: effective_text.to_string(),
                         line_count,
                         char_count,
                     });
                 } else {
-                    self.state.input.push_str(text);
-                    self.record_text_input_activity(text.len().max(16));
+                    self.state.input.push_str(effective_text);
+                    self.record_text_input_activity(effective_text.len().max(16));
                 }
             }
         }
