@@ -8,6 +8,10 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
 /// Maximum image file size (20 MB).
 const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
 
+/// Compress threshold — images under this size skip compression.
+/// 3.75 MB raw → ~5 MB base64, staying under Anthropic's API limit.
+const COMPRESS_THRESHOLD: usize = 3_932_160;
+
 /// A pending file attachment.
 #[derive(Debug, Clone)]
 pub struct Attachment {
@@ -145,6 +149,148 @@ pub fn attachment_from_rgba(
     })
 }
 
+/// Compress and resize an image if it exceeds size/dimension thresholds.
+///
+/// Returns (compressed_data, media_type). On decode failure, returns the
+/// original data unchanged and logs a warning.
+pub fn compress_image(
+    data: &[u8],
+    media_type: &str,
+    config: &crate::config::schema::ImagesConfig,
+) -> Result<(Vec<u8>, String), String> {
+    use image::ImageFormat;
+
+    // Disabled — passthrough
+    if !config.enabled() {
+        return Ok((data.to_vec(), media_type.to_string()));
+    }
+
+    // GIFs pass through unchanged (would lose animation)
+    if media_type == "image/gif" {
+        return Ok((data.to_vec(), media_type.to_string()));
+    }
+
+    let max_dim = config.max_dimension();
+
+    // Try to decode the image
+    let img = match image::load_from_memory(data) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::warn!("Image decode failed, skipping compression: {e}");
+            return Ok((data.to_vec(), media_type.to_string()));
+        }
+    };
+
+    let (w, h) = (img.width(), img.height());
+    let needs_resize = w > max_dim || h > max_dim;
+    let needs_compress = data.len() > COMPRESS_THRESHOLD;
+
+    // Step 1: passthrough — small and within dimension limits
+    if !needs_resize && !needs_compress {
+        return Ok((data.to_vec(), media_type.to_string()));
+    }
+
+    // Step 2: resize if dimensions exceed limit (aspect ratio preserved)
+    let img = if needs_resize {
+        img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+
+    // Determine if image has alpha
+    let has_alpha = matches!(
+        img.color(),
+        image::ColorType::Rgba8
+            | image::ColorType::Rgba16
+            | image::ColorType::Rgba32F
+            | image::ColorType::La8
+            | image::ColorType::La16
+    );
+
+    // For size-only triggers (no resize needed), skip re-encoding in original format
+    // and go straight to JPEG conversion — re-encoding a large PNG as PNG won't shrink it.
+    if !needs_resize && needs_compress && !has_alpha {
+        let quality_high = config.jpeg_quality();
+        let mut jpeg_buf = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg_buf,
+            quality_high,
+        );
+        if let Err(e) = img.write_with_encoder(encoder) {
+            tracing::warn!("JPEG encode failed, returning original: {e}");
+            return Ok((data.to_vec(), media_type.to_string()));
+        }
+        if jpeg_buf.len() <= COMPRESS_THRESHOLD {
+            return Ok((jpeg_buf, "image/jpeg".to_string()));
+        }
+        // Try low quality
+        let quality_low = config.jpeg_quality_low();
+        let mut jpeg_low_buf = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg_low_buf,
+            quality_low,
+        );
+        if let Err(e) = img.write_with_encoder(encoder) {
+            tracing::warn!("JPEG low-quality encode failed: {e}");
+            return Ok((jpeg_buf, "image/jpeg".to_string()));
+        }
+        return Ok((jpeg_low_buf, "image/jpeg".to_string()));
+    }
+
+    // Re-encode in original format after resize
+    let format = match media_type {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/webp" => ImageFormat::WebP,
+        _ => ImageFormat::Png,
+    };
+
+    let mut buf = Vec::new();
+    if let Err(e) = img.write_to(&mut std::io::Cursor::new(&mut buf), format) {
+        tracing::warn!("Image re-encode failed, returning original: {e}");
+        return Ok((data.to_vec(), media_type.to_string()));
+    }
+
+    // If under threshold after resize, return in original format
+    if buf.len() <= COMPRESS_THRESHOLD {
+        return Ok((buf, media_type.to_string()));
+    }
+
+    // Step 3: re-encode as JPEG (only if no alpha)
+    if has_alpha {
+        return Ok((buf, media_type.to_string()));
+    }
+
+    let quality_high = config.jpeg_quality();
+    let mut jpeg_buf = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut jpeg_buf,
+        quality_high,
+    );
+    if let Err(e) = img.write_with_encoder(encoder) {
+        tracing::warn!("JPEG encode failed, returning resized original: {e}");
+        return Ok((buf, media_type.to_string()));
+    }
+
+    if jpeg_buf.len() <= COMPRESS_THRESHOLD {
+        return Ok((jpeg_buf, "image/jpeg".to_string()));
+    }
+
+    // Try low quality JPEG
+    let quality_low = config.jpeg_quality_low();
+    let mut jpeg_low_buf = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut jpeg_low_buf,
+        quality_low,
+    );
+    if let Err(e) = img.write_with_encoder(encoder) {
+        tracing::warn!("JPEG low-quality encode failed: {e}");
+        return Ok((jpeg_buf, "image/jpeg".to_string()));
+    }
+
+    Ok((jpeg_low_buf, "image/jpeg".to_string()))
+}
+
 /// Remove shell-style backslash escapes from a path string.
 /// e.g. `Screen\ shot\ 2026.png` → `Screen shot 2026.png`
 ///
@@ -247,6 +393,141 @@ pub fn extract_at_image_paths(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use crate::config::schema::ImagesConfig;
+
+    fn default_images_config() -> ImagesConfig {
+        toml::from_str("").unwrap()
+    }
+
+    fn disabled_images_config() -> ImagesConfig {
+        toml::from_str("enabled = false").unwrap()
+    }
+
+    /// Create a synthetic PNG image of given dimensions (solid red).
+    fn make_test_png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(width, height, |_, _| {
+            image::Rgba([255, 0, 0, 255])
+        });
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+        buf
+    }
+
+    /// Create a synthetic JPEG image of given dimensions.
+    fn make_test_jpeg(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(width, height, |_, _| {
+            image::Rgb([255, 0, 0])
+        });
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        img.write_to(&mut cursor, image::ImageFormat::Jpeg).unwrap();
+        buf
+    }
+
+    /// Create a synthetic PNG with alpha (transparent pixels).
+    fn make_test_png_with_alpha(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(width, height, |_, _| {
+            image::Rgba([255, 0, 0, 128]) // semi-transparent red
+        });
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+        buf
+    }
+
+    #[test]
+    fn compress_image_passthrough_small() {
+        let config = default_images_config();
+        let png = make_test_png(100, 100);
+        let original_len = png.len();
+        let (data, media_type) = compress_image(&png, "image/png", &config).unwrap();
+        assert_eq!(data.len(), original_len, "small image should pass through");
+        assert_eq!(media_type, "image/png");
+    }
+
+    #[test]
+    fn compress_image_resizes_oversized() {
+        let config = default_images_config();
+        let png = make_test_png(3000, 2000);
+        let (data, media_type) = compress_image(&png, "image/png", &config).unwrap();
+        let decoded = image::load_from_memory(&data).unwrap();
+        assert!(decoded.width() <= 2000);
+        assert!(decoded.height() <= 2000);
+        assert_eq!(media_type, "image/png");
+    }
+
+    #[test]
+    fn compress_image_preserves_aspect_ratio() {
+        let config = default_images_config();
+        let png = make_test_png(4000, 2000); // 2:1 aspect ratio
+        let (data, _) = compress_image(&png, "image/png", &config).unwrap();
+        let decoded = image::load_from_memory(&data).unwrap();
+        assert_eq!(decoded.width(), 2000);
+        assert_eq!(decoded.height(), 1000);
+    }
+
+    #[test]
+    fn compress_image_alpha_skips_jpeg() {
+        let config = default_images_config();
+        let png = make_test_png_with_alpha(3000, 3000);
+        let (_, media_type) = compress_image(&png, "image/png", &config).unwrap();
+        // Should stay PNG because it has alpha
+        assert_eq!(media_type, "image/png");
+    }
+
+    #[test]
+    fn compress_image_disabled_passthrough() {
+        let config = disabled_images_config();
+        let png = make_test_png(3000, 3000);
+        let original_len = png.len();
+        let (data, media_type) = compress_image(&png, "image/png", &config).unwrap();
+        assert_eq!(data.len(), original_len, "disabled should passthrough");
+        assert_eq!(media_type, "image/png");
+    }
+
+    #[test]
+    fn compress_image_corrupt_returns_original() {
+        let config = default_images_config();
+        let garbage = vec![0u8; 100];
+        let (data, media_type) = compress_image(&garbage, "image/png", &config).unwrap();
+        assert_eq!(data, garbage, "corrupt image should return original");
+        assert_eq!(media_type, "image/png");
+    }
+
+    #[test]
+    fn compress_image_gif_passthrough() {
+        let config = default_images_config();
+        // GIFs are short-circuited before decode (media_type check), so even
+        // invalid GIF data passes through unchanged.
+        let gif_bytes = b"GIF89a".to_vec();
+        let (data, media_type) = compress_image(&gif_bytes, "image/gif", &config).unwrap();
+        assert_eq!(data, gif_bytes, "GIF should pass through unchanged");
+        assert_eq!(media_type, "image/gif");
+    }
+
+    #[test]
+    fn compress_image_jpeg_resizes() {
+        let config = default_images_config();
+        let jpeg = make_test_jpeg(3000, 2000);
+        let (data, media_type) = compress_image(&jpeg, "image/jpeg", &config).unwrap();
+        let decoded = image::load_from_memory(&data).unwrap();
+        assert!(decoded.width() <= 2000);
+        assert!(decoded.height() <= 2000);
+        assert_eq!(media_type, "image/jpeg");
+    }
+
+    #[test]
+    fn compress_image_small_webp_passthrough() {
+        let config = default_images_config();
+        let img = image::RgbImage::from_fn(10, 10, |_, _| image::Rgb([0, 0, 255]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::WebP).unwrap();
+        let original_len = buf.len();
+        let (data, media_type) = compress_image(&buf, "image/webp", &config).unwrap();
+        assert_eq!(data.len(), original_len);
+        assert_eq!(media_type, "image/webp");
+    }
 
     #[test]
     fn is_image_path_recognizes_extensions() {
