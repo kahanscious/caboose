@@ -82,6 +82,9 @@ pub struct Config {
     /// Image compression configuration
     #[serde(default)]
     pub images: Option<schema::ImagesConfig>,
+    /// Suggest command configuration
+    #[serde(default)]
+    pub suggest: Option<schema::SuggestConfig>,
 }
 
 impl Config {

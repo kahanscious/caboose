@@ -432,6 +432,59 @@ impl ImagesConfig {
     }
 }
 
+/// Suggest command configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestConfig {
+    /// Enable/disable /suggest command entirely (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// User-configured scan commands.
+    #[serde(default)]
+    pub scans: Vec<ScanCommandConfig>,
+    /// Priority weights for ranking findings.
+    #[serde(default)]
+    pub priorities: Option<PriorityConfig>,
+}
+
+impl Default for SuggestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scans: Vec::new(),
+            priorities: None,
+        }
+    }
+}
+
+/// A single scan command for /suggest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanCommandConfig {
+    /// Display name (e.g. "lint", "test").
+    pub name: String,
+    /// Shell command to execute.
+    pub command: String,
+    /// Finding category: "lint", "test", "todo", "custom".
+    #[serde(default = "default_custom_category")]
+    pub category: String,
+    /// Timeout in seconds (default: 120).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+fn default_custom_category() -> String {
+    "custom".to_string()
+}
+
+/// Priority weights for /suggest ranking (lower = higher priority).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriorityConfig {
+    pub test_failure: Option<u8>,
+    pub lint_error: Option<u8>,
+    pub lint_warning: Option<u8>,
+    pub todo: Option<u8>,
+    pub recent_churn: Option<u8>,
+}
+
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
@@ -959,5 +1012,53 @@ command = ".caboose/hooks/preserve-context.sh"
 
         let cfg2: ImagesConfig = toml::from_str("jpeg_quality = 30").unwrap();
         assert_eq!(cfg2.jpeg_quality_low(), 20); // clamped to min 20
+    }
+
+    #[test]
+    fn parse_suggest_config_defaults() {
+        let config: SuggestConfig = toml::from_str("").unwrap();
+        assert!(config.enabled);
+        assert!(config.scans.is_empty());
+        assert!(config.priorities.is_none());
+    }
+
+    #[test]
+    fn parse_suggest_config_disabled() {
+        let config: SuggestConfig = toml::from_str("enabled = false").unwrap();
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn parse_suggest_config_with_scans() {
+        let config: SuggestConfig = toml::from_str(
+            r#"
+            enabled = true
+            [[scans]]
+            name = "lint"
+            command = "cargo clippy --message-format=json"
+            category = "lint"
+            timeout_secs = 60
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.scans.len(), 1);
+        assert_eq!(config.scans[0].name, "lint");
+        assert_eq!(config.scans[0].timeout_secs, Some(60));
+    }
+
+    #[test]
+    fn parse_suggest_priority_config() {
+        let config: SuggestConfig = toml::from_str(
+            r#"
+            [priorities]
+            test_failure = 1
+            lint_error = 3
+            "#,
+        )
+        .unwrap();
+        let p = config.priorities.unwrap();
+        assert_eq!(p.test_failure, Some(1));
+        assert_eq!(p.lint_error, Some(3));
+        assert_eq!(p.lint_warning, None);
     }
 }
