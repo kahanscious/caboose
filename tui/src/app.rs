@@ -2959,7 +2959,9 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Char('i'), m) if m.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('V'), m)
+                if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+            {
                 // Dedicated clipboard image paste — works on terminals that intercept Ctrl+V
                 self.try_attach_clipboard_image();
             }
@@ -3645,7 +3647,9 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Char('i'), m) if m.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('V'), m)
+                if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+            {
                 // Dedicated clipboard image paste — works on terminals that intercept Ctrl+V
                 self.try_attach_clipboard_image();
             }
