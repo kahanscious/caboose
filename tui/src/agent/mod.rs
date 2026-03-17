@@ -115,9 +115,15 @@ pub struct AgentLoop {
     /// Paths of registered secondary workspaces — used for read path restriction.
     pub workspace_paths: Vec<String>,
     event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    /// Consecutive failure count per shell command — used as a circuit breaker
+    /// to stop the agent from looping on unfixable errors.
+    pub command_fail_counts: std::collections::HashMap<String, u8>,
 }
 
 const MAX_TURNS: u32 = 1000;
+/// Max consecutive failures of the same shell command before the agent
+/// is told to stop retrying and explain the problem instead.
+pub const MAX_COMMAND_RETRIES: u8 = 3;
 
 impl AgentLoop {
     pub fn new(system_prompt: String, permission_mode: PermissionMode) -> Self {
@@ -149,6 +155,23 @@ impl AgentLoop {
                 .unwrap_or_default(),
             workspace_paths: Vec::new(),
             event_rx: None,
+            command_fail_counts: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Record the outcome of a shell command for the retry circuit breaker.
+    /// Returns `true` if the command has exceeded `MAX_COMMAND_RETRIES`
+    /// consecutive failures and the agent should stop retrying.
+    pub fn record_command_result(&mut self, command: &str, failed: bool) -> bool {
+        // Normalize: trim, collapse whitespace
+        let key = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        if failed {
+            let count = self.command_fail_counts.entry(key).or_insert(0);
+            *count = count.saturating_add(1);
+            *count >= MAX_COMMAND_RETRIES
+        } else {
+            self.command_fail_counts.remove(&key);
+            false
         }
     }
 
@@ -164,6 +187,9 @@ impl AgentLoop {
         provider: &dyn Provider,
         tool_defs: &[ToolDefinition],
     ) {
+        // Reset command retry tracker — new user message means fresh intent.
+        self.command_fail_counts.clear();
+
         // Add user message to conversation
         self.conversation.push(Message {
             role: Role::User,
@@ -1048,5 +1074,69 @@ fn resolve_tool_path(primary_root: &Path, path: &str) -> String {
         candidate.to_string_lossy().to_string()
     } else {
         primary_root.join(candidate).to_string_lossy().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_agent() -> AgentLoop {
+        AgentLoop::new(String::new(), PermissionMode::Default)
+    }
+
+    #[test]
+    fn circuit_breaker_trips_after_max_retries() {
+        let mut agent = make_agent();
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(agent.record_command_result("cargo test", true)); // 3rd failure → trips
+    }
+
+    #[test]
+    fn circuit_breaker_resets_on_success() {
+        let mut agent = make_agent();
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        // Success resets the counter
+        assert!(!agent.record_command_result("cargo test", false));
+        // Start fresh — need 3 more failures to trip
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(agent.record_command_result("cargo test", true));
+    }
+
+    #[test]
+    fn circuit_breaker_normalizes_whitespace() {
+        let mut agent = make_agent();
+        assert!(!agent.record_command_result("cargo  test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        // Different whitespace, same normalized command
+        assert!(agent.record_command_result("  cargo   test  ", true));
+    }
+
+    #[test]
+    fn circuit_breaker_tracks_commands_independently() {
+        let mut agent = make_agent();
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo build", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo build", true));
+        // 3rd failure for each
+        assert!(agent.record_command_result("cargo test", true));
+        assert!(agent.record_command_result("cargo build", true));
+    }
+
+    #[test]
+    fn circuit_breaker_clears_on_new_message() {
+        let mut agent = make_agent();
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        // Clear via command_fail_counts (simulates send_message reset)
+        agent.command_fail_counts.clear();
+        // Counter reset — needs 3 more
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(!agent.record_command_result("cargo test", true));
+        assert!(agent.record_command_result("cargo test", true));
     }
 }

@@ -653,7 +653,14 @@ impl App {
                  Before editing code, read it first. Match the existing style — naming, patterns, \
                  libraries. Don't add comments unless the code is genuinely tricky. Don't refactor \
                  code you weren't asked to touch. Don't commit unless the user asks you to. \
-                 Follow security best practices — never log secrets, never commit credentials."
+                 Follow security best practices — never log secrets, never commit credentials.\n\n\
+                 ## Error recovery\n\n\
+                 When a shell command fails (non-zero exit code, test failures, lint errors, build errors), \
+                 don't just report the error — read the output, fix the underlying issue, and re-run the \
+                 command to verify. Keep going until the command succeeds or you've determined the problem \
+                 is beyond an automatic fix (e.g. requires user input, missing credentials, ambiguous \
+                 requirements). If you've retried and the same error persists, stop and explain what's \
+                 wrong instead of looping."
                     .to_string()
             });
 
@@ -9124,7 +9131,48 @@ impl App {
     /// records observations, and continues the agent loop.
     fn finalize_tool_execution(&mut self) {
         let results = std::mem::take(&mut self.state.tool_exec_results);
-        self.state.tool_exec_args.clear();
+        let tool_args = std::mem::take(&mut self.state.tool_exec_args);
+
+        // --- Circuit breaker: track consecutive shell command failures ---
+        let mut tripped_commands: Vec<String> = Vec::new();
+        for result in &results {
+            if result.tool_name.as_deref() == Some("run_command") {
+                let cmd_str = tool_args
+                    .get(&result.tool_use_id)
+                    .and_then(|v| v.get("command"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !cmd_str.is_empty() {
+                    let tripped = self
+                        .state
+                        .agent
+                        .record_command_result(cmd_str, result.is_error);
+                    if tripped {
+                        tripped_commands.push(cmd_str.to_string());
+                    }
+                }
+            }
+        }
+        // If any command hit the retry limit, inject a user-role system message
+        // telling the model to stop retrying and explain the problem.
+        if !tripped_commands.is_empty() {
+            let cmds = tripped_commands.join(", ");
+            let msg = format!(
+                "[system] The following command(s) have failed {} consecutive times: {}. \
+                 Do not retry them. Instead, explain what is going wrong and ask the user \
+                 how they would like to proceed.",
+                crate::agent::MAX_COMMAND_RETRIES,
+                cmds,
+            );
+            self.state
+                .agent
+                .conversation
+                .push(crate::agent::conversation::Message {
+                    role: crate::agent::conversation::Role::User,
+                    content: crate::agent::conversation::Content::Text(msg),
+                    tool_call_id: None,
+                });
+        }
 
         // Track tool invocation counts + recompute net file diffs from baselines
         for result in &results {
