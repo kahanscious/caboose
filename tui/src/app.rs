@@ -2951,26 +2951,17 @@ impl App {
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
                 // Try clipboard image first, then fall back to text
-                if let Some(att) =
-                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
-                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
-                    })
-                {
-                    if let Some(ref info) = att.compression {
-                        let msg = format!(
-                            "Compressed {}: {} → {}",
-                            att.display_name,
-                            crate::attachment::format_size(info.original_size),
-                            crate::attachment::format_size(info.compressed_size),
-                        );
-                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                if !self.try_attach_clipboard_image() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new()
+                        && let Ok(text) = clipboard.get_text()
+                    {
+                        self.handle_paste(&text);
                     }
-                    self.state.attachments.push(att);
-                } else if let Ok(mut clipboard) = arboard::Clipboard::new()
-                    && let Ok(text) = clipboard.get_text()
-                {
-                    self.handle_paste(&text);
                 }
+            }
+            (KeyCode::Char('i'), m) if m.contains(KeyModifiers::CONTROL) => {
+                // Dedicated clipboard image paste — works on terminals that intercept Ctrl+V
+                self.try_attach_clipboard_image();
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::SUPER) => {
                 // Let terminal/platform paste handling deliver the real text
@@ -3646,26 +3637,17 @@ impl App {
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
                 // Try clipboard image first, then fall back to text
-                if let Some(att) =
-                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
-                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
-                    })
-                {
-                    if let Some(ref info) = att.compression {
-                        let msg = format!(
-                            "Compressed {}: {} → {}",
-                            att.display_name,
-                            crate::attachment::format_size(info.original_size),
-                            crate::attachment::format_size(info.compressed_size),
-                        );
-                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                if !self.try_attach_clipboard_image() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new()
+                        && let Ok(text) = clipboard.get_text()
+                    {
+                        self.handle_paste(&text);
                     }
-                    self.state.attachments.push(att);
-                } else if let Ok(mut clipboard) = arboard::Clipboard::new()
-                    && let Ok(text) = clipboard.get_text()
-                {
-                    self.handle_paste(&text);
                 }
+            }
+            (KeyCode::Char('i'), m) if m.contains(KeyModifiers::CONTROL) => {
+                // Dedicated clipboard image paste — works on terminals that intercept Ctrl+V
+                self.try_attach_clipboard_image();
             }
             (KeyCode::Char('v'), m) if m.contains(KeyModifiers::SUPER) => {
                 // Let terminal/platform paste handling deliver the real text
@@ -4875,6 +4857,30 @@ impl App {
 
     fn images_config(&self) -> crate::config::schema::ImagesConfig {
         self.state.config.images.clone().unwrap_or_default()
+    }
+
+    /// Try to read an image from the system clipboard and attach it.
+    /// Returns true if an image was found and attached.
+    fn try_attach_clipboard_image(&mut self) -> bool {
+        if let Some(att) =
+            crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
+                crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config()).ok()
+            })
+        {
+            if let Some(ref info) = att.compression {
+                let msg = format!(
+                    "Compressed {}: {} → {}",
+                    att.display_name,
+                    crate::attachment::format_size(info.original_size),
+                    crate::attachment::format_size(info.compressed_size),
+                );
+                self.state.chat_messages.push(ChatMessage::System { content: msg });
+            }
+            self.state.attachments.push(att);
+            true
+        } else {
+            false
+        }
     }
 
     /// Count of selectable items in current picker mode.
@@ -6229,22 +6235,7 @@ impl App {
                 // On Windows, Ctrl+V arrives as Event::Paste (bracketed paste) rather than
                 // a raw key event, so the KeyCode::Char('v')+CONTROL handler never fires.
                 // Try clipboard image here as a fallback.
-                if let Some(att) =
-                    crate::clipboard::read_image_from_clipboard().and_then(|(rgba, w, h)| {
-                        crate::attachment::attachment_from_rgba(rgba, w, h, &self.images_config())
-                            .ok()
-                    })
-                {
-                    if let Some(ref info) = att.compression {
-                        let msg = format!(
-                            "Compressed {}: {} → {}",
-                            att.display_name,
-                            crate::attachment::format_size(info.original_size),
-                            crate::attachment::format_size(info.compressed_size),
-                        );
-                        self.state.chat_messages.push(ChatMessage::System { content: msg });
-                    }
-                    self.state.attachments.push(att);
+                if self.try_attach_clipboard_image() {
                     return;
                 }
 
