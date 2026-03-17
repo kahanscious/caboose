@@ -152,6 +152,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::AgentsList(list_state) => {
                 render_agents_list(frame, list_state, app, &colors);
             }
+            DialogKind::Usage => {
+                render_usage_dialog(frame, app, &colors);
+            }
         }
     }
 }
@@ -1460,6 +1463,66 @@ fn render_paste_confirm(
     frame.render_widget(paragraph, dialog_area);
 }
 
+/// Format a number with comma separators (e.g., 45230 → "45,230").
+fn format_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Render the /usage session stats dialog.
+fn render_usage_dialog(frame: &mut Frame, app: &State, colors: &theme::Colors) {
+    let area = frame.area();
+    let width: u16 = 42;
+    let height: u16 = 12;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Session Usage ")
+        .border_style(Style::default().fg(colors.info));
+
+    let turns = app.agent.turn_count;
+    let input = format_with_commas(app.session_input_tokens);
+    let output = format_with_commas(app.session_output_tokens);
+    let cost = format!("${:.2}", app.session_cost);
+
+    let last_in = format_with_commas(app.agent.last_input_tokens as u64);
+    let last_out = format_with_commas(app.agent.last_output_tokens as u64);
+
+    let rate = app
+        .pricing
+        .get(&app.active_model_name)
+        .map(|p| format!("${:.2} / ${:.2} per M", p.input_per_m, p.output_per_m))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let text = format!(
+        " Turns          {turns}\n \
+         Input tokens    {input}\n \
+         Output tokens   {output}\n \
+         Session cost    {cost}\n\n \
+         Last turn       {last_in} in / {last_out} out\n \
+         Model           {model}\n \
+         Rate            {rate}\n\n\
+              [enter] to close",
+        model = app.active_model_name,
+    );
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
 /// Render the Roundhouse provider picker dialog.
 fn render_roundhouse_picker(
     frame: &mut Frame,
@@ -2105,5 +2168,25 @@ mod tests {
     #[test]
     fn sidebar_min_terminal_width_covers_sidebar() {
         assert!(SIDEBAR_MIN_TERMINAL_WIDTH > SIDEBAR_MAX_WIDTH);
+    }
+
+    #[test]
+    fn format_with_commas_small() {
+        assert_eq!(format_with_commas(0), "0");
+        assert_eq!(format_with_commas(42), "42");
+        assert_eq!(format_with_commas(999), "999");
+    }
+
+    #[test]
+    fn format_with_commas_thousands() {
+        assert_eq!(format_with_commas(1_000), "1,000");
+        assert_eq!(format_with_commas(45_230), "45,230");
+        assert_eq!(format_with_commas(999_999), "999,999");
+    }
+
+    #[test]
+    fn format_with_commas_millions() {
+        assert_eq!(format_with_commas(1_000_000), "1,000,000");
+        assert_eq!(format_with_commas(12_345_678), "12,345,678");
     }
 }

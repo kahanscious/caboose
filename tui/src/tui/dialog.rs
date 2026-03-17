@@ -30,6 +30,8 @@ pub enum DialogKind {
     WorkspaceAdd(WorkspaceAddState),
     AgentStreamOverlay(AgentStreamOverlayState),
     AgentsList(AgentsListState),
+    /// /usage — session token and cost snapshot.
+    Usage,
 }
 
 // Debug impl needed for Action derive
@@ -55,6 +57,7 @@ impl std::fmt::Debug for DialogKind {
             Self::WorkspaceAdd(_) => write!(f, "WorkspaceAdd(...)"),
             Self::AgentStreamOverlay(_) => write!(f, "AgentStreamOverlay(...)"),
             Self::AgentsList(_) => write!(f, "AgentsList(...)"),
+            Self::Usage => write!(f, "Usage"),
         }
     }
 }

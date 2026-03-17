@@ -196,8 +196,12 @@ pub struct State {
     /// Sender cloned into background tasks.
     pub mcp_connect_tx:
         tokio::sync::mpsc::UnboundedSender<(String, Result<crate::mcp::McpConnectResult, String>)>,
-    /// Accumulated session cost in USD (reset each app run).
+    /// Accumulated session cost in USD (reset on /new).
     pub session_cost: f64,
+    /// Accumulated input tokens across all turns in this session.
+    pub session_input_tokens: u64,
+    /// Accumulated output tokens across all turns in this session.
+    pub session_output_tokens: u64,
     /// Whether the budget pause dialog is currently showing.
     pub budget_paused: bool,
     /// Checkpoint manager for file rewind.
@@ -892,6 +896,8 @@ impl App {
                 mcp_connect_rx,
                 mcp_connect_tx,
                 session_cost: 0.0,
+                session_input_tokens: 0,
+                session_output_tokens: 0,
                 budget_paused: false,
                 checkpoints: crate::checkpoint::CheckpointManager::new(),
                 attachments: Vec::new(),
@@ -2790,6 +2796,12 @@ impl App {
             Some(DialogKind::AgentsList(_)) => {
                 self.handle_agents_list_key(key);
             }
+            Some(DialogKind::Usage) => match key {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.state.dialog_stack.pop();
+                }
+                _ => {}
+            },
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
@@ -6718,7 +6730,15 @@ impl App {
 
     /// Called when a turn completes. Handles tool execution or transitions to idle.
     async fn handle_turn_complete(&mut self) {
-        // Accumulate session cost from this turn
+        // Accumulate session tokens and cost from this turn
+        self.state.session_input_tokens = self
+            .state
+            .session_input_tokens
+            .saturating_add(self.state.agent.last_input_tokens as u64);
+        self.state.session_output_tokens = self
+            .state
+            .session_output_tokens
+            .saturating_add(self.state.agent.last_output_tokens as u64);
         if let Some(cost) = self.state.pricing.estimate_cost(
             &self.state.active_model_name,
             self.state.agent.last_input_tokens,
@@ -10587,6 +10607,12 @@ impl App {
     async fn handle_shared_slash(&mut self, slash: &str) -> bool {
         if slash == "init" {
             self.handle_init_command();
+            return true;
+        }
+        if slash == "usage" {
+            self.state
+                .dialog_stack
+                .push(DialogKind::Usage);
             return true;
         }
         if slash == "mcp" {

@@ -242,12 +242,25 @@ pub fn build_default_registry() -> CommandRegistry {
             state.agent.cancel();
             state.agent.conversation.messages.clear();
             state.agent.turn_count = 0;
+            state.session_cost = 0.0;
+            state.session_input_tokens = 0;
+            state.session_output_tokens = 0;
             state.agent.session_allows.clear();
             state.agent.handoff_prompted = false;
             state.dialog_stack.base = super::dialog::Screen::Home;
             state.dialog_stack.clear();
             Action::None
         },
+    });
+
+    registry.register(Command {
+        id: "session.usage",
+        name: "Session Usage",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("usage"),
+        available: |_| true,
+        execute: |_state| Action::None, // Handled in handle_shared_slash
     });
 
     registry.register(Command {
