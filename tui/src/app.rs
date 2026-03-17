@@ -636,6 +636,10 @@ impl App {
                  Use `read_file` with `offset`/`limit` for targeted reads. \
                  Batch independent tool calls in a single response. \
                  Don't re-read files already in context unless they've been modified.\n\n\
+                 ## Images\n\n\
+                 The user may attach images to their messages (screenshots, diagrams, photos). \
+                 When images are present, you can see and analyze them. Describe what you see \
+                 and use the visual context to inform your response.\n\n\
                  ## Tasks\n\n\
                  Use `todo_write` for multi-step work (3+ steps) to show progress in the sidebar. \
                  Each call replaces the entire list. Keep task names short. \
