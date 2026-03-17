@@ -68,6 +68,39 @@ impl Storage {
         // Migration: add pins column
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN pins TEXT", []);
 
+        // Migrate: create FTS5 index for message search
+        let fts_is_new = conn
+            .execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    content,
+                    content='messages',
+                    content_rowid='id'
+                );
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                    VALUES('delete', old.id, old.content);
+                END;",
+            )
+            .is_ok();
+
+        // One-time rebuild to index pre-existing messages.
+        // Check if FTS table is empty (newly created) to avoid rebuilding on every startup.
+        if fts_is_new {
+            let fts_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get(0))
+                .unwrap_or(0);
+            let msg_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+                .unwrap_or(0);
+            if fts_count == 0 && msg_count > 0 {
+                let _ = conn
+                    .execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+            }
+        }
+
         // Migrate: create observations table (Phase 5) — non-fatal
         if let Err(e) = crate::memory::observations::create_tables(&conn) {
             tracing::warn!("Failed to create observations table: {e}");
@@ -294,6 +327,87 @@ impl Storage {
         Ok(())
     }
 
+    /// Full-text search across all session messages using FTS5.
+    /// Returns sessions ranked by relevance, with a snippet from the best-matching message.
+    /// Falls back to `list_sessions_with_content` when query is empty.
+    pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSearchResult>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return self.list_sessions_with_content(limit);
+        }
+
+        // Wrap in double quotes for safe phrase matching; fall back to substring if FTS fails
+        let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+
+        // Use a subquery to get the best-matching message per session,
+        // then join to sessions for metadata. snippet() requires direct FTS table access.
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.title, s.model, s.provider, s.turn_count, s.cwd,
+                    s.created_at, s.updated_at, s.parent_session_id, s.fork_message_count, s.pins,
+                    snippet(messages_fts, 0, '', '', '...', 20) as snip
+             FROM messages_fts
+             JOIN messages m ON m.id = messages_fts.rowid
+             JOIN sessions s ON s.id = m.session_id
+             WHERE messages_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        );
+
+        let results = match stmt {
+            Ok(ref mut stmt) => {
+                let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+                    let created_str: String = row.get(6)?;
+                    let updated_str: String = row.get(7)?;
+                    Ok(SessionSearchResult {
+                        session: super::Session {
+                            id: row.get(0)?,
+                            title: row.get(1)?,
+                            model: row.get(2)?,
+                            provider: row.get(3)?,
+                            turn_count: row.get::<_, i32>(4)? as u32,
+                            cwd: row.get(5)?,
+                            created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
+                                .unwrap_or_default()
+                                .with_timezone(&chrono::Utc),
+                            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
+                                .unwrap_or_default()
+                                .with_timezone(&chrono::Utc),
+                            parent_session_id: row.get(8)?,
+                            fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
+                            pins: row
+                                .get::<_, Option<String>>(10)?
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or_default(),
+                        },
+                        content_index: row.get::<_, String>(11).unwrap_or_default(),
+                    })
+                })?;
+
+                // Deduplicate by session ID — keep the first (best-ranked) match per session
+                let mut seen = std::collections::HashSet::new();
+                let mut results = Vec::new();
+                for row in rows {
+                    let result = row?;
+                    if seen.insert(result.session.id.clone()) {
+                        results.push(result);
+                    }
+                }
+                results
+            }
+            Err(_) => {
+                // FTS query failed (bad syntax) — fall back to substring match
+                return self.list_sessions_with_content(limit);
+            }
+        };
+
+        if results.is_empty() {
+            // No FTS matches — fall back to substring so title/metadata matches still work
+            return self.list_sessions_with_content(limit);
+        }
+
+        Ok(results)
+    }
+
     /// Delete a session and its messages.
     pub fn delete_session(&self, id: &str) -> Result<()> {
         self.conn
@@ -323,7 +437,7 @@ pub struct SessionSearchResult {
 mod tests {
     use super::*;
 
-    /// Create an in-memory storage for testing.
+    /// Create an in-memory storage for testing (includes FTS5).
     fn test_storage() -> Storage {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -346,7 +460,19 @@ mod tests {
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
-            );",
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                content='messages',
+                content_rowid='id'
+            );
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content)
+                VALUES('delete', old.id, old.content);
+            END;",
         )
         .unwrap();
         Storage { conn }
@@ -624,5 +750,81 @@ mod tests {
         storage.update_session(&session).unwrap();
         let loaded = storage.get_session("s1").unwrap().unwrap();
         assert_eq!(loaded.pins, vec!["rule one"]);
+    }
+
+    #[test]
+    fn search_sessions_finds_matching_content() {
+        let storage = test_storage();
+        let s1 = make_session("s1");
+        storage.insert_session(&s1).unwrap();
+        storage
+            .insert_message("s1", "user", "fix the authentication bug")
+            .unwrap();
+
+        let s2 = make_session("s2");
+        storage.insert_session(&s2).unwrap();
+        storage
+            .insert_message("s2", "user", "refactor the database layer")
+            .unwrap();
+
+        let results = storage.search_sessions("authentication", 50).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session.id, "s1");
+        assert!(results[0].content_index.contains("authentication"));
+    }
+
+    #[test]
+    fn search_sessions_empty_query_returns_recent() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("s1")).unwrap();
+        storage.insert_session(&make_session("s2")).unwrap();
+
+        let results = storage.search_sessions("", 50).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn search_sessions_no_match_falls_back() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("s1")).unwrap();
+        storage
+            .insert_message("s1", "user", "hello world")
+            .unwrap();
+
+        let results = storage.search_sessions("zzzznotfound", 50).unwrap();
+        // Falls back to list_with_content when no FTS matches
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn search_sessions_special_chars_dont_crash() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("s1")).unwrap();
+        storage.insert_message("s1", "user", "test").unwrap();
+
+        // These should not panic
+        let _ = storage.search_sessions("c++", 50);
+        let _ = storage.search_sessions("\"unterminated", 50);
+        let _ = storage.search_sessions("AND OR NOT", 50);
+    }
+
+    #[test]
+    fn search_sessions_delete_cleans_fts() {
+        let storage = test_storage();
+        storage.insert_session(&make_session("s1")).unwrap();
+        storage
+            .insert_message("s1", "user", "unique_fts_test_word")
+            .unwrap();
+
+        let results = storage.search_sessions("unique_fts_test_word", 50).unwrap();
+        assert_eq!(results.len(), 1);
+
+        storage.delete_session("s1").unwrap();
+
+        let results = storage.search_sessions("unique_fts_test_word", 50).unwrap();
+        // After deletion, FTS should not find it (falls back to empty list)
+        assert!(results
+            .iter()
+            .all(|r| r.session.id != "s1"));
     }
 }

@@ -77,6 +77,12 @@ impl SessionManager {
         self.storage.list_sessions_with_content(limit)
     }
 
+    /// Full-text search across all session messages.
+    /// Empty query falls back to recent sessions.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<storage::SessionSearchResult>> {
+        self.storage.search_sessions(query, limit)
+    }
+
     /// Load a session by ID.
     pub fn get(&self, id: &str) -> Result<Option<Session>> {
         self.storage.get_session(id)

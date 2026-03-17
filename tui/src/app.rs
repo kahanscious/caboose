@@ -4371,6 +4371,35 @@ impl App {
             }
             _ => {}
         }
+
+        // Refresh session search results when filter changes
+        self.refresh_session_search();
+    }
+
+    /// Re-query session search results using FTS5 when the filter text changes.
+    fn refresh_session_search(&mut self) {
+        let Some(auto) = self.state.slash_auto.as_mut() else {
+            return;
+        };
+        let crate::tui::slash_auto::DropdownMode::Sessions {
+            ref mut results, ..
+        } = auto.mode
+        else {
+            return;
+        };
+
+        let filter = auto.filter.trim().to_string();
+        if filter.is_empty() {
+            // Restore recent sessions when filter is cleared
+            if let Ok(recent) = self.state.sessions.list_with_content(50) {
+                *results = recent;
+            }
+        } else {
+            // Use FTS5 search
+            if let Ok(fts_results) = self.state.sessions.search(&filter, 50) {
+                *results = fts_results;
+            }
+        }
     }
 
     /// Handle confirm/cancel for session delete.
