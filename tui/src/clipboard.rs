@@ -5,6 +5,7 @@ use arboard::Clipboard;
 /// Try to read an image from the system clipboard.
 /// Returns `Some((rgba_bytes, width, height))` if the clipboard contains an image,
 /// `None` if it contains text or is empty/inaccessible.
+#[allow(dead_code)]
 pub fn read_image_from_clipboard() -> Option<(Vec<u8>, usize, usize)> {
     let mut clipboard = match Clipboard::new() {
         Ok(c) => c,

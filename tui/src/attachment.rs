@@ -133,6 +133,7 @@ pub fn format_size(bytes: usize) -> String {
 
 /// Create an Attachment from raw RGBA pixel data (e.g. from clipboard).
 /// Encodes the data as PNG. Returns an error if dimensions are invalid.
+#[allow(dead_code)]
 pub fn attachment_from_rgba(
     rgba: Vec<u8>,
     width: usize,
