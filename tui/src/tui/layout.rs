@@ -410,6 +410,20 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
 
 /// Render the chat message area.
 fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colors) {
+    // When Roundhouse is active in a running phase, show the model viewer instead
+    if let Some(session) = &app.roundhouse_session {
+        let is_active = !matches!(
+            session.phase,
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                | crate::roundhouse::RoundhousePhase::SelectingProviders
+                | crate::roundhouse::RoundhousePhase::Cancelled
+        );
+        if is_active {
+            crate::tui::roundhouse_screen::render_viewer(frame, session, colors, area);
+            return;
+        }
+    }
+
     // Add left padding so content isn't flush against the edge.
     // Use 4 columns so text aligns with message headers (● You / ● Caboose)
     // and wrapped lines stay aligned (ratatui wraps to column 0 of area).
@@ -1000,6 +1014,65 @@ fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
 /// Render the input area (with optional queued messages box above).
 fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colors) {
     use crate::tui::input::{build_info_left, build_info_right, render_input_field};
+
+    // When Roundhouse is in an active running phase, replace the input with gate hints
+    if let Some(session) = &app.roundhouse_session {
+        match session.phase {
+            crate::roundhouse::RoundhousePhase::Planning
+            | crate::roundhouse::RoundhousePhase::Critiquing
+            | crate::roundhouse::RoundhousePhase::Synthesizing => {
+                let hint = match session.phase {
+                    crate::roundhouse::RoundhousePhase::Planning => "  planning…  ctrl+c+c to cancel",
+                    crate::roundhouse::RoundhousePhase::Critiquing => "  critiquing…  ctrl+c+c to cancel",
+                    _ => "  synthesizing…  ctrl+c+c to cancel",
+                };
+                let para = ratatui::widgets::Paragraph::new(hint)
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_dim));
+                frame.render_widget(para, area);
+                return;
+            }
+            crate::roundhouse::RoundhousePhase::ReviewingPlans => {
+                let hint = if session.annotation_input.is_some() {
+                    format!("  annotation: {}█", session.annotation_input.as_deref().unwrap_or(""))
+                } else if session.critique_enabled {
+                    "  [c] critique   [s] skip to synthesis   [a] annotate   [q] cancel".to_string()
+                } else {
+                    "  [s] synthesize   [a] annotate   [q] cancel".to_string()
+                };
+                let para = ratatui::widgets::Paragraph::new(hint.as_str())
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_secondary));
+                frame.render_widget(para, area);
+                return;
+            }
+            crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
+                let hint = if session.annotation_input.is_some() {
+                    format!("  annotation: {}█", session.annotation_input.as_deref().unwrap_or(""))
+                } else {
+                    "  [s] synthesize   [a] annotate   [q] cancel".to_string()
+                };
+                let para = ratatui::widgets::Paragraph::new(hint.as_str())
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_secondary));
+                frame.render_widget(para, area);
+                return;
+            }
+            _ => {}
+        }
+    }
 
     // Split area: queued messages box on top, approval bar, input field below
     let queue_count = app.message_queue.len();

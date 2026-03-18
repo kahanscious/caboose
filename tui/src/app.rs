@@ -3567,6 +3567,25 @@ impl App {
     }
 
     async fn handle_chat_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // If Roundhouse is in an active phase, delegate all keys to its handler
+        let roundhouse_active = self
+            .state
+            .roundhouse_session
+            .as_ref()
+            .map(|s| {
+                !matches!(
+                    s.phase,
+                    crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                        | crate::roundhouse::RoundhousePhase::SelectingProviders
+                        | crate::roundhouse::RoundhousePhase::Cancelled
+                )
+            })
+            .unwrap_or(false);
+        if roundhouse_active {
+            self.handle_roundhouse_key(key, modifiers);
+            return;
+        }
+
         // Ctrl+C always goes to quit/cancel logic, even when a picker/dropdown is open
         if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(sel) = self.state.text_selection.take() {
@@ -4051,7 +4070,6 @@ impl App {
                                 content: "Roundhouse planning started...".to_string(),
                             });
                             self.start_roundhouse_planning();
-                            self.state.dialog_stack.base = Screen::Roundhouse;
                         }
                         return;
                     }
