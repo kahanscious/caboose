@@ -61,7 +61,7 @@ Feature gaps identified by comparing Caboose against Claude Code, Codex CLI, Aid
 | 11 | Auto-test after edits | DEFER | Aider, Cline | Configurable test command runs after every file change |
 | 12 | Custom command arguments | DEFER | OpenCode | `$PLACEHOLDER` templating in skills with argument prompts |
 | 13 | Named config profiles | DEFER | Codex CLI | Switch between named configuration sets |
-| 14 | Session/chat export | DEFER | Aider | Export conversation as markdown file |
+| 14 | Session/chat export | DONE | Aider | `/export` writes markdown to `.caboose/exports/` |
 | 15 | Ignore patterns file (`.cabooseignore`) | DEFER | Aider, Cursor | Project-level ignore for tool context |
 
 ## Tier 3 — Nice to Have / Long-term
