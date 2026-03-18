@@ -49,6 +49,8 @@ pub struct State {
     pub should_quit: bool,
     /// Set on first ctrl+c; second ctrl+c within 2s actually quits.
     pub quit_first_press: Option<Instant>,
+    /// Set on first ctrl+c in Roundhouse; second ctrl+c within 2s cancels session.
+    pub roundhouse_cancel_first_press: Option<Instant>,
     pub providers: ProviderRegistry,
     pub tools: ToolRegistry,
     pub mcp_manager: crate::mcp::McpManager,
@@ -829,6 +831,7 @@ impl App {
                 input: crate::tui::input_buffer::InputBuffer::new(),
                 should_quit: false,
                 quit_first_press: None,
+                roundhouse_cancel_first_press: None,
                 providers,
                 tools,
                 mcp_manager,
@@ -1435,6 +1438,11 @@ impl App {
                 && first.elapsed() >= Duration::from_secs(2)
             {
                 self.state.quit_first_press = None;
+            }
+            if let Some(first) = self.state.roundhouse_cancel_first_press
+                && first.elapsed() >= Duration::from_secs(2)
+            {
+                self.state.roundhouse_cancel_first_press = None;
             }
 
             // Advance animation tick
@@ -2133,6 +2141,12 @@ impl App {
                                 } else if let Some(s) =
                                     session.secondaries.get_mut(planner_index - 1)
                                 {
+                                    if matches!(
+                                        status,
+                                        crate::roundhouse::PlannerStatus::Streaming
+                                    ) {
+                                        s.streaming_text.clear();
+                                    }
                                     s.status = status;
                                     s.status_tick = tick;
                                 }
@@ -2142,10 +2156,14 @@ impl App {
                             planner_index,
                             text,
                         } => {
-                            if planner_index == 0
-                                && let Some(ref mut session) = self.state.roundhouse_session
-                            {
-                                session.primary_streaming_text.push_str(&text);
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                if planner_index == 0 {
+                                    session.primary_streaming_text.push_str(&text);
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    s.streaming_text.push_str(&text);
+                                }
                             }
                         }
                         crate::roundhouse::PlannerUpdate::ToolStarted {
@@ -2850,7 +2868,28 @@ impl App {
         }
     }
 
-    fn handle_roundhouse_key(&mut self, key: KeyCode, _modifiers: KeyModifiers) {
+    fn handle_roundhouse_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Ctrl+C: first press cancels session → Chat; second press starts quit timer
+        if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
+            if let Some(first) = self.state.roundhouse_cancel_first_press
+                && first.elapsed() < CANCEL_TIMEOUT
+            {
+                // Second Ctrl+C within window — fully cancel and go to Chat
+                self.state.roundhouse_cancel_first_press = None;
+                if let Some(ref mut session) = self.state.roundhouse_session {
+                    session.phase = crate::roundhouse::RoundhousePhase::Cancelled;
+                }
+                self.state.roundhouse_update_rx = None;
+                self.state.roundhouse_critique_rx = None;
+                self.state.dialog_stack.base = Screen::Chat;
+            } else {
+                // First Ctrl+C — arm the cancel
+                self.state.roundhouse_cancel_first_press = Some(Instant::now());
+            }
+            return;
+        }
+
         let session = match &mut self.state.roundhouse_session {
             Some(s) => s,
             None => return,
