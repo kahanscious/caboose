@@ -3321,17 +3321,34 @@ impl App {
                                 content: format!("$ {cmd}"),
                             });
                             self.state.user_scrolled_up = false;
-                            #[cfg(windows)]
-                            let output_fut = tokio::process::Command::new("cmd")
-                                .arg("/C")
-                                .arg(cmd)
-                                .output();
-                            #[cfg(not(windows))]
-                            let output_fut = tokio::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(cmd)
-                                .output();
-                            match output_fut.await
+                            // Try sh -c first (Unix, macOS, Windows+Git Bash).
+                            // On bare Windows (no sh in PATH), fall back to cmd /C.
+                            let shell_result =
+                                tokio::process::Command::new("sh")
+                                    .arg("-c")
+                                    .arg(cmd)
+                                    .output()
+                                    .await;
+                            let shell_result = match shell_result {
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::NotFound =>
+                                {
+                                    #[cfg(windows)]
+                                    {
+                                        tokio::process::Command::new("cmd")
+                                            .arg("/C")
+                                            .arg(cmd)
+                                            .output()
+                                            .await
+                                    }
+                                    #[cfg(not(windows))]
+                                    {
+                                        Err(e)
+                                    }
+                                }
+                                other => other,
+                            };
+                            match shell_result
                             {
                                 Ok(output) => {
                                     let stdout = String::from_utf8_lossy(&output.stdout);
