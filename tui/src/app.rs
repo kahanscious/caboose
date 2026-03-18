@@ -3321,11 +3321,17 @@ impl App {
                                 content: format!("$ {cmd}"),
                             });
                             self.state.user_scrolled_up = false;
-                            match tokio::process::Command::new("sh")
+                            #[cfg(windows)]
+                            let output_fut = tokio::process::Command::new("cmd")
+                                .arg("/C")
+                                .arg(cmd)
+                                .output();
+                            #[cfg(not(windows))]
+                            let output_fut = tokio::process::Command::new("sh")
                                 .arg("-c")
                                 .arg(cmd)
-                                .output()
-                                .await
+                                .output();
+                            match output_fut.await
                             {
                                 Ok(output) => {
                                     let stdout = String::from_utf8_lossy(&output.stdout);
