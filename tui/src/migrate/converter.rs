@@ -29,7 +29,8 @@ pub fn convert_mcp_server(name: &str, claude_config: &Value) -> Option<(String, 
     Some((
         name.to_string(),
         McpServerConfig {
-            command,
+            command: Some(command),
+            url: None,
             args,
             env,
             disabled: false,
@@ -193,7 +194,7 @@ mod tests {
         });
         let (name, server) = convert_mcp_server("myserver", &config).unwrap();
         assert_eq!(name, "myserver");
-        assert_eq!(server.command, "npx");
+        assert_eq!(server.command.as_deref(), Some("npx"));
         assert_eq!(server.args.len(), 2);
     }
 

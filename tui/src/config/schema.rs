@@ -293,8 +293,14 @@ pub struct McpConfig {
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
-    /// Command to spawn the MCP server process.
-    pub command: String,
+    /// Command to spawn the MCP server process (stdio transport).
+    /// Required when using stdio transport; omit when using URL transport.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// URL for HTTP/SSE transport. When set, connects via HTTP instead of spawning a process.
+    /// Example: "https://mcp.example.com/mcp"
+    #[serde(default)]
+    pub url: Option<String>,
     /// Arguments to pass to the command.
     #[serde(default)]
     pub args: Vec<String>,
@@ -610,12 +616,12 @@ env = { GITHUB_TOKEN = "ghp_test123" }
         assert_eq!(config.servers.len(), 2);
 
         let fs = &config.servers["filesystem"];
-        assert_eq!(fs.command, "npx");
+        assert_eq!(fs.command.as_deref(), Some("npx"));
         assert_eq!(fs.args.len(), 3);
         assert!(fs.env.is_empty());
 
         let gh = &config.servers["github"];
-        assert_eq!(gh.command, "npx");
+        assert_eq!(gh.command.as_deref(), Some("npx"));
         assert_eq!(gh.env["GITHUB_TOKEN"], "ghp_test123");
     }
 
@@ -772,7 +778,7 @@ command = "my-mcp-server"
 "#;
         let config: McpConfig = toml::from_str(toml_str).unwrap();
         let simple = &config.servers["simple"];
-        assert_eq!(simple.command, "my-mcp-server");
+        assert_eq!(simple.command.as_deref(), Some("my-mcp-server"));
         assert!(simple.args.is_empty());
         assert!(simple.env.is_empty());
         assert!(!simple.disabled);
@@ -833,6 +839,32 @@ disabled = true
 "#;
         let config: McpConfig = toml::from_str(toml_str).unwrap();
         assert!(config.servers["ctx"].disabled);
+    }
+
+    #[test]
+    fn parse_mcp_url_config() {
+        let toml_str = r#"
+[servers.remote]
+url = "https://mcp.example.com/mcp"
+"#;
+        let config: McpConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.servers["remote"].url.as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert!(config.servers["remote"].command.is_none());
+    }
+
+    #[test]
+    fn parse_mcp_stdio_config_still_works() {
+        let toml_str = r#"
+[servers.local]
+command = "npx"
+args = ["-y", "some-mcp-server"]
+"#;
+        let config: McpConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.servers["local"].command.as_deref(), Some("npx"));
+        assert!(config.servers["local"].url.is_none());
     }
 
     #[test]

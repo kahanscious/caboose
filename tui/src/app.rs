@@ -6218,7 +6218,8 @@ impl App {
 
         // Create config
         let server_config = crate::config::schema::McpServerConfig {
-            command,
+            command: Some(command),
+            url: None,
             args,
             env: std::collections::HashMap::new(),
             disabled: false,

@@ -26,7 +26,8 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             display_name: "Context7",
             description: "Up-to-date library documentation",
             config: McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec!["-y".to_string(), "@upstash/context7-mcp@latest".to_string()],
                 env: std::collections::HashMap::new(),
                 disabled: true,
@@ -39,7 +40,8 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             display_name: "Fetch",
             description: "HTTP fetch and web content",
             config: McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec![
                     "-y".to_string(),
                     "@modelcontextprotocol/server-fetch".to_string(),
@@ -55,7 +57,8 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             display_name: "GitHub",
             description: "GitHub API integration (issues, PRs, repos)",
             config: McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec![
                     "-y".to_string(),
                     "@modelcontextprotocol/server-github".to_string(),
@@ -71,7 +74,8 @@ pub fn builtin_presets() -> Vec<McpPreset> {
             display_name: "GitLab",
             description: "GitLab API integration (issues, MRs, repos)",
             config: McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec![
                     "-y".to_string(),
                     "@modelcontextprotocol/server-gitlab".to_string(),
@@ -113,7 +117,8 @@ mod tests {
     #[test]
     fn all_presets_have_valid_command() {
         for preset in builtin_presets() {
-            assert!(!preset.config.command.is_empty());
+            let cmd = preset.config.command.as_deref().unwrap_or("");
+            assert!(!cmd.is_empty());
             assert!(!preset.config.args.is_empty());
         }
     }

@@ -567,7 +567,7 @@ args = ["hello"]
         let config: Config = toml::from_str(toml_str).unwrap();
         let mcp = config.mcp.unwrap();
         assert_eq!(mcp.servers.len(), 1);
-        assert_eq!(mcp.servers["test"].command, "echo");
+        assert_eq!(mcp.servers["test"].command.as_deref(), Some("echo"));
     }
 
     #[test]
@@ -648,7 +648,10 @@ command = "project-cmd"
         base.merge(overlay);
         let mcp = base.mcp.unwrap();
         assert_eq!(mcp.servers.len(), 1);
-        assert_eq!(mcp.servers["shared"].command, "project-cmd");
+        assert_eq!(
+            mcp.servers["shared"].command.as_deref(),
+            Some("project-cmd")
+        );
     }
 
     #[test]
@@ -909,7 +912,8 @@ command = "rust-analyzer"
 
         // Simulate save_mcp_server_toggle by writing to the temp path
         let config = schema::McpServerConfig {
-            command: "npx".to_string(),
+            command: Some("npx".to_string()),
+            url: None,
             args: vec!["-y".to_string(), "@upstash/context7-mcp@latest".to_string()],
             env: std::collections::HashMap::new(),
             disabled: false,
@@ -943,7 +947,7 @@ command = "rust-analyzer"
         assert_eq!(loaded.default_provider.as_deref(), Some("anthropic"));
         let mcp = loaded.mcp.unwrap();
         assert!(!mcp.servers["context7"].disabled);
-        assert_eq!(mcp.servers["context7"].command, "npx");
+        assert_eq!(mcp.servers["context7"].command.as_deref(), Some("npx"));
     }
 
     #[test]

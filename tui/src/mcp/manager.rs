@@ -190,16 +190,56 @@ impl McpManager {
 
     /// Static helper: connect to a server and discover tools without holding &mut self.
     async fn do_connect(name: &str, config: &McpServerConfig) -> Result<McpConnectResult, String> {
+        // HTTP/SSE transport — connect to remote server via URL.
+        if let Some(ref url) = config.url {
+            let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(url.as_str());
+
+            use rmcp::ServiceExt;
+            let service =
+                ().serve(transport)
+                    .await
+                    .map_err(|e| format!("Failed to connect to {url}: {e}"))?;
+
+            let tools = match service.list_tools(None).await {
+                Ok(result) => result
+                    .tools
+                    .iter()
+                    .map(|t| ToolDefinition {
+                        name: format!("{}:{}", name, t.name),
+                        description: t
+                            .description
+                            .as_ref()
+                            .map(|d| d.to_string())
+                            .unwrap_or_default(),
+                        input_schema: serde_json::Value::Object(t.input_schema.as_ref().clone()),
+                    })
+                    .collect(),
+                Err(e) => {
+                    let msg = format!("Failed to list tools: {e}");
+                    let _ = service.cancel().await;
+                    return Err(msg);
+                }
+            };
+
+            return Ok(McpConnectResult { tools, service });
+        }
+
+        // Stdio transport — spawn local process.
+        let command = config
+            .command
+            .as_ref()
+            .ok_or_else(|| format!("MCP server '{name}' has no command or url configured"))?;
+
         // Build the command.
         // On Windows, npm/npx are .cmd batch scripts that won't be found by
         // Command::new directly — run them through `cmd /C` so the shell
         // resolves the extension via PATHEXT.
         let mut cmd = if cfg!(windows) {
             let mut c = tokio::process::Command::new("cmd");
-            c.arg("/C").arg(&config.command);
+            c.arg("/C").arg(command);
             c
         } else {
-            tokio::process::Command::new(&config.command)
+            tokio::process::Command::new(command)
         };
         for arg in &config.args {
             cmd.arg(arg);
@@ -530,7 +570,8 @@ mod tests {
         servers.insert(
             "test".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                command: Some("echo".to_string()),
+                url: None,
                 args: vec!["hello".to_string()],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -555,7 +596,8 @@ mod tests {
         servers.insert(
             "context7".to_string(),
             McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec!["-y".to_string(), "@upstash/context7-mcp@latest".to_string()],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -582,7 +624,8 @@ mod tests {
         servers.insert(
             "test".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                command: Some("echo".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -600,7 +643,8 @@ mod tests {
         servers.insert(
             "bad".to_string(),
             McpServerConfig {
-                command: "nonexistent-command-that-does-not-exist-12345".to_string(),
+                command: Some("nonexistent-command-that-does-not-exist-12345".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -644,7 +688,8 @@ mod tests {
         servers.insert(
             "test".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                command: Some("echo".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -675,7 +720,8 @@ mod tests {
         servers.insert(
             "enabled".to_string(),
             McpServerConfig {
-                command: "nonexistent-cmd-12345".to_string(),
+                command: Some("nonexistent-cmd-12345".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -685,7 +731,8 @@ mod tests {
         servers.insert(
             "disabled_one".to_string(),
             McpServerConfig {
-                command: "nonexistent-cmd-12345".to_string(),
+                command: Some("nonexistent-cmd-12345".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: true,
@@ -713,7 +760,8 @@ mod tests {
         servers.insert(
             "test".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                command: Some("echo".to_string()),
+                url: None,
                 args: vec![],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -736,7 +784,8 @@ mod tests {
         servers.insert(
             "context7".to_string(),
             McpServerConfig {
-                command: "npx".to_string(),
+                command: Some("npx".to_string()),
+                url: None,
                 args: vec!["-y".to_string(), "@upstash/context7-mcp@latest".to_string()],
                 env: std::collections::HashMap::new(),
                 disabled: false,
@@ -746,5 +795,26 @@ mod tests {
         let config = McpConfig { servers };
         let manager = McpManager::from_config(&config);
         assert!(!manager.servers.contains_key("context7"));
+    }
+
+    #[test]
+    fn manager_from_config_with_url_server() {
+        let mut servers = std::collections::HashMap::new();
+        servers.insert(
+            "remote".to_string(),
+            McpServerConfig {
+                command: None,
+                url: Some("https://mcp.example.com/mcp".to_string()),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+                disabled: false,
+                removed: false,
+            },
+        );
+        let config = McpConfig { servers };
+        let manager = McpManager::from_config(&config);
+        let preset_count = crate::mcp::presets::builtin_presets().len();
+        assert_eq!(manager.servers.len(), preset_count + 1);
+        assert!(manager.servers["remote"].config.url.is_some());
     }
 }
