@@ -254,11 +254,11 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
-        id: "session.usage",
-        name: "Session Usage",
+        id: "session.status",
+        name: "Session Status",
         category: Category::Session,
         keybind: None,
-        slash: Some("usage"),
+        slash: Some("status"),
         available: |_| true,
         execute: |_state| Action::None, // Handled in handle_shared_slash
     });

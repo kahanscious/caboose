@@ -2823,7 +2823,7 @@ impl App {
             Some(DialogKind::AgentsList(_)) => {
                 self.handle_agents_list_key(key);
             }
-            Some(DialogKind::Usage) => match key {
+            Some(DialogKind::Status) => match key {
                 KeyCode::Esc | KeyCode::Enter => {
                     self.state.dialog_stack.pop();
                 }
@@ -10773,8 +10773,8 @@ impl App {
             self.handle_init_command();
             return true;
         }
-        if slash == "usage" {
-            self.state.dialog_stack.push(DialogKind::Usage);
+        if slash == "status" || slash == "usage" {
+            self.state.dialog_stack.push(DialogKind::Status);
             return true;
         }
         if slash == "mcp" {

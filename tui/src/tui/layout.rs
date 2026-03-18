@@ -152,8 +152,8 @@ pub fn render(frame: &mut Frame, app: &State) {
             DialogKind::AgentsList(list_state) => {
                 render_agents_list(frame, list_state, app, &colors);
             }
-            DialogKind::Usage => {
-                render_usage_dialog(frame, app, &colors);
+            DialogKind::Status => {
+                render_status_dialog(frame, app, &colors);
             }
         }
     }
@@ -1476,19 +1476,23 @@ fn format_with_commas(n: u64) -> String {
     result
 }
 
-/// Render the /usage session stats dialog.
-fn render_usage_dialog(frame: &mut Frame, app: &State, colors: &theme::Colors) {
+/// Render the /status session stats dialog.
+fn render_status_dialog(frame: &mut Frame, app: &State, colors: &theme::Colors) {
     let area = frame.area();
-    let width: u16 = 42;
-    let height: u16 = 12;
+    let width: u16 = 48;
+    let height: u16 = 16;
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
 
     let block = Block::default()
         .borders(ratatui::widgets::Borders::ALL)
-        .title(" Session Usage ")
+        .title(" Status ")
         .border_style(Style::default().fg(colors.info));
+
+    let provider = &app.active_provider_name;
+    let mode =
+        crate::agent::permission::Mode::from_permission_mode(&app.agent.permission_mode).label();
 
     let turns = app.agent.turn_count;
     let input = format_with_commas(app.session_input_tokens);
@@ -1505,12 +1509,14 @@ fn render_usage_dialog(frame: &mut Frame, app: &State, colors: &theme::Colors) {
         .unwrap_or_else(|| "unknown".to_string());
 
     let text = format!(
-        " Turns          {turns}\n \
+        " Provider        {provider}\n \
+         Model           {model}\n \
+         Mode            {mode}\n\n \
+         Turns           {turns}\n \
          Input tokens    {input}\n \
          Output tokens   {output}\n \
          Session cost    {cost}\n\n \
          Last turn       {last_in} in / {last_out} out\n \
-         Model           {model}\n \
          Rate            {rate}\n\n\
               [enter] to close",
         model = app.active_model_name,
