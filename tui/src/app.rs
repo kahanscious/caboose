@@ -4101,6 +4101,102 @@ impl App {
                         }
                     }
 
+                    // ! shell shortcut — run command directly without LLM
+                    if let Some(cmd) = trimmed.strip_prefix('!') {
+                        let cmd = cmd.trim();
+                        if !cmd.is_empty() {
+                            self.state.dialog_stack.base = Screen::Chat;
+                            self.state.dialog_stack.clear();
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("$ {cmd}"),
+                            });
+                            self.state.user_scrolled_up = false;
+                            // Try sh -c first (Unix, macOS, Windows+Git Bash).
+                            // On bare Windows (no sh in PATH), fall back to cmd /C.
+                            let shell_result =
+                                tokio::process::Command::new("sh")
+                                    .arg("-c")
+                                    .arg(cmd)
+                                    .output()
+                                    .await;
+                            let shell_result = match shell_result {
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::NotFound =>
+                                {
+                                    #[cfg(windows)]
+                                    {
+                                        tokio::process::Command::new("cmd")
+                                            .arg("/C")
+                                            .arg(cmd)
+                                            .output()
+                                            .await
+                                    }
+                                    #[cfg(not(windows))]
+                                    {
+                                        Err(e)
+                                    }
+                                }
+                                other => other,
+                            };
+                            match shell_result {
+                                Ok(output) => {
+                                    let stdout =
+                                        String::from_utf8_lossy(&output.stdout);
+                                    let stderr =
+                                        String::from_utf8_lossy(&output.stderr);
+                                    let mut result = String::new();
+                                    if !stdout.is_empty() {
+                                        result.push_str(&stdout);
+                                    }
+                                    if !stderr.is_empty() {
+                                        if !result.is_empty() {
+                                            result.push('\n');
+                                        }
+                                        result.push_str(&stderr);
+                                    }
+                                    if result.is_empty() {
+                                        result.push_str("(no output)");
+                                    }
+                                    let lines: Vec<&str> =
+                                        result.lines().collect();
+                                    let display = if lines.len() > 200 {
+                                        let mut truncated: String =
+                                            lines[..200].join("\n");
+                                        truncated.push_str(&format!(
+                                            "\n\n... ({} more lines truncated)",
+                                            lines.len() - 200
+                                        ));
+                                        truncated
+                                    } else {
+                                        result.to_string()
+                                    };
+                                    let exit_code =
+                                        output.status.code().unwrap_or(-1);
+                                    let content = if exit_code == 0 {
+                                        format!("```\n{display}\n```")
+                                    } else {
+                                        format!(
+                                            "```\n{display}\n```\n[exit code: {exit_code}]"
+                                        )
+                                    };
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::System { content });
+                                }
+                                Err(e) => {
+                                    self.state.chat_messages.push(
+                                        ChatMessage::System {
+                                            content: format!(
+                                                "Failed to run command: {e}"
+                                            ),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     if !self.require_provider() {
                         self.state.input.set(&message);
                         return;
