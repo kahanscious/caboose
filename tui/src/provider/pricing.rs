@@ -154,6 +154,24 @@ impl PricingRegistry {
             },
         );
 
+        // Fireworks AI
+        models.insert(
+            "accounts/fireworks/models/llama-v3p3-70b-instruct".into(),
+            ModelPricing {
+                input_per_m: 0.9,
+                output_per_m: 0.9,
+            },
+        );
+
+        // SambaNova
+        models.insert(
+            "Meta-Llama-3.3-70B-Instruct".into(),
+            ModelPricing {
+                input_per_m: 0.6,
+                output_per_m: 0.6,
+            },
+        );
+
         // Together AI
         models.insert(
             "meta-llama/Llama-3.3-70B-Instruct-Turbo".into(),
