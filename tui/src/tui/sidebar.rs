@@ -501,18 +501,27 @@ pub fn render(
                     )));
                 }
 
-                // Key hints — only while session is actively running
-                if rh.model_count() > 1 {
-                    lines.push(Line::from(""));
+                // Key hints — only while session is in an active (scrollable) phase
+                let is_active_phase = !matches!(
+                    rh.phase,
+                    crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                        | crate::roundhouse::RoundhousePhase::SelectingProviders
+                        | crate::roundhouse::RoundhousePhase::Cancelled
+                        | crate::roundhouse::RoundhousePhase::Complete
+                );
+                if is_active_phase {
+                    if rh.model_count() > 1 {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled(
+                            "  j/k  switch model",
+                            Style::default().fg(colors.text_dim),
+                        )));
+                    }
                     lines.push(Line::from(Span::styled(
-                        "  j/k  switch model",
+                        "  ↑/↓  scroll output",
                         Style::default().fg(colors.text_dim),
                     )));
                 }
-                lines.push(Line::from(Span::styled(
-                    "  ↑/↓  scroll output",
-                    Style::default().fg(colors.text_dim),
-                )));
             }
         }
     }

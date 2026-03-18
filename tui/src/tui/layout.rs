@@ -420,7 +420,56 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 | crate::roundhouse::RoundhousePhase::Complete
         );
         if is_active {
-            crate::tui::roundhouse_screen::render_viewer(frame, session, colors, area);
+            // Render like normal chat — same 4-col padding, markdown, shared scroll offset
+            let area = Rect {
+                x: area.x + 4,
+                width: area.width.saturating_sub(4),
+                ..area
+            };
+            app.chat_area.set(Some(area));
+
+            let content = match session.phase {
+                crate::roundhouse::RoundhousePhase::Critiquing
+                | crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
+                    session.selected_critique_text().to_string()
+                }
+                crate::roundhouse::RoundhousePhase::Synthesizing
+                | crate::roundhouse::RoundhousePhase::Complete => {
+                    session.synthesis_streaming_text.clone()
+                }
+                _ => session.selected_model_text().to_string(),
+            };
+
+            let model_name = session.model_display_name(session.selected_model_index);
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from(vec![
+                Span::styled("● ", Style::default().fg(colors.roundhouse)),
+                Span::styled(
+                    model_name,
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+            ]));
+            lines.extend(crate::tui::chat::parse_markdown(&content, colors, colors.roundhouse));
+            lines.push(Line::from(""));
+            lines.push(Line::from(""));
+
+            let tmp = Paragraph::new(lines.clone()).wrap(Wrap { trim: false });
+            let total_lines = tmp.line_count(area.width) as u16;
+            let max_scroll = total_lines.saturating_sub(area.height);
+            app.total_chat_lines.set(total_lines);
+            app.chat_area_height.set(area.height);
+
+            let effective_offset = if app.user_scrolled_up {
+                app.scroll_offset.min(max_scroll)
+            } else {
+                max_scroll
+            };
+
+            let chat = Paragraph::new(lines)
+                .style(Style::default().bg(colors.bg_primary))
+                .wrap(Wrap { trim: false })
+                .scroll((effective_offset, 0));
+            frame.render_widget(chat, area);
             return;
         }
     }

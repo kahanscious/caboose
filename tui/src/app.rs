@@ -2936,23 +2936,25 @@ impl App {
         // to avoid holding a mutable borrow on self.state.roundhouse_session
         // while calling methods on self.
         let mut action: Option<&str> = None;
+        let mut scroll_delta: i32 = 0;
+        let mut model_switched = false;
         match key {
-            // Model navigation
+            // Model navigation — reset to auto-scroll bottom on switch
             KeyCode::Char('j') => {
                 session.select_next_model();
+                model_switched = true;
             }
             KeyCode::Char('k') => {
                 session.select_prev_model();
+                model_switched = true;
             }
 
-            // Scroll output
+            // Scroll — use shared scroll_offset (same as normal chat)
             KeyCode::Down | KeyCode::PageDown => {
-                let step = if key == KeyCode::PageDown { 10 } else { 1 };
-                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_add(step);
+                scroll_delta = if key == KeyCode::PageDown { 10 } else { 3 };
             }
             KeyCode::Up | KeyCode::PageUp => {
-                let step = if key == KeyCode::PageUp { 10 } else { 1 };
-                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_sub(step);
+                scroll_delta = -(if key == KeyCode::PageUp { 10 } else { 3 });
             }
 
             // Gate actions — only active during review phases
@@ -2990,7 +2992,33 @@ impl App {
             _ => {}
         }
 
-        // Now session borrow is dropped — safe to call methods on self
+        // Now session borrow is dropped — safe to access other self.state fields
+        if model_switched {
+            // Jump back to auto-scroll bottom when switching models
+            self.state.user_scrolled_up = false;
+        }
+        if scroll_delta > 0 {
+            self.state.scroll_offset =
+                self.state.scroll_offset.saturating_add(scroll_delta as u16);
+            let max_scroll = self
+                .state
+                .total_chat_lines
+                .get()
+                .saturating_sub(self.state.chat_area_height.get());
+            if self.state.scroll_offset >= max_scroll {
+                self.state.scroll_offset = max_scroll;
+                self.state.user_scrolled_up = false;
+            } else {
+                self.state.user_scrolled_up = true;
+            }
+        } else if scroll_delta < 0 {
+            self.state.scroll_offset = self
+                .state
+                .scroll_offset
+                .saturating_sub((-scroll_delta) as u16);
+            self.state.user_scrolled_up = true;
+        }
+
         match action {
             Some("critique") => self.start_roundhouse_critique(),
             Some("synthesis") => self.start_roundhouse_synthesis(),
@@ -10152,6 +10180,10 @@ impl App {
 
     /// Spawn parallel planner tasks for Roundhouse mode.
     fn start_roundhouse_planning(&mut self) {
+        // Reset scroll so output auto-follows streaming text from the start
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
+
         let session = match self.state.roundhouse_session.as_ref() {
             Some(s) => s,
             None => return,
@@ -10247,6 +10279,8 @@ impl App {
     /// Spawn parallel critique tasks for Roundhouse mode.
     /// Each model reviews all plans except its own.
     fn start_roundhouse_critique(&mut self) {
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
         // Extract everything we need from session before releasing the borrow
         let (
             prompt,
@@ -10435,6 +10469,9 @@ impl App {
 
     /// Send all collected plans to the primary provider for synthesis.
     fn start_roundhouse_synthesis(&mut self) {
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
+
         let session = match self.state.roundhouse_session.as_ref() {
             Some(s) => s,
             None => return,
