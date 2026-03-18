@@ -62,6 +62,10 @@ struct Cli {
     #[arg(long)]
     debug: bool,
 
+    /// Output format for non-interactive mode: text (default) or json
+    #[arg(short = 'f', long = "format", default_value = "text")]
+    output_format: String,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -129,7 +133,15 @@ async fn main() -> Result<()> {
     };
 
     if let Some(prompt) = prompt {
-        return run_non_interactive(config, prompt, cli.model, cli.provider, cli.mode).await;
+        return run_non_interactive(
+            config,
+            prompt,
+            cli.model,
+            cli.provider,
+            cli.mode,
+            cli.output_format,
+        )
+        .await;
     }
 
     // Install panic hook that restores terminal before printing panic info
@@ -159,9 +171,18 @@ async fn run_non_interactive(
     model: Option<String>,
     provider_name: Option<String>,
     mode: String,
+    output_format: String,
 ) -> Result<()> {
+    // Validate output format before doing any work
+    if output_format != "text" && output_format != "json" {
+        eprintln!("Unknown output format: '{output_format}'. Supported: text, json");
+        std::process::exit(1);
+    }
+
     let providers = provider::ProviderRegistry::new(&config);
     let provider = providers.get_provider(provider_name.as_deref(), model.as_deref())?;
+    let provider_display_name = provider.name().to_string();
+    let model_display_name = provider.model().to_string();
 
     let system_prompt = config
         .system_prompt
@@ -340,7 +361,57 @@ async fn run_non_interactive(
         })
         .unwrap_or_default();
 
-    println!("{last_text}");
+    if output_format == "json" {
+        let tool_calls: Vec<_> = agent
+            .conversation
+            .messages
+            .iter()
+            .filter_map(|msg| {
+                if matches!(msg.role, agent::conversation::Role::Assistant) {
+                    match &msg.content {
+                        agent::conversation::Content::Blocks(blocks) => {
+                            let tools: Vec<_> = blocks
+                                .iter()
+                                .filter_map(|b| {
+                                    if let agent::conversation::ContentBlock::ToolUse {
+                                        name,
+                                        input,
+                                        ..
+                                    } = b
+                                    {
+                                        Some(serde_json::json!({
+                                            "name": name,
+                                            "input": input,
+                                        }))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if tools.is_empty() { None } else { Some(tools) }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+
+        let output = serde_json::json!({
+            "model": model_display_name,
+            "provider": provider_display_name,
+            "response": last_text,
+            "input_tokens": agent.last_input_tokens,
+            "output_tokens": agent.last_output_tokens,
+            "turn_count": agent.turn_count,
+            "tool_calls": tool_calls,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("{last_text}");
+    }
     Ok(())
 }
 
@@ -378,5 +449,23 @@ mod tests {
         let cli = Cli::try_parse_from(["caboose", "-p", "hello"]).unwrap();
         assert_eq!(cli.prompt.as_deref(), Some("hello"));
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parse_format_flag_short() {
+        let cli = Cli::try_parse_from(["caboose", "-p", "hello", "-f", "json"]).unwrap();
+        assert_eq!(cli.output_format, "json");
+    }
+
+    #[test]
+    fn parse_format_flag_long() {
+        let cli = Cli::try_parse_from(["caboose", "--format", "json", "-p", "test"]).unwrap();
+        assert_eq!(cli.output_format, "json");
+    }
+
+    #[test]
+    fn parse_format_defaults_to_text() {
+        let cli = Cli::try_parse_from(["caboose"]).unwrap();
+        assert_eq!(cli.output_format, "text");
     }
 }
