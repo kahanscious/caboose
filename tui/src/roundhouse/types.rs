@@ -56,6 +56,7 @@ pub enum ToolCallStatus {
 
 /// A single tool call tracked during Roundhouse planning
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RoundhouseToolCall {
     pub tool_name: String,
     pub args_summary: String,

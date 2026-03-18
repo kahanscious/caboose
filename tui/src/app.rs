@@ -2439,7 +2439,7 @@ impl App {
                                 session.plan_file = Some(path.clone());
                                 self.state.chat_messages.push(ChatMessage::Assistant {
                                     content: format!(
-                                        "## Roundhouse Plan\n\n{}\n\n---\n*Plan saved to `{}`*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Plan saved to `{}`*\n\nPaste the plan into chat to execute, or `/roundhouse clear` to dismiss.",
                                         plan_text,
                                         path.display()
                                     ),
@@ -2449,7 +2449,7 @@ impl App {
                             Err(e) => {
                                 self.state.chat_messages.push(ChatMessage::Assistant {
                                     content: format!(
-                                        "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nUse `/roundhouse execute` to implement or `/roundhouse cancel` to abort.",
+                                        "## Roundhouse Plan\n\n{}\n\n---\n*Failed to save plan file: {}*\n\nPaste the plan into chat to execute, or `/roundhouse clear` to dismiss.",
                                         plan_text, e
                                     ),
                                     thinking: None,
@@ -10132,34 +10132,9 @@ impl App {
         }
     }
 
-    /// Handle `/roundhouse execute` and `/roundhouse cancel` subcommands.
+    /// Handle `/roundhouse cancel` and `/roundhouse clear` subcommands.
     fn handle_roundhouse_subcommand(&mut self, sub: &str) {
         match sub {
-            "execute" => {
-                if let Some(ref session) = self.state.roundhouse_session {
-                    if session.phase == crate::roundhouse::RoundhousePhase::ReviewingPlans {
-                        let plan = session.synthesized_plan.clone().unwrap_or_default();
-                        let msg = format!(
-                            "Execute the following implementation plan now. Start implementing immediately — read the relevant files, make the code changes, and run any commands specified. Do not just describe what you would do; actually do it step by step using your tools.\n\n{plan}"
-                        );
-                        self.state.roundhouse_session.as_mut().unwrap().phase =
-                            crate::roundhouse::RoundhousePhase::Complete;
-                        // Queue the plan for the agent to execute
-                        self.state.message_queue.push_back(msg);
-                    } else {
-                        self.state.chat_messages.push(ChatMessage::System {
-                            content: format!(
-                                "Cannot execute: roundhouse is in {:?} phase (expected ReviewingPlans).",
-                                session.phase
-                            ),
-                        });
-                    }
-                } else {
-                    self.state.chat_messages.push(ChatMessage::System {
-                        content: "No active roundhouse session.".to_string(),
-                    });
-                }
-            }
             "cancel" => {
                 if self.state.roundhouse_session.is_some() {
                     self.state.roundhouse_session = None;
@@ -10167,6 +10142,7 @@ impl App {
                     self.state.roundhouse_synthesis_rx = None;
                     self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
+                    self.state.dialog_stack.base = Screen::Chat;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse cancelled.".to_string(),
                     });
@@ -10183,6 +10159,7 @@ impl App {
                     self.state.roundhouse_synthesis_rx = None;
                     self.state.roundhouse_critique_rx = None;
                     self.state.roundhouse_model_add = false;
+                    self.state.dialog_stack.base = Screen::Chat;
                     self.state.chat_messages.push(ChatMessage::System {
                         content: "Roundhouse session cleared.".to_string(),
                     });
@@ -10195,7 +10172,7 @@ impl App {
             other => {
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!(
-                        "Unknown roundhouse subcommand: `{other}`. Use `execute`, `cancel`, or `clear`."
+                        "Unknown roundhouse subcommand: `{other}`. Use `cancel` or `clear`."
                     ),
                 });
             }
