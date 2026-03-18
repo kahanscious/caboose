@@ -535,6 +535,19 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "session.export",
+        name: "Export Session",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("export"),
+        available: |state| {
+            matches!(state.dialog_stack.base, super::dialog::Screen::Chat)
+                && !state.chat_messages.is_empty()
+        },
+        execute: |_state| Action::None, // Handled in app.rs
+    });
+
+    registry.register(Command {
         id: "roundhouse.start",
         name: "Roundhouse",
         category: Category::Tools,

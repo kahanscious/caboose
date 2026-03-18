@@ -11005,6 +11005,45 @@ impl App {
             self.handle_suggest_command().await;
             return true;
         }
+        if slash == "export" {
+            let title = self.state.session_title.clone().unwrap_or_else(|| {
+                self.state
+                    .current_session_id
+                    .as_ref()
+                    .map(|id| id.chars().take(6).collect())
+                    .unwrap_or_else(|| "untitled".to_string())
+            });
+
+            let slug = crate::session::export::slugify(&title);
+            let date = chrono::Local::now().format("%Y-%m-%d");
+            let filename = format!("{slug}-{date}.md");
+            let dir = std::path::PathBuf::from(".caboose/exports");
+
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to create exports directory: {e}"),
+                });
+                return true;
+            }
+
+            let path = dir.join(&filename);
+            let markdown =
+                crate::session::export::format_markdown(&title, &self.state.chat_messages);
+
+            match std::fs::write(&path, &markdown) {
+                Ok(()) => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Session exported to {}", path.display()),
+                    });
+                }
+                Err(e) => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to export session: {e}"),
+                    });
+                }
+            }
+            return true;
+        }
         // /roundhouse — parse --critique / --no-critique flags
         if slash == "roundhouse" || slash.starts_with("roundhouse ") {
             if slash.contains("--no-critique") {

@@ -1,5 +1,6 @@
 //! Session management — CRUD operations and SQLite persistence.
 
+pub mod export;
 pub mod storage;
 
 use anyhow::Result;
