@@ -2132,21 +2132,12 @@ impl App {
                             if let Some(ref mut session) = self.state.roundhouse_session {
                                 let tick = self.state.tick;
                                 if planner_index == 0 {
-                                    if matches!(status, crate::roundhouse::PlannerStatus::Streaming)
-                                    {
-                                        session.primary_streaming_text.clear();
-                                    }
+                                    // Never clear streaming text — accumulate across tool rounds
                                     session.primary_status = status;
                                     session.primary_status_tick = tick;
                                 } else if let Some(s) =
                                     session.secondaries.get_mut(planner_index - 1)
                                 {
-                                    if matches!(
-                                        status,
-                                        crate::roundhouse::PlannerStatus::Streaming
-                                    ) {
-                                        s.streaming_text.clear();
-                                    }
                                     s.status = status;
                                     s.status_tick = tick;
                                 }
@@ -2171,17 +2162,25 @@ impl App {
                             tool_name,
                             args_summary,
                         } => {
-                            if planner_index == 0
-                                && let Some(ref mut session) = self.state.roundhouse_session
-                            {
-                                session.primary_tool_calls.push(
-                                    crate::roundhouse::RoundhouseToolCall {
-                                        tool_name,
-                                        args_summary,
-                                        status: crate::roundhouse::ToolCallStatus::Running,
-                                        result_summary: None,
-                                    },
-                                );
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                // Inject tool call marker into streaming text so it's visible
+                                let marker =
+                                    format!("\n\n⚙ {tool_name}({args_summary})…\n");
+                                if planner_index == 0 {
+                                    session.primary_streaming_text.push_str(&marker);
+                                    session.primary_tool_calls.push(
+                                        crate::roundhouse::RoundhouseToolCall {
+                                            tool_name,
+                                            args_summary,
+                                            status: crate::roundhouse::ToolCallStatus::Running,
+                                            result_summary: None,
+                                        },
+                                    );
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    s.streaming_text.push_str(&marker);
+                                }
                             }
                         }
                         crate::roundhouse::PlannerUpdate::ToolCompleted {
@@ -2190,19 +2189,31 @@ impl App {
                             summary,
                             is_error,
                         } => {
-                            if planner_index == 0
-                                && let Some(ref mut session) = self.state.roundhouse_session
-                                && let Some(tc) =
-                                    session.primary_tool_calls.iter_mut().rev().find(|tc| {
-                                        tc.status == crate::roundhouse::ToolCallStatus::Running
-                                    })
-                            {
-                                tc.status = if is_error {
-                                    crate::roundhouse::ToolCallStatus::Failed
-                                } else {
-                                    crate::roundhouse::ToolCallStatus::Success
-                                };
-                                tc.result_summary = Some(summary);
+                            if let Some(ref mut session) = self.state.roundhouse_session {
+                                let icon = if is_error { "✗" } else { "✓" };
+                                let marker = format!("{icon} {summary}\n\n");
+                                if planner_index == 0 {
+                                    session.primary_streaming_text.push_str(&marker);
+                                    if let Some(tc) =
+                                        session.primary_tool_calls.iter_mut().rev().find(
+                                            |tc| {
+                                                tc.status
+                                                    == crate::roundhouse::ToolCallStatus::Running
+                                            },
+                                        )
+                                    {
+                                        tc.status = if is_error {
+                                            crate::roundhouse::ToolCallStatus::Failed
+                                        } else {
+                                            crate::roundhouse::ToolCallStatus::Success
+                                        };
+                                        tc.result_summary = Some(summary);
+                                    }
+                                } else if let Some(s) =
+                                    session.secondaries.get_mut(planner_index - 1)
+                                {
+                                    s.streaming_text.push_str(&marker);
+                                }
                             }
                         }
                         crate::roundhouse::PlannerUpdate::TokensUsed {
