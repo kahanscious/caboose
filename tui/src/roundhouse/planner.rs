@@ -245,7 +245,8 @@ async fn run_planner_inner(
             // Build a brief args summary for the "running" state
             let args_summary = match name.as_str() {
                 names::READ_FILE => input_val
-                    .get("file_path")
+                    .get("path")
+                    .or_else(|| input_val.get("file_path"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
@@ -284,7 +285,8 @@ async fn run_planner_inner(
 
             // Build the completed summary with result details
             let summary = if is_error {
-                name.clone()
+                let msg = output.lines().next().unwrap_or(&output).to_string();
+                if msg.len() > 60 { msg[..60].to_string() } else { msg }
             } else {
                 match name.as_str() {
                     names::READ_FILE => {
