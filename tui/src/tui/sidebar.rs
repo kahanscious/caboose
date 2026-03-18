@@ -500,6 +500,19 @@ pub fn render(
                         Style::default().fg(colors.text_muted),
                     )));
                 }
+
+                // Key hints — only while session is actively running
+                if rh.model_count() > 1 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "  j/k  switch model",
+                        Style::default().fg(colors.text_dim),
+                    )));
+                }
+                lines.push(Line::from(Span::styled(
+                    "  ↑/↓  scroll output",
+                    Style::default().fg(colors.text_dim),
+                )));
             }
         }
     }

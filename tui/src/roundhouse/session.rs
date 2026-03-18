@@ -142,14 +142,15 @@ impl RoundhouseSession {
 
     #[allow(dead_code)]
     pub fn selected_model_text(&self) -> &str {
+        // Always show the full accumulated streaming text (includes tool call markers
+        // across all rounds). primary_plan is the last-round text only and is used
+        // by the synthesis step — not for display.
         if self.selected_model_index == 0 {
-            self.primary_plan
-                .as_deref()
-                .unwrap_or(&self.primary_streaming_text)
+            &self.primary_streaming_text
         } else {
             self.secondaries
                 .get(self.selected_model_index - 1)
-                .map(|s| s.plan.as_deref().unwrap_or(s.streaming_text.as_str()))
+                .map(|s| s.streaming_text.as_str())
                 .unwrap_or("")
         }
     }

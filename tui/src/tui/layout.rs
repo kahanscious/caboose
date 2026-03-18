@@ -417,6 +417,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             crate::roundhouse::RoundhousePhase::AwaitingPrompt
                 | crate::roundhouse::RoundhousePhase::SelectingProviders
                 | crate::roundhouse::RoundhousePhase::Cancelled
+                | crate::roundhouse::RoundhousePhase::Complete
         );
         if is_active {
             crate::tui::roundhouse_screen::render_viewer(frame, session, colors, area);

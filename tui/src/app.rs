@@ -2946,11 +2946,13 @@ impl App {
             }
 
             // Scroll output
-            KeyCode::PageDown => {
-                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_add(10);
+            KeyCode::Down | KeyCode::PageDown => {
+                let step = if key == KeyCode::PageDown { 10 } else { 1 };
+                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_add(step);
             }
-            KeyCode::PageUp => {
-                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_sub(10);
+            KeyCode::Up | KeyCode::PageUp => {
+                let step = if key == KeyCode::PageUp { 10 } else { 1 };
+                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_sub(step);
             }
 
             // Gate actions — only active during review phases
@@ -3578,6 +3580,7 @@ impl App {
                     crate::roundhouse::RoundhousePhase::AwaitingPrompt
                         | crate::roundhouse::RoundhousePhase::SelectingProviders
                         | crate::roundhouse::RoundhousePhase::Cancelled
+                        | crate::roundhouse::RoundhousePhase::Complete
                 )
             })
             .unwrap_or(false);
