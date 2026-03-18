@@ -462,6 +462,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "checkpoint.undo",
+        name: "Undo Last Change",
+        category: Category::Navigation,
+        keybind: None,
+        slash: Some("undo"),
+        available: |state| !state.checkpoints.list().is_empty(),
+        execute: |_state| Action::None, // Handled in app.rs
+    });
+
+    registry.register(Command {
         id: "settings.open",
         name: "Settings",
         category: Category::Navigation,

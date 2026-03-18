@@ -10967,6 +10967,39 @@ impl App {
             self.open_rewind_picker();
             return true;
         }
+        if slash == "undo" {
+            // Find the last checkpoint that has file changes
+            let last_with_files = self
+                .state
+                .checkpoints
+                .list()
+                .iter()
+                .rev()
+                .find(|c| !c.files.is_empty())
+                .map(|c| c.id);
+
+            match last_with_files {
+                Some(checkpoint_id) => match self.state.checkpoints.rewind(checkpoint_id) {
+                    Ok(summary) => {
+                        self.recompute_modified_files();
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!("Undo: {summary}"),
+                        });
+                    }
+                    Err(e) => {
+                        self.state.chat_messages.push(ChatMessage::Error {
+                            content: format!("Undo failed: {e}"),
+                        });
+                    }
+                },
+                None => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: "Nothing to undo — no file changes to revert.".into(),
+                    });
+                }
+            }
+            return true;
+        }
         if slash == "suggest" {
             self.handle_suggest_command().await;
             return true;
