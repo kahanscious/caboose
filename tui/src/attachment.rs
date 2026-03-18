@@ -51,7 +51,10 @@ pub fn media_type_from_ext(path: &Path) -> Option<String> {
 }
 
 /// Read an image file and create an Attachment.
-pub fn read_image_attachment(path: &Path, config: &crate::config::schema::ImagesConfig) -> Result<Attachment, String> {
+pub fn read_image_attachment(
+    path: &Path,
+    config: &crate::config::schema::ImagesConfig,
+) -> Result<Attachment, String> {
     if !is_image_path(path) {
         return Err(format!("Not a supported image format: {}", path.display()));
     }
@@ -77,8 +80,8 @@ pub fn read_image_attachment(path: &Path, config: &crate::config::schema::Images
     let original_media_type = media_type.clone();
 
     // Compress/resize if needed
-    let (data, media_type) = compress_image(&data, &media_type, config)
-        .unwrap_or((data, media_type));
+    let (data, media_type) =
+        compress_image(&data, &media_type, config).unwrap_or((data, media_type));
 
     let compression = if data.len() != original_size {
         Some(CompressionInfo {
@@ -95,8 +98,7 @@ pub fn read_image_attachment(path: &Path, config: &crate::config::schema::Images
         && !path.extension().is_some_and(|e| {
             let e = e.to_ascii_lowercase();
             e == "jpg" || e == "jpeg"
-        })
-    {
+        }) {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
         format!("{stem}.jpg")
     } else {
@@ -270,10 +272,8 @@ pub fn compress_image(
     if !needs_resize && needs_compress && !has_alpha {
         let quality_high = config.jpeg_quality();
         let mut jpeg_buf = Vec::new();
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut jpeg_buf,
-            quality_high,
-        );
+        let encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, quality_high);
         if let Err(e) = img.write_with_encoder(encoder) {
             tracing::warn!("JPEG encode failed, returning original: {e}");
             return Ok((data.to_vec(), media_type.to_string()));
@@ -284,10 +284,8 @@ pub fn compress_image(
         // Try low quality
         let quality_low = config.jpeg_quality_low();
         let mut jpeg_low_buf = Vec::new();
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut jpeg_low_buf,
-            quality_low,
-        );
+        let encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_low_buf, quality_low);
         if let Err(e) = img.write_with_encoder(encoder) {
             tracing::warn!("JPEG low-quality encode failed: {e}");
             return Ok((jpeg_buf, "image/jpeg".to_string()));
@@ -321,10 +319,7 @@ pub fn compress_image(
 
     let quality_high = config.jpeg_quality();
     let mut jpeg_buf = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-        &mut jpeg_buf,
-        quality_high,
-    );
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, quality_high);
     if let Err(e) = img.write_with_encoder(encoder) {
         tracing::warn!("JPEG encode failed, returning resized original: {e}");
         return Ok((buf, media_type.to_string()));
@@ -337,10 +332,8 @@ pub fn compress_image(
     // Try low quality JPEG
     let quality_low = config.jpeg_quality_low();
     let mut jpeg_low_buf = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-        &mut jpeg_low_buf,
-        quality_low,
-    );
+    let encoder =
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_low_buf, quality_low);
     if let Err(e) = img.write_with_encoder(encoder) {
         tracing::warn!("JPEG low-quality encode failed: {e}");
         return Ok((jpeg_buf, "image/jpeg".to_string()));
@@ -450,8 +443,8 @@ pub fn extract_at_image_paths(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use crate::config::schema::ImagesConfig;
+    use std::io::Write;
 
     fn default_images_config() -> ImagesConfig {
         toml::from_str("").unwrap()
@@ -463,9 +456,7 @@ mod tests {
 
     /// Create a synthetic PNG image of given dimensions (solid red).
     fn make_test_png(width: u32, height: u32) -> Vec<u8> {
-        let img = image::RgbaImage::from_fn(width, height, |_, _| {
-            image::Rgba([255, 0, 0, 255])
-        });
+        let img = image::RgbaImage::from_fn(width, height, |_, _| image::Rgba([255, 0, 0, 255]));
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
@@ -474,9 +465,7 @@ mod tests {
 
     /// Create a synthetic JPEG image of given dimensions.
     fn make_test_jpeg(width: u32, height: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_fn(width, height, |_, _| {
-            image::Rgb([255, 0, 0])
-        });
+        let img = image::RgbImage::from_fn(width, height, |_, _| image::Rgb([255, 0, 0]));
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         img.write_to(&mut cursor, image::ImageFormat::Jpeg).unwrap();
@@ -580,7 +569,11 @@ mod tests {
         let config = default_images_config();
         let img = image::RgbImage::from_fn(10, 10, |_, _| image::Rgb([0, 0, 255]));
         let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::WebP).unwrap();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut buf),
+            image::ImageFormat::WebP,
+        )
+        .unwrap();
         let original_len = buf.len();
         let (data, media_type) = compress_image(&buf, "image/webp", &config).unwrap();
         assert_eq!(data.len(), original_len);
@@ -639,7 +632,10 @@ mod tests {
 
     #[test]
     fn read_image_attachment_nonexistent() {
-        let result = read_image_attachment(Path::new("/nonexistent/photo.png"), &default_images_config());
+        let result = read_image_attachment(
+            Path::new("/nonexistent/photo.png"),
+            &default_images_config(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot read"));
     }

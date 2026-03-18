@@ -19,7 +19,10 @@ pub fn parse_clippy_json(output: &str) -> Vec<Finding> {
         let Some(msg) = val.get("message") else {
             continue;
         };
-        let level = msg.get("level").and_then(|l| l.as_str()).unwrap_or("warning");
+        let level = msg
+            .get("level")
+            .and_then(|l| l.as_str())
+            .unwrap_or("warning");
         let text = msg
             .get("message")
             .and_then(|m| m.as_str())
@@ -246,8 +249,7 @@ mod tests {
 
     #[test]
     fn parse_cargo_test_failures() {
-        let output =
-            "test agent::tests::circuit_breaker ... ok\ntest tools::tests::shell_timeout ... FAILED\n";
+        let output = "test agent::tests::circuit_breaker ... ok\ntest tools::tests::shell_timeout ... FAILED\n";
         let findings = parse_cargo_test(output);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].category, Category::Test);
