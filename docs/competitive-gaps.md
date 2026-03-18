@@ -47,7 +47,7 @@ Feature gaps identified by comparing Caboose against Claude Code, Codex CLI, Aid
 
 | # | Feature | Status | Who Has It | Notes |
 |---|---------|--------|-----------|-------|
-| 5 | SSE transport for MCP | NEXT | OpenCode | Connect to remote MCP servers over HTTP instead of stdio only |
+| 5 | SSE transport for MCP | DONE | OpenCode | `url` field on MCP server config for HTTP/SSE transport |
 | 6 | Non-interactive JSON output (`-f json`) | DONE | OpenCode, Codex CLI | Structured output for CI/CD and scripting pipelines |
 | 7 | `/status` command | DONE | Codex CLI, OpenCode | Renamed from `/usage`, shows provider, model, mode, tokens, cost |
 
