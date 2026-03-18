@@ -374,6 +374,178 @@ impl ProviderRegistry {
                 }
                 Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
             }
+            "xai" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("xai")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No API key for xai. Set XAI_API_KEY or add to config.")
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("grok-3").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.x.ai/v1".to_string())
+                    .with_provider_name("xai".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("grok-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "together" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("together")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for together. Set TOGETHER_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model
+                    .unwrap_or("meta-llama/Llama-3.3-70B-Instruct-Turbo")
+                    .to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.together.xyz/v1".to_string())
+                    .with_provider_name("together".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "fireworks" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("fireworks")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for fireworks. Set FIREWORKS_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model
+                    .unwrap_or("accounts/fireworks/models/llama-v3p3-70b-instruct")
+                    .to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.fireworks.ai/inference/v1".to_string())
+                    .with_provider_name("fireworks".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "cerebras" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("cerebras")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for cerebras. Set CEREBRAS_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("llama-3.3-70b").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.cerebras.ai/v1".to_string())
+                    .with_provider_name("cerebras".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "sambanova" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("sambanova")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for sambanova. Set SAMBANOVA_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("Meta-Llama-3.3-70B-Instruct").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.sambanova.ai/v1".to_string())
+                    .with_provider_name("sambanova".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "perplexity" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("perplexity")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for perplexity. Set PERPLEXITY_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("sonar-pro").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.perplexity.ai".to_string())
+                    .with_provider_name("perplexity".to_string())
+                    .with_model_filter(Some(|id: &str| {
+                        id.starts_with("sonar") || id.starts_with("llama-")
+                    }));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "cohere" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("cohere")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for cohere. Set COHERE_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("command-r-plus").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.cohere.com/v2".to_string())
+                    .with_provider_name("cohere".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("command-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "qwen" | "dashscope" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("qwen")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for qwen. Set DASHSCOPE_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("qwen-plus").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string())
+                    .with_provider_name("qwen".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("qwen-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
             "ollama" | "lmstudio" | "llamacpp" | "custom" => {
                 let local_cfg = self.config.local_providers.get(provider_name);
 
@@ -413,7 +585,7 @@ impl ProviderRegistry {
                 Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
             }
             other => bail!(
-                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, deepseek, groq, mistral, ollama, lmstudio, llamacpp, custom"
+                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, deepseek, groq, mistral, xai, together, fireworks, cerebras, sambanova, perplexity, cohere, qwen, ollama, lmstudio, llamacpp, custom"
             ),
         }
     }
@@ -517,6 +689,14 @@ mod tests {
         assert!(msg.contains("deepseek"));
         assert!(msg.contains("groq"));
         assert!(msg.contains("mistral"));
+        assert!(msg.contains("xai"));
+        assert!(msg.contains("together"));
+        assert!(msg.contains("fireworks"));
+        assert!(msg.contains("cerebras"));
+        assert!(msg.contains("sambanova"));
+        assert!(msg.contains("perplexity"));
+        assert!(msg.contains("cohere"));
+        assert!(msg.contains("qwen"));
     }
 
     #[test]
@@ -563,6 +743,250 @@ mod tests {
         let result = registry.get_provider(Some("mistral"), None);
         let msg = result.err().expect("expected error").to_string();
         assert!(msg.contains("MISTRAL_API_KEY"));
+    }
+
+    #[test]
+    fn xai_provider_has_correct_name_and_model() {
+        let config = config_with_key("xai", "xai-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("xai"), None).unwrap();
+        assert_eq!(provider.name(), "xai");
+        assert_eq!(provider.model(), "grok-3");
+    }
+
+    #[test]
+    fn xai_provider_respects_model_override() {
+        let config = config_with_key("xai", "xai-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("xai"), Some("grok-3-mini"))
+            .unwrap();
+        assert_eq!(provider.model(), "grok-3-mini");
+    }
+
+    #[test]
+    fn missing_xai_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("xai"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("XAI_API_KEY"));
+    }
+
+    #[test]
+    fn together_provider_has_correct_name_and_model() {
+        let config = config_with_key("together", "together-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("together"), None).unwrap();
+        assert_eq!(provider.name(), "together");
+        assert_eq!(provider.model(), "meta-llama/Llama-3.3-70B-Instruct-Turbo");
+    }
+
+    #[test]
+    fn together_provider_respects_model_override() {
+        let config = config_with_key("together", "together-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(
+                Some("together"),
+                Some("meta-llama/Llama-3.1-8B-Instruct-Turbo"),
+            )
+            .unwrap();
+        assert_eq!(provider.model(), "meta-llama/Llama-3.1-8B-Instruct-Turbo");
+    }
+
+    #[test]
+    fn missing_together_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("together"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("TOGETHER_API_KEY"));
+    }
+
+    #[test]
+    fn fireworks_provider_has_correct_name_and_model() {
+        let config = config_with_key("fireworks", "fw-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("fireworks"), None).unwrap();
+        assert_eq!(provider.name(), "fireworks");
+        assert_eq!(
+            provider.model(),
+            "accounts/fireworks/models/llama-v3p3-70b-instruct"
+        );
+    }
+
+    #[test]
+    fn fireworks_provider_respects_model_override() {
+        let config = config_with_key("fireworks", "fw-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(
+                Some("fireworks"),
+                Some("accounts/fireworks/models/mixtral-8x7b-instruct"),
+            )
+            .unwrap();
+        assert_eq!(
+            provider.model(),
+            "accounts/fireworks/models/mixtral-8x7b-instruct"
+        );
+    }
+
+    #[test]
+    fn missing_fireworks_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("fireworks"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("FIREWORKS_API_KEY"));
+    }
+
+    #[test]
+    fn cerebras_provider_has_correct_name_and_model() {
+        let config = config_with_key("cerebras", "csk-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("cerebras"), None).unwrap();
+        assert_eq!(provider.name(), "cerebras");
+        assert_eq!(provider.model(), "llama-3.3-70b");
+    }
+
+    #[test]
+    fn cerebras_provider_respects_model_override() {
+        let config = config_with_key("cerebras", "csk-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("cerebras"), Some("llama-3.1-8b"))
+            .unwrap();
+        assert_eq!(provider.model(), "llama-3.1-8b");
+    }
+
+    #[test]
+    fn missing_cerebras_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("cerebras"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("CEREBRAS_API_KEY"));
+    }
+
+    #[test]
+    fn sambanova_provider_has_correct_name_and_model() {
+        let config = config_with_key("sambanova", "snova-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("sambanova"), None).unwrap();
+        assert_eq!(provider.name(), "sambanova");
+        assert_eq!(provider.model(), "Meta-Llama-3.3-70B-Instruct");
+    }
+
+    #[test]
+    fn sambanova_provider_respects_model_override() {
+        let config = config_with_key("sambanova", "snova-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("sambanova"), Some("Meta-Llama-3.1-8B-Instruct"))
+            .unwrap();
+        assert_eq!(provider.model(), "Meta-Llama-3.1-8B-Instruct");
+    }
+
+    #[test]
+    fn missing_sambanova_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("sambanova"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("SAMBANOVA_API_KEY"));
+    }
+
+    #[test]
+    fn perplexity_provider_has_correct_name_and_model() {
+        let config = config_with_key("perplexity", "pplx-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("perplexity"), None).unwrap();
+        assert_eq!(provider.name(), "perplexity");
+        assert_eq!(provider.model(), "sonar-pro");
+    }
+
+    #[test]
+    fn perplexity_provider_respects_model_override() {
+        let config = config_with_key("perplexity", "pplx-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("perplexity"), Some("sonar"))
+            .unwrap();
+        assert_eq!(provider.model(), "sonar");
+    }
+
+    #[test]
+    fn missing_perplexity_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("perplexity"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("PERPLEXITY_API_KEY"));
+    }
+
+    #[test]
+    fn cohere_provider_has_correct_name_and_model() {
+        let config = config_with_key("cohere", "cohere-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("cohere"), None).unwrap();
+        assert_eq!(provider.name(), "cohere");
+        assert_eq!(provider.model(), "command-r-plus");
+    }
+
+    #[test]
+    fn cohere_provider_respects_model_override() {
+        let config = config_with_key("cohere", "cohere-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("cohere"), Some("command-r"))
+            .unwrap();
+        assert_eq!(provider.model(), "command-r");
+    }
+
+    #[test]
+    fn missing_cohere_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("cohere"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("COHERE_API_KEY"));
+    }
+
+    #[test]
+    fn qwen_provider_has_correct_name_and_model() {
+        let config = config_with_key("qwen", "sk-qwen-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("qwen"), None).unwrap();
+        assert_eq!(provider.name(), "qwen");
+        assert_eq!(provider.model(), "qwen-plus");
+    }
+
+    #[test]
+    fn qwen_provider_respects_model_override() {
+        let config = config_with_key("qwen", "sk-qwen-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("qwen"), Some("qwen-max"))
+            .unwrap();
+        assert_eq!(provider.model(), "qwen-max");
+    }
+
+    #[test]
+    fn missing_qwen_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("qwen"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("DASHSCOPE_API_KEY"));
+    }
+
+    #[test]
+    fn dashscope_alias_resolves_to_qwen() {
+        let config = config_with_key("qwen", "sk-qwen-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("dashscope"), None).unwrap();
+        assert_eq!(provider.name(), "qwen");
     }
 
     #[test]
