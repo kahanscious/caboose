@@ -273,6 +273,10 @@ pub struct State {
     pub pins: Vec<String>,
     /// Whether the pins sidebar section is expanded.
     pub pins_expanded: bool,
+    /// Oneshot receiver for LLM-generated session title.
+    pub title_rx: Option<tokio::sync::oneshot::Receiver<String>>,
+    /// Set to true when user manually sets title via /title — prevents LLM overwrite.
+    pub title_manually_set: bool,
 }
 
 /// Status of a tool execution.
@@ -942,6 +946,8 @@ impl App {
                 diff_scroll: 0,
                 pins: vec![],
                 pins_expanded: false,
+                title_rx: None,
+                title_manually_set: false,
             },
             terminal,
             provider,
@@ -1470,6 +1476,25 @@ impl App {
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         self.state.local_discovery_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Check for LLM-generated title
+            if let Some(rx) = &mut self.state.title_rx {
+                match rx.try_recv() {
+                    Ok(title) => {
+                        if !self.state.title_manually_set {
+                            let truncated =
+                                crate::tui::session_picker::truncate_at_word_boundary(&title, 60);
+                            self.state.session_title = Some(truncated);
+                            self.update_session_meta();
+                        }
+                        self.state.title_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.state.title_rx = None;
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
@@ -3040,6 +3065,7 @@ impl App {
                             let new_title = title_rest.trim().to_string();
                             if !new_title.is_empty() {
                                 self.state.session_title = Some(new_title.clone());
+                                self.state.title_manually_set = true;
                                 self.update_session_meta();
                                 self.state.chat_messages.push(ChatMessage::System {
                                     content: format!("Session renamed to \"{new_title}\""),
@@ -3532,6 +3558,8 @@ impl App {
                     self.state.user_scrolled_up = false;
                     self.state.session_title = None;
                     self.state.session_title_source = None;
+                    self.state.title_rx = None;
+                    self.state.title_manually_set = false;
                     self.state.current_session_id = None;
                     self.state.modified_files.clear();
                     self.state.file_baselines.clear();
@@ -3882,6 +3910,7 @@ impl App {
                             let new_title = title_rest.trim().to_string();
                             if !new_title.is_empty() {
                                 self.state.session_title = Some(new_title.clone());
+                                self.state.title_manually_set = true;
                                 self.update_session_meta();
                                 self.state.chat_messages.push(ChatMessage::System {
                                     content: format!("Session renamed to \"{new_title}\""),
@@ -7178,6 +7207,22 @@ impl App {
                     }
                 }
 
+                // Spawn LLM title generation after first turn
+                if self.state.agent.turn_count == 1 && self.state.title_rx.is_none() {
+                    let user_msg = self.state.session_title_source.clone().unwrap_or_default();
+                    let asst_response: String = self
+                        .state
+                        .chat_messages
+                        .iter()
+                        .rev()
+                        .find_map(|m| match m {
+                            ChatMessage::Assistant { content, .. } => Some(content.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    self.spawn_title_generation(&user_msg, &asst_response);
+                }
+
                 // Drain message queue: send the next queued message
                 // Don't drain if an ask_user session is active or budget is paused
                 if self.state.ask_user_session.is_none()
@@ -9356,6 +9401,81 @@ impl App {
         }
     }
 
+    /// Spawn a background task to generate a session title via LLM.
+    fn spawn_title_generation(&mut self, user_message: &str, assistant_response: &str) {
+        // Check config — defaults to true if section is absent
+        let auto_title = self
+            .state
+            .config
+            .behavior
+            .as_ref()
+            .is_none_or(|b| b.auto_title);
+        if !auto_title {
+            return;
+        }
+
+        // Get an Arc provider that is Send + Sync so it can cross the task boundary
+        let provider = match self.state.providers.get_provider_arc(
+            Some(&self.state.active_provider_name),
+            Some(&self.state.active_model_name),
+        ) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // Truncate inputs — byte-safe using char boundaries
+        let user_msg = user_message
+            .char_indices()
+            .nth(500)
+            .map_or(user_message.to_string(), |(i, _)| {
+                format!("{}...", &user_message[..i])
+            });
+        let asst_msg = assistant_response
+            .char_indices()
+            .nth(200)
+            .map_or(assistant_response.to_string(), |(i, _)| {
+                format!("{}...", &assistant_response[..i])
+            });
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.state.title_rx = Some(rx);
+
+        tokio::spawn(async move {
+            let prompt = format!(
+                "Generate a concise 3-6 word title for this conversation. \
+                 No quotes, no punctuation at the end. Lowercase. Just the title.\n\n\
+                 User: {user_msg}\nAssistant: {asst_msg}"
+            );
+
+            let messages = vec![crate::provider::Message {
+                role: "user".to_string(),
+                content: serde_json::Value::String(prompt),
+            }];
+
+            use futures::StreamExt;
+            let mut stream = provider.stream(&messages, &[]);
+            let mut title = String::new();
+            while let Some(event) = stream.next().await {
+                match event {
+                    Ok(crate::provider::StreamEvent::TextDelta(text)) => {
+                        title.push_str(&text);
+                    }
+                    Ok(crate::provider::StreamEvent::Done { .. }) => break,
+                    Ok(
+                        crate::provider::StreamEvent::Error(_)
+                        | crate::provider::StreamEvent::ProviderError { .. },
+                    ) => break,
+                    _ => {}
+                }
+            }
+
+            let title = title.trim().trim_matches('"').trim().to_string();
+            if !title.is_empty() {
+                let _ = tx.send(title);
+            }
+        });
+    }
+
     /// Handle `/memories` — display current memory contents as a system message.
     fn handle_memories_command(&mut self) {
         let ctx = self.state.memory.load_context();
@@ -10710,6 +10830,8 @@ impl App {
         self.state.user_scrolled_up = false;
         self.state.session_title = None;
         self.state.session_title_source = None;
+        self.state.title_rx = None;
+        self.state.title_manually_set = false;
         self.state.current_session_id = None;
         self.state.modified_files.clear();
         self.state.file_baselines.clear();

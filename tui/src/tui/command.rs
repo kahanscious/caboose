@@ -226,6 +226,8 @@ pub fn build_default_registry() -> CommandRegistry {
             state.user_scrolled_up = false;
             state.session_title = None;
             state.session_title_source = None;
+            state.title_rx = None;
+            state.title_manually_set = false;
             state.current_session_id = None;
             state.modified_files.clear();
             state.file_baselines.clear();
