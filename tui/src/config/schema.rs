@@ -228,6 +228,9 @@ pub struct BehaviorConfig {
     /// Context usage fraction at which the handoff prompt appears (default: 0.9 = 90%).
     #[serde(default)]
     pub handoff_threshold: Option<f64>,
+    /// Automatically generate a short LLM title after the first turn (default: true).
+    #[serde(default = "default_true")]
+    pub auto_title: bool,
 }
 
 impl Default for BehaviorConfig {
@@ -239,6 +242,7 @@ impl Default for BehaviorConfig {
             max_session_cost: None,
             compaction_threshold: None,
             handoff_threshold: None,
+            auto_title: true,
         }
     }
 }
@@ -717,6 +721,18 @@ disabled = ["review", "test"]
         let config: BehaviorConfig = toml::from_str("").unwrap();
         assert!(config.compaction_threshold.is_none());
         assert!(config.handoff_threshold.is_none());
+    }
+
+    #[test]
+    fn parse_behavior_auto_title_defaults_true() {
+        let config: BehaviorConfig = toml::from_str("").unwrap();
+        assert!(config.auto_title);
+    }
+
+    #[test]
+    fn parse_behavior_auto_title_disabled() {
+        let config: BehaviorConfig = toml::from_str("auto_title = false").unwrap();
+        assert!(!config.auto_title);
     }
 
     #[test]
