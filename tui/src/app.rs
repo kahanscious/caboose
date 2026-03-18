@@ -2251,23 +2251,13 @@ impl App {
 
                                 if session.all_planners_done() {
                                     let plan_count = session.successful_plans().len();
-                                    if session.critique_enabled && !session.secondaries.is_empty() {
-                                        session.phase =
-                                            crate::roundhouse::RoundhousePhase::Critiquing;
-                                        self.state.chat_messages.push(ChatMessage::System {
-                                            content: format!(
-                                                "All planners complete ({plan_count} plans). Starting critique phase..."
-                                            ),
-                                        });
-                                    } else {
-                                        session.phase =
-                                            crate::roundhouse::RoundhousePhase::Synthesizing;
-                                        self.state.chat_messages.push(ChatMessage::System {
-                                            content: format!(
-                                                "All planners complete ({plan_count} plans). Synthesizing..."
-                                            ),
-                                        });
-                                    }
+                                    session.phase =
+                                        crate::roundhouse::RoundhousePhase::ReviewingPlans;
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!(
+                                            "All planners complete ({plan_count} plans). Review plans to continue."
+                                        ),
+                                    });
                                     all_done = true;
                                 }
                             }
@@ -2280,13 +2270,7 @@ impl App {
                     self.state.roundhouse_critique_rx = None;
                 } else if all_done {
                     self.state.roundhouse_update_rx = None;
-                    if let Some(ref session) = self.state.roundhouse_session {
-                        if session.phase == crate::roundhouse::RoundhousePhase::Critiquing {
-                            self.start_roundhouse_critique();
-                        } else {
-                            self.start_roundhouse_synthesis();
-                        }
-                    }
+                    // Plans are now in ReviewingPlans — user decides next step via gate actions
                 }
             }
 
@@ -2373,10 +2357,10 @@ impl App {
                                 if session.all_critiques_done() {
                                     let critique_count = session.successful_critiques().len();
                                     session.phase =
-                                        crate::roundhouse::RoundhousePhase::Synthesizing;
+                                        crate::roundhouse::RoundhousePhase::ReviewingCritiques;
                                     self.state.chat_messages.push(ChatMessage::System {
                                         content: format!(
-                                            "All critiques complete ({critique_count} critiques). Synthesizing..."
+                                            "All critiques complete ({critique_count} critiques). Review critiques to continue."
                                         ),
                                     });
                                     all_critiques_done = true;
@@ -2387,7 +2371,7 @@ impl App {
                 }
                 if all_critiques_done {
                     self.state.roundhouse_critique_rx = None;
-                    self.start_roundhouse_synthesis();
+                    // Critiques are now in ReviewingCritiques — user decides next step via gate actions
                 }
             }
 
@@ -2438,7 +2422,7 @@ impl App {
                         };
 
                         session.synthesized_plan = Some(plan_text.clone());
-                        session.phase = crate::roundhouse::RoundhousePhase::ReviewingPlans;
+                        session.phase = crate::roundhouse::RoundhousePhase::Complete;
 
                         // Write plan file
                         let cwd = std::env::current_dir().unwrap_or_default();
@@ -2472,6 +2456,7 @@ impl App {
                         }
                     }
                     self.state.roundhouse_synthesis_rx = None;
+                    self.state.dialog_stack.base = Screen::Chat;
                 }
             }
 
@@ -2843,7 +2828,9 @@ impl App {
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
-                Screen::Roundhouse => {}
+                Screen::Roundhouse => {
+                    self.handle_roundhouse_key(key, modifiers);
+                }
             },
         }
     }
@@ -2858,6 +2845,102 @@ impl App {
                 self.state.slash_auto = Some(auto_state);
             }
             Action::Quit => self.state.should_quit = true,
+        }
+    }
+
+    fn handle_roundhouse_key(&mut self, key: KeyCode, _modifiers: KeyModifiers) {
+        let session = match &mut self.state.roundhouse_session {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Annotation input mode — capture all keys
+        if session.annotation_input.is_some() {
+            match key {
+                KeyCode::Enter => {
+                    if let Some(text) = session.annotation_input.take() {
+                        session.add_annotation(text);
+                    }
+                }
+                KeyCode::Esc => {
+                    session.annotation_input = None;
+                }
+                KeyCode::Backspace => {
+                    if let Some(ref mut input) = session.annotation_input {
+                        input.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(ref mut input) = session.annotation_input {
+                        input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Check if we need to start critique/synthesis AFTER the match
+        // to avoid holding a mutable borrow on self.state.roundhouse_session
+        // while calling methods on self.
+        let mut action: Option<&str> = None;
+        match key {
+            // Model navigation
+            KeyCode::Char('j') => {
+                session.select_next_model();
+            }
+            KeyCode::Char('k') => {
+                session.select_prev_model();
+            }
+
+            // Scroll output
+            KeyCode::PageDown => {
+                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                session.viewer_scroll_offset = session.viewer_scroll_offset.saturating_sub(10);
+            }
+
+            // Gate actions — only active during review phases
+            KeyCode::Char('c')
+                if session.phase == crate::roundhouse::RoundhousePhase::ReviewingPlans
+                    && session.critique_enabled =>
+            {
+                session.phase = crate::roundhouse::RoundhousePhase::Critiquing;
+                action = Some("critique");
+            }
+            KeyCode::Char('s')
+                if matches!(
+                    session.phase,
+                    crate::roundhouse::RoundhousePhase::ReviewingPlans
+                        | crate::roundhouse::RoundhousePhase::ReviewingCritiques
+                ) =>
+            {
+                session.phase = crate::roundhouse::RoundhousePhase::Synthesizing;
+                action = Some("synthesis");
+            }
+            KeyCode::Char('a')
+                if matches!(
+                    session.phase,
+                    crate::roundhouse::RoundhousePhase::ReviewingPlans
+                        | crate::roundhouse::RoundhousePhase::ReviewingCritiques
+                ) =>
+            {
+                session.annotation_input = Some(String::new());
+            }
+            KeyCode::Char('q') => {
+                session.phase = crate::roundhouse::RoundhousePhase::Cancelled;
+                self.state.dialog_stack.base = Screen::Chat;
+            }
+
+            _ => {}
+        }
+
+        // Now session borrow is dropped — safe to call methods on self
+        match action {
+            Some("critique") => self.start_roundhouse_critique(),
+            Some("synthesis") => self.start_roundhouse_synthesis(),
+            _ => {}
         }
     }
 
@@ -3829,6 +3912,7 @@ impl App {
                                 content: "Roundhouse planning started...".to_string(),
                             });
                             self.start_roundhouse_planning();
+                            self.state.dialog_stack.base = Screen::Roundhouse;
                         }
                         return;
                     }
