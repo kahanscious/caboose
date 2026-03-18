@@ -104,6 +104,9 @@ pub fn render(frame: &mut Frame, app: &State) {
         Screen::Chat => {
             render_chat_layout(frame, app, &colors);
         }
+        Screen::Roundhouse => {
+            crate::tui::roundhouse_screen::render(frame, app);
+        }
     }
 
     // Render top overlay if any

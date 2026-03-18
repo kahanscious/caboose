@@ -2843,6 +2843,7 @@ impl App {
             None => match self.state.dialog_stack.base {
                 Screen::Home => self.handle_home_key(key, modifiers).await,
                 Screen::Chat => self.handle_chat_key(key, modifiers).await,
+                Screen::Roundhouse => {}
             },
         }
     }
