@@ -350,6 +350,7 @@ pub fn critique_system_prompt(
     user_prompt: &str,
     own_provider: &str,
     all_plans: &[(&str, &str)],
+    annotations: &[String],
 ) -> String {
     let mut prompt = format!(
         "You are a critical reviewer in a multi-LLM planning session. \
@@ -375,6 +376,15 @@ pub fn critique_system_prompt(
         prompt.push_str("(No other plans available for review.)\n\n");
     }
 
+    if !annotations.is_empty() {
+        prompt.push_str("\n--- User Guidance ---\n");
+        prompt.push_str("The user has provided the following guidance. Respect these directives above your own judgment:\n\n");
+        for annotation in annotations {
+            prompt.push_str(&format!("- {annotation}\n"));
+        }
+        prompt.push('\n');
+    }
+
     prompt.push_str(
         "Provide a structured critique covering Risks, Gaps, Conflicts, and Improvements. \
          Be specific and actionable.",
@@ -390,6 +400,7 @@ pub fn synthesis_system_prompt(
     user_prompt: &str,
     plans: &[(&str, &str)],
     critiques: Option<&[(&str, &str)]>,
+    annotations: &[String],
 ) -> String {
     let mut prompt = format!(
         "You are the primary planner in a multi-LLM planning session. \
@@ -412,6 +423,15 @@ pub fn synthesis_system_prompt(
         for (provider, critique) in crits {
             prompt.push_str(&format!("--- Critique from {provider} ---\n{critique}\n\n"));
         }
+    }
+
+    if !annotations.is_empty() {
+        prompt.push_str("\n--- User Guidance ---\n");
+        prompt.push_str("The user has provided the following guidance. Respect these directives above your own judgment:\n\n");
+        for annotation in annotations {
+            prompt.push_str(&format!("- {annotation}\n"));
+        }
+        prompt.push('\n');
     }
 
     let synthesis_instruction = if critiques.is_some_and(|c| !c.is_empty()) {
@@ -470,7 +490,7 @@ mod tests {
     #[test]
     fn test_synthesis_prompt_includes_all_plans() {
         let plans = vec![("openai", "Plan A content"), ("gemini", "Plan B content")];
-        let prompt = synthesis_system_prompt("build a feature", &plans, None);
+        let prompt = synthesis_system_prompt("build a feature", &plans, None, &[]);
         assert!(prompt.contains("Plan A content"));
         assert!(prompt.contains("Plan B content"));
         assert!(prompt.contains("openai"));
@@ -482,7 +502,7 @@ mod tests {
     fn test_synthesis_prompt_includes_critiques() {
         let plans = vec![("openai", "Plan A")];
         let critiques = vec![("gemini", "Risk: missing error handling")];
-        let prompt = synthesis_system_prompt("build a feature", &plans, Some(&critiques));
+        let prompt = synthesis_system_prompt("build a feature", &plans, Some(&critiques), &[]);
         assert!(prompt.contains("--- Critiques ---"));
         assert!(prompt.contains("Critique from gemini"));
         assert!(prompt.contains("Risk: missing error handling"));
@@ -493,12 +513,12 @@ mod tests {
     fn test_synthesis_prompt_without_critiques() {
         let plans = vec![("openai", "Plan A")];
         // None critiques — no critique section
-        let prompt_none = synthesis_system_prompt("build a feature", &plans, None);
+        let prompt_none = synthesis_system_prompt("build a feature", &plans, None, &[]);
         assert!(!prompt_none.contains("--- Critiques ---"));
         assert!(!prompt_none.contains("risks and gaps"));
 
         // Empty critiques — no critique section
-        let prompt_empty = synthesis_system_prompt("build a feature", &plans, Some(&[]));
+        let prompt_empty = synthesis_system_prompt("build a feature", &plans, Some(&[]), &[]);
         assert!(!prompt_empty.contains("--- Critiques ---"));
         assert!(!prompt_empty.contains("risks and gaps"));
     }
@@ -510,7 +530,7 @@ mod tests {
             ("gemini", "Gemini plan text"),
             ("anthropic", "Anthropic plan text"),
         ];
-        let prompt = critique_system_prompt("build a feature", "gemini", &plans);
+        let prompt = critique_system_prompt("build a feature", "gemini", &plans, &[]);
         // Should include other plans but not gemini's own
         assert!(prompt.contains("OpenAI plan text"));
         assert!(prompt.contains("Anthropic plan text"));
@@ -525,7 +545,7 @@ mod tests {
     #[test]
     fn test_critique_prompt_with_all_plans() {
         let plans = vec![("openai", "Plan A"), ("gemini", "Plan B")];
-        let prompt = critique_system_prompt("add login", "anthropic", &plans);
+        let prompt = critique_system_prompt("add login", "anthropic", &plans, &[]);
         // All plans included since own_provider doesn't match any
         assert!(prompt.contains("Plan A"));
         assert!(prompt.contains("Plan B"));
@@ -534,6 +554,38 @@ mod tests {
         assert!(prompt.contains("Gaps"));
         assert!(prompt.contains("Conflicts"));
         assert!(prompt.contains("Improvements"));
+    }
+
+    #[test]
+    fn test_critique_prompt_with_annotations() {
+        let plans = vec![("openai", "Plan A")];
+        let annotations = vec!["Use Claude's DB approach".to_string()];
+        let prompt = critique_system_prompt("build auth", "gemini", &plans, &annotations);
+        assert!(prompt.contains("User Guidance"));
+        assert!(prompt.contains("Use Claude's DB approach"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_with_annotations() {
+        let plans = vec![("openai", "Plan A")];
+        let annotations = vec!["Ignore caching".to_string()];
+        let prompt = synthesis_system_prompt("build auth", &plans, None, &annotations);
+        assert!(prompt.contains("User Guidance"));
+        assert!(prompt.contains("Ignore caching"));
+    }
+
+    #[test]
+    fn test_critique_prompt_empty_annotations() {
+        let plans = vec![("openai", "Plan A")];
+        let prompt = critique_system_prompt("build auth", "gemini", &plans, &[]);
+        assert!(!prompt.contains("User Guidance"));
+    }
+
+    #[test]
+    fn test_synthesis_prompt_empty_annotations() {
+        let plans = vec![("openai", "Plan A")];
+        let prompt = synthesis_system_prompt("build auth", &plans, None, &[]);
+        assert!(!prompt.contains("User Guidance"));
     }
 
     #[test]

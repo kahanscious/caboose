@@ -2420,6 +2420,7 @@ impl App {
                         } else {
                             Some(critique_refs.as_slice())
                         };
+                        let annotations = session.annotations.clone();
 
                         session.synthesized_plan = Some(plan_text.clone());
                         session.phase = crate::roundhouse::RoundhousePhase::Complete;
@@ -2431,6 +2432,7 @@ impl App {
                             &individual_refs,
                             &plan_text,
                             critiques_opt,
+                            &annotations,
                         );
                         match crate::roundhouse::output::write_plan_file(&cwd, &full_doc, &prompt) {
                             Ok(path) => {
@@ -9992,7 +9994,15 @@ impl App {
     /// Each model reviews all plans except its own.
     fn start_roundhouse_critique(&mut self) {
         // Extract everything we need from session before releasing the borrow
-        let (prompt, timeout, all_plans, primary_provider_name, primary_model_name, secondaries) = {
+        let (
+            prompt,
+            timeout,
+            all_plans,
+            primary_provider_name,
+            primary_model_name,
+            secondaries,
+            annotations,
+        ) = {
             let session = match self.state.roundhouse_session.as_ref() {
                 Some(s) => s,
                 None => return,
@@ -10015,6 +10025,7 @@ impl App {
                 .enumerate()
                 .map(|(i, s)| (i, s.provider_name.clone(), s.model_name.clone()))
                 .collect();
+            let annotations = session.annotations.clone();
             (
                 prompt,
                 timeout,
@@ -10022,6 +10033,7 @@ impl App {
                 primary_provider_name,
                 primary_model_name,
                 secondaries,
+                annotations,
             )
         };
 
@@ -10048,6 +10060,7 @@ impl App {
                 &prompt,
                 &primary_provider_name,
                 &plan_refs,
+                &annotations,
             );
             let t = tools.clone();
             tokio::spawn(async move {
@@ -10086,6 +10099,7 @@ impl App {
                     &prompt,
                     &provider_name,
                     &plan_refs,
+                    &annotations,
                 );
                 let t = tools.clone();
                 let idx = i + 1;
@@ -10212,10 +10226,12 @@ impl App {
         } else {
             Some(critiques)
         };
+        let annotations = session.annotations.clone();
         let system = crate::roundhouse::planner::synthesis_system_prompt(
             &prompt,
             &plans,
             critiques_opt.as_deref(),
+            &annotations,
         );
 
         let provider = match self.state.providers.get_provider(

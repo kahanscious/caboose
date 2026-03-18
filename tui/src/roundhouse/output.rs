@@ -1,9 +1,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-/// Write the synthesized plan to a temporary markdown file
+/// Write the synthesized plan to a markdown file in `.caboose/roundhouse/`
 pub fn write_plan_file(cwd: &Path, plan_content: &str, prompt_summary: &str) -> Result<PathBuf> {
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let slug: String = prompt_summary
         .chars()
         .take(30)
@@ -15,8 +14,10 @@ pub fn write_plan_file(cwd: &Path, plan_content: &str, prompt_summary: &str) -> 
             }
         })
         .collect();
-    let filename = format!("roundhouse-{timestamp}-{slug}.md");
-    let path = cwd.join(&filename);
+    let dir = cwd.join(".caboose").join("roundhouse");
+    std::fs::create_dir_all(&dir)?;
+    let filename = format!("{}-{slug}.md", chrono::Local::now().format("%Y-%m-%d"));
+    let path = dir.join(&filename);
     std::fs::write(&path, plan_content)?;
     Ok(path)
 }
@@ -27,6 +28,7 @@ pub fn format_plans_document(
     individual_plans: &[(&str, &str)],
     synthesized_plan: &str,
     critiques: Option<&[(&str, &str)]>,
+    annotations: &[String],
 ) -> String {
     let mut doc = String::new();
     doc.push_str("# Roundhouse Plan\n\n");
@@ -47,6 +49,14 @@ pub fn format_plans_document(
             doc.push_str(&format!("### {provider}\n\n{critique}\n\n"));
         }
     }
+    if !annotations.is_empty() {
+        doc.push_str("---\n\n");
+        doc.push_str("## User Annotations\n\n");
+        for annotation in annotations {
+            doc.push_str(&format!("- {annotation}\n"));
+        }
+        doc.push('\n');
+    }
     doc
 }
 
@@ -61,6 +71,7 @@ mod tests {
             &[("openai", "Plan A"), ("gemini", "Plan B")],
             "Unified plan here",
             None,
+            &[],
         );
         assert!(doc.contains("# Roundhouse Plan"));
         assert!(doc.contains("build auth"));
@@ -79,6 +90,7 @@ mod tests {
                 ("openai", "Critique of Plan A"),
                 ("gemini", "Critique of Plan B"),
             ]),
+            &[],
         );
         assert!(doc.contains("## Critiques"));
         assert!(doc.contains("### openai"));
@@ -94,6 +106,7 @@ mod tests {
             &[("openai", "Plan A")],
             "Unified plan here",
             None,
+            &[],
         );
         assert!(!doc.contains("## Critiques"));
         assert!(doc.contains("## Synthesized Plan"));
@@ -105,7 +118,26 @@ mod tests {
             &[("openai", "Plan A")],
             "Unified plan here",
             Some(&[]),
+            &[],
         );
         assert!(!doc2.contains("## Critiques"));
+    }
+
+    #[test]
+    fn test_format_plans_document_with_annotations() {
+        let annotations = vec![
+            "Use plan A's approach".to_string(),
+            "Skip caching".to_string(),
+        ];
+        let doc = format_plans_document(
+            "build auth",
+            &[("openai", "Plan A")],
+            "Unified plan",
+            None,
+            &annotations,
+        );
+        assert!(doc.contains("## User Annotations"));
+        assert!(doc.contains("Use plan A's approach"));
+        assert!(doc.contains("Skip caching"));
     }
 }
