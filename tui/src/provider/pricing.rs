@@ -138,6 +138,88 @@ impl PricingRegistry {
             },
         );
 
+        // xAI
+        models.insert(
+            "grok-3".into(),
+            ModelPricing {
+                input_per_m: 3.0,
+                output_per_m: 15.0,
+            },
+        );
+        models.insert(
+            "grok-3-mini".into(),
+            ModelPricing {
+                input_per_m: 0.3,
+                output_per_m: 0.5,
+            },
+        );
+
+        // Together AI
+        models.insert(
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo".into(),
+            ModelPricing {
+                input_per_m: 0.88,
+                output_per_m: 0.88,
+            },
+        );
+
+        // Cerebras
+        models.insert(
+            "llama-3.3-70b".into(),
+            ModelPricing {
+                input_per_m: 0.85,
+                output_per_m: 1.2,
+            },
+        );
+
+        // Perplexity
+        models.insert(
+            "sonar-pro".into(),
+            ModelPricing {
+                input_per_m: 3.0,
+                output_per_m: 15.0,
+            },
+        );
+        models.insert(
+            "sonar".into(),
+            ModelPricing {
+                input_per_m: 1.0,
+                output_per_m: 1.0,
+            },
+        );
+
+        // Cohere
+        models.insert(
+            "command-r-plus".into(),
+            ModelPricing {
+                input_per_m: 2.5,
+                output_per_m: 10.0,
+            },
+        );
+        models.insert(
+            "command-r".into(),
+            ModelPricing {
+                input_per_m: 0.15,
+                output_per_m: 0.6,
+            },
+        );
+
+        // Qwen
+        models.insert(
+            "qwen-plus".into(),
+            ModelPricing {
+                input_per_m: 0.8,
+                output_per_m: 2.0,
+            },
+        );
+        models.insert(
+            "qwen-max".into(),
+            ModelPricing {
+                input_per_m: 2.4,
+                output_per_m: 9.6,
+            },
+        );
+
         Self { models }
     }
 
