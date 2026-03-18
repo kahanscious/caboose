@@ -23,6 +23,14 @@ pub struct RoundhouseSession {
     pub primary_critique_streaming_text: String,
     pub critique_enabled: bool,
     pub primary_tool_calls: Vec<RoundhouseToolCall>,
+    #[allow(dead_code)]
+    pub annotations: Vec<String>,
+    #[allow(dead_code)]
+    pub selected_model_index: usize,
+    #[allow(dead_code)]
+    pub viewer_scroll_offset: u16,
+    #[allow(dead_code)]
+    pub annotation_input: Option<String>,
 }
 
 impl RoundhouseSession {
@@ -53,6 +61,10 @@ impl RoundhouseSession {
             primary_critique_streaming_text: String::new(),
             critique_enabled,
             primary_tool_calls: Vec::new(),
+            annotations: Vec::new(),
+            selected_model_index: 0,
+            viewer_scroll_offset: 0,
+            annotation_input: None,
         }
     }
 
@@ -63,6 +75,7 @@ impl RoundhouseSession {
             status: PlannerStatus::Pending,
             status_tick: 0,
             plan: None,
+            streaming_text: String::new(),
             token_count: 0,
             cost: 0.0,
             critique: None,
@@ -118,6 +131,76 @@ impl RoundhouseSession {
             }
         }
         critiques
+    }
+
+    #[allow(dead_code)]
+    pub fn add_annotation(&mut self, text: String) {
+        if !text.trim().is_empty() {
+            self.annotations.push(text.trim().to_string());
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_model_text(&self) -> &str {
+        if self.selected_model_index == 0 {
+            &self.primary_streaming_text
+        } else {
+            self.secondaries
+                .get(self.selected_model_index - 1)
+                .map(|s| s.streaming_text.as_str())
+                .unwrap_or("")
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_critique_text(&self) -> &str {
+        if self.selected_model_index == 0 {
+            &self.primary_critique_streaming_text
+        } else {
+            self.secondaries
+                .get(self.selected_model_index - 1)
+                .map(|s| s.critique_streaming_text.as_str())
+                .unwrap_or("")
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn model_display_name(&self, index: usize) -> String {
+        if index == 0 {
+            self.primary_model.clone()
+        } else {
+            self.secondaries
+                .get(index - 1)
+                .map(|s| s.model_name.clone())
+                .unwrap_or_else(|| "unknown".to_string())
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn model_count(&self) -> usize {
+        1 + self.secondaries.len()
+    }
+
+    #[allow(dead_code)]
+    pub fn select_next_model(&mut self) {
+        let count = self.model_count();
+        if count > 0 {
+            self.selected_model_index = (self.selected_model_index + 1) % count;
+            self.viewer_scroll_offset = 0;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn select_prev_model(&mut self) {
+        let count = self.model_count();
+        if count > 0 {
+            self.selected_model_index = if self.selected_model_index == 0 {
+                count - 1
+            } else {
+                self.selected_model_index - 1
+            };
+            self.viewer_scroll_offset = 0;
+        }
     }
 
     pub fn successful_plans(&self) -> Vec<(&str, &str)> {
@@ -305,5 +388,57 @@ mod tests {
         assert_eq!(critiques.len(), 2);
         assert_eq!(critiques[0], ("anthropic", "Primary critique"));
         assert_eq!(critiques[1], ("openai", "OpenAI critique"));
+    }
+
+    #[test]
+    fn test_annotations() {
+        let mut s = RoundhouseSession::new(
+            "anthropic".into(),
+            "claude".into(),
+            true,
+            RoundhouseConfig::default(),
+        );
+        s.add_annotation("Use Claude's DB approach".into());
+        s.add_annotation("   ".into());
+        s.add_annotation("Ignore caching".into());
+        assert_eq!(s.annotations.len(), 2);
+        assert_eq!(s.annotations[0], "Use Claude's DB approach");
+        assert_eq!(s.annotations[1], "Ignore caching");
+    }
+
+    #[test]
+    fn test_model_navigation() {
+        let mut s = RoundhouseSession::new(
+            "anthropic".into(),
+            "claude".into(),
+            true,
+            RoundhouseConfig::default(),
+        );
+        s.add_secondary("openai".into(), "gpt-4o".into());
+        s.add_secondary("gemini".into(), "gemini-2.5".into());
+        assert_eq!(s.selected_model_index, 0);
+        assert_eq!(s.model_count(), 3);
+        s.select_next_model();
+        assert_eq!(s.selected_model_index, 1);
+        s.select_next_model();
+        assert_eq!(s.selected_model_index, 2);
+        s.select_next_model();
+        assert_eq!(s.selected_model_index, 0);
+        s.select_prev_model();
+        assert_eq!(s.selected_model_index, 2);
+    }
+
+    #[test]
+    fn test_model_display_name() {
+        let mut s = RoundhouseSession::new(
+            "anthropic".into(),
+            "claude-sonnet".into(),
+            true,
+            RoundhouseConfig::default(),
+        );
+        s.add_secondary("openai".into(), "gpt-4o".into());
+        assert_eq!(s.model_display_name(0), "claude-sonnet");
+        assert_eq!(s.model_display_name(1), "gpt-4o");
+        assert_eq!(s.model_display_name(99), "unknown");
     }
 }

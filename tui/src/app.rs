@@ -2438,7 +2438,7 @@ impl App {
                         };
 
                         session.synthesized_plan = Some(plan_text.clone());
-                        session.phase = crate::roundhouse::RoundhousePhase::Reviewing;
+                        session.phase = crate::roundhouse::RoundhousePhase::ReviewingPlans;
 
                         // Write plan file
                         let cwd = std::env::current_dir().unwrap_or_default();
@@ -2557,20 +2557,6 @@ impl App {
 
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
-
-            // Roundhouse: transition Executing → Complete when agent goes idle
-            // and there are no queued messages waiting to be sent
-            if matches!(self.state.agent.state, AgentState::Idle)
-                && self.state.message_queue.is_empty()
-                && self
-                    .state
-                    .roundhouse_session
-                    .as_ref()
-                    .is_some_and(|rh| rh.phase == crate::roundhouse::RoundhousePhase::Executing)
-                && let Some(ref mut rh) = self.state.roundhouse_session
-            {
-                rh.phase = crate::roundhouse::RoundhousePhase::Complete;
-            }
 
             if self.state.should_quit {
                 break;
@@ -10052,19 +10038,19 @@ impl App {
         match sub {
             "execute" => {
                 if let Some(ref session) = self.state.roundhouse_session {
-                    if session.phase == crate::roundhouse::RoundhousePhase::Reviewing {
+                    if session.phase == crate::roundhouse::RoundhousePhase::ReviewingPlans {
                         let plan = session.synthesized_plan.clone().unwrap_or_default();
                         let msg = format!(
                             "Execute the following implementation plan now. Start implementing immediately — read the relevant files, make the code changes, and run any commands specified. Do not just describe what you would do; actually do it step by step using your tools.\n\n{plan}"
                         );
                         self.state.roundhouse_session.as_mut().unwrap().phase =
-                            crate::roundhouse::RoundhousePhase::Executing;
+                            crate::roundhouse::RoundhousePhase::Complete;
                         // Queue the plan for the agent to execute
                         self.state.message_queue.push_back(msg);
                     } else {
                         self.state.chat_messages.push(ChatMessage::System {
                             content: format!(
-                                "Cannot execute: roundhouse is in {:?} phase (expected Reviewing).",
+                                "Cannot execute: roundhouse is in {:?} phase (expected ReviewingPlans).",
                                 session.phase
                             ),
                         });

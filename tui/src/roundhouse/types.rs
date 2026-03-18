@@ -20,6 +20,8 @@ pub struct SecondaryPlanner {
     pub status_tick: u64,
     pub plan: Option<String>,
     #[allow(dead_code)]
+    pub streaming_text: String,
+    #[allow(dead_code)]
     pub token_count: u64,
     #[allow(dead_code)]
     pub cost: f64,
@@ -35,11 +37,11 @@ pub enum RoundhousePhase {
     SelectingProviders,
     AwaitingPrompt,
     Planning,
+    ReviewingPlans,
     Critiquing,
-    Synthesizing,
-    Reviewing,
-    Executing,
     #[allow(dead_code)]
+    ReviewingCritiques,
+    Synthesizing,
     Complete,
     Cancelled,
 }
