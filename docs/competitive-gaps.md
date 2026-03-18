@@ -18,7 +18,7 @@ Feature gaps identified by comparing Caboose against Claude Code, Codex CLI, Aid
 |---|---------|--------|-----------|-------|
 | 1 | Web search tool | NEXT | Codex CLI, Aider | Built-in tool — Tender Highball MCP covers this but requires setup; native tool is better |
 | 2 | Auto session titling | DONE | OpenCode, Claude Code | LLM-generated title after first turn, configurable via `auto_title` |
-| 3 | Git undo (`/undo`) | NEXT | Aider, Cline | Revert last git change (not conversation rewind) |
+| 3 | Git undo (`/undo`) | DONE | Aider, Cline | Shortcut to rewind last checkpoint with file changes |
 | 4 | More providers | NEXT | OpenCode (all 5) | Easy wins — same HTTP/SSE pattern as existing providers. See breakdown below |
 
 ### 4. Provider Expansion Status
