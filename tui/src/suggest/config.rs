@@ -7,10 +7,10 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Resolve scan commands: use config if provided, otherwise auto-detect.
 pub fn resolve_scans(config: Option<&SuggestConfig>) -> Vec<ScanCommandConfig> {
-    if let Some(c) = config {
-        if !c.scans.is_empty() {
-            return c.scans.clone();
-        }
+    if let Some(c) = config
+        && !c.scans.is_empty()
+    {
+        return c.scans.clone();
     }
     auto_detect()
 }

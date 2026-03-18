@@ -1604,7 +1604,6 @@ impl App {
                             self.handle_key(key.code, key.modifiers).await;
                         }
                         Event::Paste(text) => {
-
                             self.handle_paste(&text);
                         }
                         Event::Mouse(mouse) => {
@@ -3944,7 +3943,10 @@ impl App {
                         } else {
                             std::env::current_dir().unwrap_or_default().join(path)
                         };
-                        match crate::attachment::read_image_attachment(&full_path, &self.images_config()) {
+                        match crate::attachment::read_image_attachment(
+                            &full_path,
+                            &self.images_config(),
+                        ) {
                             Ok(att) => {
                                 if let Some(ref info) = att.compression {
                                     let msg = format!(
@@ -3953,7 +3955,9 @@ impl App {
                                         crate::attachment::format_size(info.original_size),
                                         crate::attachment::format_size(info.compressed_size),
                                     );
-                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::System { content: msg });
                                 }
                                 self.state.attachments.push(att);
                             }
@@ -3972,7 +3976,10 @@ impl App {
                     if !bare_paths.is_empty() {
                         msg_to_send = cleaned_text;
                         for path in &bare_paths {
-                            match crate::attachment::read_image_attachment(path, &self.images_config()) {
+                            match crate::attachment::read_image_attachment(
+                                path,
+                                &self.images_config(),
+                            ) {
                                 Ok(att) => {
                                     if let Some(ref info) = att.compression {
                                         let msg = format!(
@@ -3981,7 +3988,9 @@ impl App {
                                             crate::attachment::format_size(info.original_size),
                                             crate::attachment::format_size(info.compressed_size),
                                         );
-                                        self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                        self.state
+                                            .chat_messages
+                                            .push(ChatMessage::System { content: msg });
                                     }
                                     self.state.attachments.push(att);
                                 }
@@ -5089,7 +5098,8 @@ impl App {
                         }
                     }
                     BrowseAction::AttachImage(path) => {
-                        match crate::attachment::read_image_attachment(&path, &self.images_config()) {
+                        match crate::attachment::read_image_attachment(&path, &self.images_config())
+                        {
                             Ok(att) => {
                                 if let Some(ref info) = att.compression {
                                     let msg = format!(
@@ -5098,7 +5108,9 @@ impl App {
                                         crate::attachment::format_size(info.original_size),
                                         crate::attachment::format_size(info.compressed_size),
                                     );
-                                    self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::System { content: msg });
                                 }
                                 self.state.attachments.push(att);
                             }
@@ -6297,7 +6309,9 @@ impl App {
                                     crate::attachment::format_size(info.original_size),
                                     crate::attachment::format_size(info.compressed_size),
                                 );
-                                self.state.chat_messages.push(ChatMessage::System { content: msg });
+                                self.state
+                                    .chat_messages
+                                    .push(ChatMessage::System { content: msg });
                             }
                             self.state.attachments.push(att);
                         }
@@ -9370,21 +9384,19 @@ impl App {
         self.state.dialog_stack.base = Screen::Chat;
 
         // Show scanning message
-        self.state
-            .chat_messages
-            .push(ChatMessage::System {
-                content: "Scanning codebase...".to_string(),
-            });
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Scanning codebase...".to_string(),
+        });
 
         // Run the suggest pipeline
         let suggest_config = self.state.config.suggest.as_ref();
         let digest = crate::suggest::run_suggest(suggest_config).await;
 
         // Update scanning message
-        if let Some(ChatMessage::System { content }) = self.state.chat_messages.last_mut() {
-            if content == "Scanning codebase..." {
-                *content = "Scan complete — analyzing findings...".to_string();
-            }
+        if let Some(ChatMessage::System { content }) = self.state.chat_messages.last_mut()
+            && content == "Scanning codebase..."
+        {
+            *content = "Scan complete — analyzing findings...".to_string();
         }
 
         // Inject digest as user message and trigger agent stream
@@ -10338,12 +10350,7 @@ impl App {
                 ),
             },
             {
-                let suggest_enabled = self
-                    .state
-                    .config
-                    .suggest
-                    .as_ref()
-                    .map_or(true, |c| c.enabled);
+                let suggest_enabled = self.state.config.suggest.as_ref().is_none_or(|c| c.enabled);
                 crate::tui::slash_auto::SettingsItem {
                     key: "suggest.enabled".to_string(),
                     label: "Suggest".to_string(),
@@ -10767,9 +10774,7 @@ impl App {
             return true;
         }
         if slash == "usage" {
-            self.state
-                .dialog_stack
-                .push(DialogKind::Usage);
+            self.state.dialog_stack.push(DialogKind::Usage);
             return true;
         }
         if slash == "mcp" {

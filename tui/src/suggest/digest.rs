@@ -28,6 +28,7 @@ pub fn build_digest(findings: &[Finding], weights: &PriorityWeights) -> String {
     }
 
     // Standard sections sorted by weight
+    #[allow(clippy::type_complexity)]
     let mut sections: Vec<(u8, &str, Box<dyn Fn(&Finding) -> bool>)> = vec![
         (
             weights.test_failure,
@@ -157,7 +158,14 @@ mod tests {
     #[test]
     fn digest_caps_per_section() {
         let findings: Vec<_> = (0..10)
-            .map(|i| finding(Category::Todo, Severity::Info, &format!("TODO item {i}"), None))
+            .map(|i| {
+                finding(
+                    Category::Todo,
+                    Severity::Info,
+                    &format!("TODO item {i}"),
+                    None,
+                )
+            })
             .collect();
         let digest = build_digest(&findings, &PriorityWeights::default());
         assert!(digest.contains("more"));

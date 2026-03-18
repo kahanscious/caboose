@@ -591,7 +591,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Tools,
         keybind: None,
         slash: Some("suggest"),
-        available: |state| state.config.suggest.as_ref().map_or(true, |c| c.enabled),
+        available: |state| state.config.suggest.as_ref().is_none_or(|c| c.enabled),
         execute: |_state| Action::None, // Handled in app.rs handle_suggest_command
     });
 
