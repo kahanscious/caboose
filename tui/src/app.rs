@@ -1850,6 +1850,21 @@ impl App {
                                             continue;
                                         }
 
+                                        // Copy badge click
+                                        let mut badge_handled = false;
+                                        if let Some(badge) = self.state.copy_badge_rect.get() {
+                                            if mouse.row == badge.y
+                                                && mouse.column >= badge.x
+                                                && mouse.column < badge.x + badge.width
+                                            {
+                                                self.copy_hovered_message();
+                                                badge_handled = true;
+                                            }
+                                        }
+                                        if badge_handled {
+                                            continue;
+                                        }
+
                                         // Truncation click zone logic
                                         let zones = self.state.truncation_click_zones.borrow();
                                         let mut truncation_handled = false;
@@ -1951,6 +1966,26 @@ impl App {
                                             self.state.dialog_stack.top_mut()
                                     {
                                         palette.selected = idx;
+                                    }
+
+                                    // Hover detection for copy badge
+                                    let in_chat = self.state.chat_area.get()
+                                        .map(|r| {
+                                            mouse.row >= r.y && mouse.row < r.y + r.height
+                                                && mouse.column >= r.x
+                                                && mouse.column < r.x + r.width
+                                        })
+                                        .unwrap_or(false);
+                                    if in_chat && !roundhouse_active(&self.state) {
+                                        let zones = self.state.copy_hover_zones.borrow();
+                                        self.state.hovered_message = zones
+                                            .iter()
+                                            .find(|&&(sy, ey, _)| {
+                                                mouse.row >= sy && mouse.row < ey
+                                            })
+                                            .map(|&(_, _, idx)| idx);
+                                    } else {
+                                        self.state.hovered_message = None;
                                     }
                                 }
                                 _ => {}
@@ -3849,6 +3884,15 @@ impl App {
                 }
                 _ => return, // Ignore other keys while confirming
             }
+        }
+
+        // Hover-copy: y key copies the currently hovered assistant message
+        if key == KeyCode::Char('y')
+            && self.state.hovered_message.is_some()
+            && !roundhouse_active
+        {
+            self.copy_hovered_message();
+            return;
         }
 
         // Handle budget pause confirmation
@@ -10603,6 +10647,26 @@ impl App {
     }
 
     /// Clear all roundhouse state — session, receivers, model-add flag.
+    fn copy_hovered_message(&mut self) {
+        let Some(i) = self.state.hovered_message else { return };
+        let text = match self.state.chat_messages.get(i) {
+            Some(ChatMessage::Assistant { content, .. }) => content.clone(),
+            _ => return,
+        };
+        match crate::clipboard::copy_to_clipboard(&text) {
+            Ok(()) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Copied to clipboard.".to_string(),
+                });
+            }
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Copy failed: {e}"),
+                });
+            }
+        }
+    }
+
     fn clear_roundhouse_session(&mut self) {
         self.state.roundhouse_session = None;
         self.state.roundhouse_update_rx = None;

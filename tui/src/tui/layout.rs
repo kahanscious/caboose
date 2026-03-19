@@ -1048,6 +1048,33 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         .scroll((effective_offset, 0));
     frame.render_widget(chat, area);
 
+    // Copy badge overlay: shown on the hovered assistant message header row.
+    // Rendered after the main Paragraph so it floats on top.
+    app.copy_badge_rect.set(None); // clear previous frame's rect
+    if let Some(hovered_idx) = app.hovered_message {
+        if !crate::app::roundhouse_active(app) {
+            let zones = app.copy_hover_zones.borrow();
+            if let Some(&(start_y, _, _)) = zones.iter().find(|&&(_, _, idx)| idx == hovered_idx) {
+                if start_y >= area.y && start_y < area.y + area.height {
+                    let badge_rect = ratatui::prelude::Rect {
+                        x: area.x + area.width.saturating_sub(10),
+                        y: start_y,
+                        width: 10.min(area.width),
+                        height: 1,
+                    };
+                    frame.render_widget(ratatui::widgets::Clear, badge_rect);
+                    frame.render_widget(
+                        Paragraph::new("[ y copy ]").style(
+                            Style::default().bg(colors.bg_elevated).fg(colors.text_dim),
+                        ),
+                        badge_rect,
+                    );
+                    app.copy_badge_rect.set(Some(badge_rect));
+                }
+            }
+        }
+    }
+
     // Selection highlighting overlay (inverted fg/bg)
     if let Some(ref sel) = app.text_selection {
         let (start_row, start_col, end_row, end_col) =
