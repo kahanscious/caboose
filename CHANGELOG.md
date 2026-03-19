@@ -5,7 +5,49 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - Unreleased
+## [0.6.0] - 2026-03-18
+
+### Added
+
+- **Roundhouse v2** — complete overhaul with a dedicated full-screen experience. Left panel (65%) streams model output; right panel (35%) shows phase navigator, model list with status icons, cost, and annotation count. Replaces inline chat rendering.
+- **Gated phase flow** — human checkpoints between planning, critique, and synthesis. After each phase: `[c]` critique, `[s]` skip to synthesis, `[a]` annotate, `[q]` cancel. `j`/`k` switches between models in real-time.
+- **Roundhouse annotations** — type feedback at any review gate (e.g. "Use Claude's DB approach"). Injected into subsequent phase prompts as a "User Guidance" section; models instructed to respect user guidance above their own judgment. Included in output file.
+- **Collapsible model picker groups** — `/model` picker now groups models by provider with `▼`/`▶` headers. Press Enter on a header to expand/collapse. Active provider expanded by default; others collapsed. OpenRouter and other configured providers always shown regardless of active provider.
+- **Local server connect entries** — Ollama, LM Studio, llama.cpp, and Custom server connect options pinned at the top of the model picker. Select to connect on a custom port. Session remembers manually connected servers.
+- **`!` shell shortcut** — type `!<command>` to run a shell command directly without LLM involvement. Output shown as a system message in chat. Supports pipes, redirects, and shell builtins via `sh -c`. Truncates at 200 lines. Shows `[exit code: N]` on failure. Works with no API key configured.
+
+### Changed
+
+- Roundhouse output files now saved to `.caboose/roundhouse/<YYYY-MM-DD>-<slug>.md`; synthesis inserted as an Assistant message in Chat on completion.
+- Removed `/roundhouse execute` subcommand — synthesis flows naturally into chat.
+- Model picker selected item now stays centered in the viewport while scrolling.
+- Roundhouse cancellation errors now display in red.
+- Escape or Ctrl+C immediately exits roundhouse from any phase.
+- Slash commands disabled while roundhouse is active to prevent conflicts.
+
+---
+
+## [0.5.0] - 2026-03-18
+
+> Includes all features from the unreleased 0.4.1 cycle.
+
+### Added
+
+- **8 new API providers** — xAI (Grok), Together AI, Fireworks AI, Cerebras, SambaNova, Perplexity, Cohere, Qwen (DashScope). Caboose now supports 15 API providers + 4 local options.
+- **MCP SSE/HTTP transport** — connect to remote MCP servers via URL (`url = "https://..."`) instead of only spawning local processes.
+- **Auto session titling** — LLM-generated 3–6 word titles after first turn. Non-blocking; falls back to truncated first message. Configurable via `auto_title` in `[behavior]` config.
+- **`/status` command** — replaces `/usage`, expanded with provider, model, and permission mode. `/usage` kept as alias.
+- **`/undo` command** — quick shortcut to rewind the most recent checkpoint with file changes.
+- **Non-interactive JSON output** — `-f json` flag for `--prompt` mode with structured response, token counts, and tool calls.
+- **Image attachments + compression** — drag-and-drop, `@path.png` references, absolute path detection. 3-step cascade: passthrough → resize → JPEG re-encode. Alpha-aware (PNG/WebP with transparency skip JPEG). `[images]` config section.
+- **Reasoning level control** — `ThinkingMode` expanded to Off/Low/Medium/High. `/reasoning` slash command with picker. Provider-native mapping (Anthropic budget_tokens, OpenAI reasoning_effort, Gemini thinking_budget). Ctrl+T toggles off/medium.
+- **`/suggest`** — evidence-based codebase scanning. Configurable lint/test commands or auto-detected from project files. Typed parsers for cargo clippy (JSON), cargo test, TODO/FIXME grep, git churn. Findings deduplicated and prioritized. Toggleable via `/settings`.
+- **Session full-text search** — FTS5 virtual table indexes all message content. Typing in `/sessions` searches across all sessions via ranked matching.
+- **Auto-fix error recovery** — agent automatically retries failed shell commands. Circuit breaker stops after 3 consecutive failures of the same command.
+
+---
+
+## [0.4.0] - 2026-03-16
 
 ### Added
 

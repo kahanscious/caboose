@@ -9,6 +9,8 @@ use crate::tui::mcp_input::McpServerInputState;
 pub enum Screen {
     Home,
     Chat,
+    #[allow(dead_code)]
+    Roundhouse,
 }
 
 /// A dialog overlay that can be pushed onto the stack.

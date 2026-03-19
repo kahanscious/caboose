@@ -104,6 +104,9 @@ pub fn render(frame: &mut Frame, app: &State) {
         Screen::Chat => {
             render_chat_layout(frame, app, &colors);
         }
+        Screen::Roundhouse => {
+            crate::tui::roundhouse_screen::render(frame, app);
+        }
     }
 
     // Render top overlay if any
@@ -132,7 +135,9 @@ pub fn render(frame: &mut Frame, app: &State) {
                 render_local_connect(frame, state, &colors);
             }
             DialogKind::RoundhouseProviderPicker(picker) => {
-                render_roundhouse_picker(frame, picker, app, &colors);
+                if app.slash_auto.is_none() {
+                    render_roundhouse_picker(frame, picker, app, &colors);
+                }
             }
             DialogKind::CircuitsList(list_state) => {
                 render_circuits_list(frame, list_state, app, &colors);
@@ -407,6 +412,74 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
 
 /// Render the chat message area.
 fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colors) {
+    // When Roundhouse is active in a running phase, show the model viewer instead
+    if let Some(session) = &app.roundhouse_session {
+        let is_active = !matches!(
+            session.phase,
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                | crate::roundhouse::RoundhousePhase::SelectingProviders
+                | crate::roundhouse::RoundhousePhase::Cancelled
+                | crate::roundhouse::RoundhousePhase::Complete
+        );
+        if is_active {
+            // Render like normal chat — same 4-col padding, markdown, shared scroll offset
+            let area = Rect {
+                x: area.x + 4,
+                width: area.width.saturating_sub(4),
+                ..area
+            };
+            app.chat_area.set(Some(area));
+
+            let content = match session.phase {
+                crate::roundhouse::RoundhousePhase::Critiquing
+                | crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
+                    session.selected_critique_text().to_string()
+                }
+                crate::roundhouse::RoundhousePhase::Synthesizing
+                | crate::roundhouse::RoundhousePhase::Complete => {
+                    session.synthesis_streaming_text.clone()
+                }
+                _ => session.selected_model_text().to_string(),
+            };
+
+            let model_name = session.model_display_name(session.selected_model_index);
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from(vec![
+                Span::styled("● ", Style::default().fg(colors.roundhouse)),
+                Span::styled(
+                    model_name,
+                    Style::default().fg(colors.text_secondary).bold(),
+                ),
+            ]));
+            lines.extend(crate::tui::chat::parse_markdown(
+                &content,
+                colors,
+                colors.roundhouse,
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from(""));
+
+            let tmp = Paragraph::new(lines.clone()).wrap(Wrap { trim: false });
+            let total_lines = tmp.line_count(area.width) as u16;
+            let max_scroll = total_lines.saturating_sub(area.height);
+            app.total_chat_lines.set(total_lines);
+            app.chat_area_height.set(area.height);
+
+            let effective_offset = if app.user_scrolled_up {
+                app.scroll_offset.min(max_scroll)
+            } else {
+                max_scroll
+            };
+
+            let chat = Paragraph::new(lines)
+                .style(Style::default().bg(colors.bg_primary))
+                .wrap(Wrap { trim: false })
+                .scroll((effective_offset, 0));
+            frame.render_widget(chat, area);
+            return;
+        }
+    }
+
     // Add left padding so content isn't flush against the edge.
     // Use 4 columns so text aligns with message headers (● You / ● Caboose)
     // and wrapped lines stay aligned (ratatui wraps to column 0 of area).
@@ -629,182 +702,6 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             format!("{spinner} "),
             Style::default().fg(accent),
         )));
-    }
-
-    // Show Roundhouse streaming text in main window (planning + synthesis)
-    if let Some(ref rh) = app.roundhouse_session {
-        let accent = colors.roundhouse;
-
-        // Primary planner streaming
-        let planner_active = matches!(
-            rh.primary_status,
-            crate::roundhouse::PlannerStatus::Streaming
-                | crate::roundhouse::PlannerStatus::Thinking
-                | crate::roundhouse::PlannerStatus::UsingTool(_)
-        );
-        if planner_active || !rh.primary_streaming_text.is_empty() {
-            msg_boundaries.push((lines.len(), 2u8));
-            // Header: show tool name if using a tool, otherwise "(planning)"
-            let phase_label = match &rh.primary_status {
-                crate::roundhouse::PlannerStatus::UsingTool(tool) => {
-                    format!("reading {tool}")
-                }
-                _ => "(planning)".to_string(),
-            };
-            lines.push(Line::from(vec![
-                Span::styled("\u{25CF} ", Style::default().fg(accent)),
-                Span::styled(
-                    format!("{} ", rh.primary_model),
-                    Style::default().fg(colors.text_secondary).bold(),
-                ),
-                Span::styled(phase_label, Style::default().fg(colors.text_muted)),
-            ]));
-            // Render tool calls with running/completed status
-            for tc in &rh.primary_tool_calls {
-                let label = match tc.tool_name.as_str() {
-                    "read_file" => "Read",
-                    "list_directory" => "List",
-                    "glob" => "Glob",
-                    "grep" => "Grep",
-                    _ => tc.tool_name.as_str(),
-                };
-                let (icon_color, summary_text) = match tc.status {
-                    crate::roundhouse::ToolCallStatus::Running => {
-                        let dim = (app.tick / 10) % 2 == 1;
-                        let color = if dim { colors.text_dim } else { colors.warning };
-                        (color, tc.args_summary.clone())
-                    }
-                    crate::roundhouse::ToolCallStatus::Success => (
-                        colors.success,
-                        tc.result_summary
-                            .clone()
-                            .unwrap_or_else(|| tc.args_summary.clone()),
-                    ),
-                    crate::roundhouse::ToolCallStatus::Failed => (
-                        colors.error,
-                        tc.result_summary
-                            .clone()
-                            .unwrap_or_else(|| tc.args_summary.clone()),
-                    ),
-                };
-                lines.push(Line::from(vec![
-                    Span::styled("\u{2022} ", Style::default().fg(icon_color)),
-                    Span::styled(label, Style::default().fg(colors.text)),
-                    Span::styled(
-                        format!("  {summary_text}"),
-                        Style::default()
-                            .fg(colors.text_dim)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
-            }
-            if !rh.primary_streaming_text.is_empty() {
-                let parsed =
-                    crate::tui::chat::parse_markdown(&rh.primary_streaming_text, colors, accent);
-                if !parsed.is_empty() {
-                    let mut sl = parsed;
-                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                        sl.pop();
-                    }
-                    lines.extend(sl);
-                }
-            }
-            if planner_active {
-                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
-                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
-                lines.push(Line::from(Span::styled(
-                    format!("{spinner} "),
-                    Style::default().fg(accent),
-                )));
-            }
-        }
-
-        // Primary critique streaming
-        let critique_active = matches!(
-            rh.primary_critique_status,
-            crate::roundhouse::PlannerStatus::Streaming
-                | crate::roundhouse::PlannerStatus::Thinking
-                | crate::roundhouse::PlannerStatus::UsingTool(_)
-        );
-        if critique_active || !rh.primary_critique_streaming_text.is_empty() {
-            msg_boundaries.push((lines.len(), 2u8));
-            lines.push(Line::from(vec![
-                Span::styled("\u{25CF} ", Style::default().fg(accent)),
-                Span::styled(
-                    format!("{} ", rh.primary_model),
-                    Style::default().fg(colors.text_secondary).bold(),
-                ),
-                Span::styled("(critiquing)", Style::default().fg(colors.text_muted)),
-            ]));
-            if !rh.primary_critique_streaming_text.is_empty() {
-                let parsed = crate::tui::chat::parse_markdown(
-                    &rh.primary_critique_streaming_text,
-                    colors,
-                    accent,
-                );
-                if !parsed.is_empty() {
-                    let mut sl = parsed;
-                    if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                        sl.pop();
-                    }
-                    lines.extend(sl);
-                }
-            }
-            if critique_active {
-                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
-                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
-                lines.push(Line::from(Span::styled(
-                    format!("{spinner} "),
-                    Style::default().fg(accent),
-                )));
-            }
-        }
-
-        // Synthesis streaming
-        if !rh.synthesis_streaming_text.is_empty() {
-            let still_synthesizing =
-                matches!(rh.phase, crate::roundhouse::RoundhousePhase::Synthesizing);
-            msg_boundaries.push((lines.len(), 2u8));
-            lines.push(Line::from(vec![
-                Span::styled("\u{25CF} ", Style::default().fg(accent)),
-                Span::styled(
-                    format!("{} ", rh.primary_model),
-                    Style::default().fg(colors.text_secondary).bold(),
-                ),
-                Span::styled("(synthesizing)", Style::default().fg(colors.text_muted)),
-            ]));
-            let parsed =
-                crate::tui::chat::parse_markdown(&rh.synthesis_streaming_text, colors, accent);
-            if !parsed.is_empty() {
-                let mut sl = parsed;
-                if sl.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                    sl.pop();
-                }
-                lines.extend(sl);
-            }
-            if still_synthesizing {
-                const RH_SPINNER: &[&str] = &["\u{25D0}", "\u{25D3}", "\u{25D1}", "\u{25D2}"];
-                let spinner = RH_SPINNER[(app.tick / 5) as usize % RH_SPINNER.len()];
-                lines.push(Line::from(Span::styled(
-                    format!("{spinner} "),
-                    Style::default().fg(accent),
-                )));
-            }
-            // Show plan file path after synthesis completes
-            if let Some(ref path) = rh.plan_file {
-                let cwd = std::env::current_dir().unwrap_or_default();
-                let display = path
-                    .strip_prefix(&cwd)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string();
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("Saved to ", Style::default().fg(colors.text_muted)),
-                    Span::styled(display, Style::default().fg(colors.text_secondary).bold()),
-                ]));
-            }
-        }
     }
 
     // Show streaming text during /init generation
@@ -1174,6 +1071,71 @@ fn flatten_wrapped_rows(lines: &[Line], width: usize) -> Vec<String> {
 fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colors) {
     use crate::tui::input::{build_info_left, build_info_right, render_input_field};
 
+    // When Roundhouse is in an active running phase, replace the input with gate hints
+    if let Some(session) = &app.roundhouse_session {
+        match session.phase {
+            crate::roundhouse::RoundhousePhase::Planning
+            | crate::roundhouse::RoundhousePhase::Critiquing
+            | crate::roundhouse::RoundhousePhase::Synthesizing => {
+                let hint = match session.phase {
+                    crate::roundhouse::RoundhousePhase::Planning => "  what's in your roundhouse?",
+                    crate::roundhouse::RoundhousePhase::Critiquing => "  critiquing plans…",
+                    _ => "  synthesizing plans…",
+                };
+                let para = ratatui::widgets::Paragraph::new(hint)
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_dim));
+                frame.render_widget(para, area);
+                return;
+            }
+            crate::roundhouse::RoundhousePhase::ReviewingPlans => {
+                let hint = if session.annotation_input.is_some() {
+                    format!(
+                        "  annotation: {}█",
+                        session.annotation_input.as_deref().unwrap_or("")
+                    )
+                } else if session.critique_enabled {
+                    "  [c] critique   [s] skip to synthesis   [a] annotate   [q] cancel".to_string()
+                } else {
+                    "  [s] synthesize   [a] annotate   [q] cancel".to_string()
+                };
+                let para = ratatui::widgets::Paragraph::new(hint.as_str())
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_secondary));
+                frame.render_widget(para, area);
+                return;
+            }
+            crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
+                let hint = if session.annotation_input.is_some() {
+                    format!(
+                        "  annotation: {}█",
+                        session.annotation_input.as_deref().unwrap_or("")
+                    )
+                } else {
+                    "  [s] synthesize   [a] annotate   [q] cancel".to_string()
+                };
+                let para = ratatui::widgets::Paragraph::new(hint.as_str())
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .border_style(Style::default().fg(colors.roundhouse)),
+                    )
+                    .style(Style::default().fg(colors.text_secondary));
+                frame.render_widget(para, area);
+                return;
+            }
+            _ => {}
+        }
+    }
+
     // Split area: queued messages box on top, approval bar, input field below
     let queue_count = app.message_queue.len();
     let queue_box_height = if queue_count > 0 {
@@ -1536,7 +1498,19 @@ fn render_roundhouse_picker(
     app: &State,
     colors: &theme::Colors,
 ) {
-    let area = frame.area();
+    let full = frame.area();
+    // Compute main area (excluding sidebar) so the dialog centers correctly
+    let sidebar_w = if app.sidebar_visible && full.width >= SIDEBAR_MIN_TERMINAL_WIDTH {
+        app.sidebar_width
+    } else {
+        0
+    };
+    let area = Rect {
+        x: full.x,
+        y: full.y,
+        width: full.width.saturating_sub(sidebar_w),
+        height: full.height,
+    };
     // 2 border + 1 primary + 1 blank + max(1, N secondaries) + 1 blank + 1 footer = max(1,N) + 6
     let list_rows = picker.secondaries.len().max(1) as u16;
     let content_lines = list_rows + 6;

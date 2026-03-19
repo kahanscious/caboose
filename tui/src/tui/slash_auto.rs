@@ -8,6 +8,13 @@ use crate::provider::ModelInfo;
 use crate::session::storage::SessionSearchResult;
 use crate::tui::command::{Command, CommandRegistry};
 
+/// A single entry in the model picker list — either a collapsible group header or an actual model.
+#[derive(Clone)]
+enum ModelPickerEntry {
+    GroupHeader(String),      // provider_id (e.g. "openrouter", "_local")
+    Model(String, ModelInfo), // (provider_id, model_info)
+}
+
 /// What the dropdown is currently showing.
 #[derive(Debug)]
 pub enum DropdownMode {
@@ -24,6 +31,8 @@ pub enum DropdownMode {
         error: Option<String>,
         /// Recently used models (newest first), shown at top of picker.
         recent: Vec<(String, ModelInfo)>,
+        /// Provider ids that are currently collapsed (hidden).
+        collapsed: std::collections::HashSet<String>,
     },
     /// /connect — provider catalog.
     Providers,
@@ -98,6 +107,7 @@ impl SlashAutoState {
         models: Vec<(String, ModelInfo)>,
         error: Option<String>,
         recent: Vec<(String, ModelInfo)>,
+        collapsed: std::collections::HashSet<String>,
     ) -> Self {
         Self {
             selected: 0,
@@ -105,6 +115,7 @@ impl SlashAutoState {
                 models,
                 error,
                 recent,
+                collapsed,
             },
             filter: String::new(),
         }
@@ -547,6 +558,68 @@ fn build_session_items<'a>(
     (items, list_selected)
 }
 
+/// Build the ordered list of selectable entries (group headers + models) for the model picker.
+/// Group headers are selectable (toggle collapse). Recent models come first with no group header.
+fn build_picker_entry_list(
+    models: &[(String, ModelInfo)],
+    recent: &[(String, ModelInfo)],
+    filter: &str,
+    collapsed: &std::collections::HashSet<String>,
+) -> Vec<ModelPickerEntry> {
+    let needle = filter.to_lowercase();
+    let recent_filtered = filter_models(recent, &needle);
+    let models_filtered = filter_models(models, &needle);
+
+    let local_entries: Vec<&(String, ModelInfo)> = models_filtered
+        .iter()
+        .filter(|(p, _)| p == "_local")
+        .copied()
+        .collect();
+    let real_models: Vec<&(String, ModelInfo)> = models_filtered
+        .iter()
+        .filter(|(p, _)| p != "_local")
+        .copied()
+        .collect();
+
+    let mut entries = Vec::new();
+
+    // Recent models (no group header — always visible)
+    for (p, info) in &recent_filtered {
+        entries.push(ModelPickerEntry::Model(p.to_string(), (*info).clone()));
+    }
+
+    // Local Servers collapsible group
+    if !local_entries.is_empty() {
+        entries.push(ModelPickerEntry::GroupHeader("_local".to_string()));
+        if !collapsed.contains("_local") {
+            for (_, info) in &local_entries {
+                entries.push(ModelPickerEntry::Model(
+                    "_local".to_string(),
+                    (*info).clone(),
+                ));
+            }
+        }
+    }
+
+    // Real models grouped by provider (each group collapsible)
+    let mut seen_providers: Vec<String> = Vec::new();
+    for (p, _) in &real_models {
+        if !seen_providers.contains(p) {
+            seen_providers.push(p.to_string());
+        }
+    }
+    for provider in &seen_providers {
+        entries.push(ModelPickerEntry::GroupHeader(provider.clone()));
+        if !collapsed.contains(provider.as_str()) {
+            for (p, info) in real_models.iter().filter(|(p, _)| p == provider) {
+                entries.push(ModelPickerEntry::Model(p.clone(), (*info).clone()));
+            }
+        }
+    }
+
+    entries
+}
+
 /// Filter models by needle, returning references in order.
 fn filter_models<'a>(
     models: &'a [(String, ModelInfo)],
@@ -555,6 +628,10 @@ fn filter_models<'a>(
     models
         .iter()
         .filter(|(provider, info)| {
+            // "_local" connect-action entries are always shown regardless of filter
+            if provider == "_local" {
+                return true;
+            }
             if needle.is_empty() {
                 return true;
             }
@@ -565,41 +642,36 @@ fn filter_models<'a>(
         .collect()
 }
 
-/// Total selectable items in the model picker (recent + models, both filtered).
+/// Total selectable items in the model picker (group headers + models, both filtered).
 pub fn filtered_model_count(
     models: &[(String, ModelInfo)],
     recent: &[(String, ModelInfo)],
     filter: &str,
+    collapsed: &std::collections::HashSet<String>,
 ) -> usize {
-    let needle = filter.to_lowercase();
-    let rc = filter_models(recent, &needle).len();
-    let mc = filter_models(models, &needle).len();
-    rc + mc
+    build_picker_entry_list(models, recent, filter, collapsed).len()
 }
 
 /// Resolve `selected` index to (provider, model_id) from the combined recent+models list.
+/// Returns `("_group", provider_id)` when the selected item is a group header.
 pub fn resolve_model_selection(
     models: &[(String, ModelInfo)],
     recent: &[(String, ModelInfo)],
     filter: &str,
     selected: usize,
+    collapsed: &std::collections::HashSet<String>,
 ) -> Option<(String, String)> {
-    let needle = filter.to_lowercase();
-    let recent_filtered = filter_models(recent, &needle);
-    let models_filtered = filter_models(models, &needle);
-    if selected < recent_filtered.len() {
-        recent_filtered
-            .get(selected)
-            .map(|(p, info)| (p.clone(), info.id.clone()))
-    } else {
-        let idx = selected - recent_filtered.len();
-        models_filtered
-            .get(idx)
-            .map(|(p, info)| (p.clone(), info.id.clone()))
+    let entries = build_picker_entry_list(models, recent, filter, collapsed);
+    match entries.get(selected)? {
+        ModelPickerEntry::GroupHeader(provider_id) => {
+            Some(("_group".to_string(), provider_id.clone()))
+        }
+        ModelPickerEntry::Model(provider, info) => Some((provider.clone(), info.id.clone())),
     }
 }
 
-/// Build model items for the dropdown (recent section + all models).
+/// Build model items for the dropdown (group headers + models, collapsible).
+#[allow(clippy::too_many_arguments)]
 fn build_model_items<'a>(
     models: &[(String, ModelInfo)],
     recent: &[(String, ModelInfo)],
@@ -608,10 +680,10 @@ fn build_model_items<'a>(
     error: Option<&str>,
     colors: &crate::tui::theme::Colors,
     width: u16,
+    collapsed: &std::collections::HashSet<String>,
 ) -> (Vec<ListItem<'a>>, Option<usize>) {
     let mut items: Vec<ListItem> = Vec::new();
     let mut list_selected: Option<usize> = None;
-    let mut logical_idx: usize = 0; // tracks position in the selectable items
 
     if let Some(err) = error {
         items.push(ListItem::new(Line::from(Span::styled(
@@ -623,11 +695,9 @@ fn build_model_items<'a>(
         }
     }
 
-    let needle = filter.to_lowercase();
-    let recent_filtered = filter_models(recent, &needle);
-    let models_filtered = filter_models(models, &needle);
+    let entries = build_picker_entry_list(models, recent, filter, collapsed);
 
-    if recent_filtered.is_empty() && models_filtered.is_empty() && error.is_none() {
+    if entries.is_empty() && error.is_none() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  No matching models",
             Style::default().fg(colors.text_muted),
@@ -635,53 +705,72 @@ fn build_model_items<'a>(
         return (items, None);
     }
 
-    // Recent section
-    if !recent_filtered.is_empty() {
+    // Add a cosmetic "Recent" non-selectable label if the first entries are recent models
+    let needle = filter.to_lowercase();
+    if !filter_models(recent, &needle).is_empty()
+        && matches!(entries.first(), Some(ModelPickerEntry::Model(..)))
+    {
         items.push(ListItem::new(Line::from(Span::styled(
             " Recent",
             Style::default().fg(colors.text_dim).bold(),
         ))));
-        for (provider, info) in &recent_filtered {
-            if logical_idx == selected {
-                list_selected = Some(items.len());
-            }
-            items.push(build_model_row(
-                info,
-                provider,
-                logical_idx == selected,
-                colors,
-                width,
-            ));
-            logical_idx += 1;
-        }
     }
 
-    // All models section, grouped by provider
-    if !models_filtered.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            " Models",
-            Style::default().fg(colors.text_dim).bold(),
-        ))));
-        let mut last_provider = "";
-        for (provider, info) in &models_filtered {
-            if provider.as_str() != last_provider {
+    for (idx, entry) in entries.iter().enumerate() {
+        let is_sel = idx == selected;
+        if is_sel {
+            list_selected = Some(items.len());
+        }
+
+        match entry {
+            ModelPickerEntry::GroupHeader(provider_id) => {
+                let is_collapsed = collapsed.contains(provider_id.as_str());
+                let icon = if is_collapsed { "▶" } else { "▼" };
+                let display_name = if provider_id == "_local" {
+                    " Local Servers".to_string()
+                } else {
+                    format!(" {}", provider_id)
+                };
+                let label = format!(" {} {}", icon, display_name.trim());
+                let (fg, bg) = if is_sel {
+                    (colors.success, colors.bg_hover)
+                } else {
+                    (colors.success, Color::Reset)
+                };
                 items.push(ListItem::new(Line::from(Span::styled(
-                    format!(" ── {provider} ──"),
-                    Style::default().fg(colors.text_dim),
+                    label,
+                    Style::default().fg(fg).bg(bg).bold(),
                 ))));
-                last_provider = provider;
             }
-            if logical_idx == selected {
-                list_selected = Some(items.len());
+            ModelPickerEntry::Model(provider, info) => {
+                if provider == "_local" {
+                    // Local connect action entry
+                    let label = format!("  + {}", info.name);
+                    let right = "connect";
+                    let style = if is_sel {
+                        Style::default().bg(colors.bg_hover).fg(colors.success)
+                    } else {
+                        Style::default().fg(colors.success)
+                    };
+                    let right_style = if is_sel {
+                        style
+                    } else {
+                        Style::default().fg(colors.text_dim)
+                    };
+                    let avail = (width as usize).saturating_sub(6);
+                    let pad = avail
+                        .saturating_sub(label.len())
+                        .saturating_sub(right.len())
+                        .max(1);
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(label, style),
+                        Span::styled(" ".repeat(pad), style),
+                        Span::styled(right, right_style),
+                    ])));
+                } else {
+                    items.push(build_model_row(info, provider, is_sel, colors, width));
+                }
             }
-            items.push(build_model_row(
-                info,
-                provider,
-                logical_idx == selected,
-                colors,
-                width,
-            ));
-            logical_idx += 1;
         }
     }
 
@@ -1171,6 +1260,7 @@ pub fn render_slash_autocomplete(
             models,
             error,
             recent,
+            collapsed,
         } => {
             let (items, selected) = build_model_items(
                 models,
@@ -1180,6 +1270,7 @@ pub fn render_slash_autocomplete(
                 error.as_deref(),
                 colors,
                 anchor.width,
+                collapsed,
             );
             (items, selected, Some(" /model "))
         }
@@ -1349,6 +1440,7 @@ pub fn render_slash_autocomplete(
     // Offset selected index to account for the search row
     let adjusted_selected = selected_item_idx.map(|i| i + filter_row_count as usize);
 
+    let total_items = all_items.len();
     let list = List::new(all_items)
         .block(block)
         .highlight_style(Style::default().bg(colors.bg_hover).fg(colors.text))
@@ -1356,6 +1448,18 @@ pub fn render_slash_autocomplete(
 
     let mut list_state = ratatui::widgets::ListState::default();
     list_state.select(adjusted_selected);
+
+    // Center the selected item in the visible area when possible
+    if let Some(sel) = adjusted_selected {
+        let inner_height = dropdown_area.height.saturating_sub(2 + filter_row_count) as usize;
+        if inner_height > 0 {
+            let half = inner_height / 2;
+            let offset = sel.saturating_sub(half);
+            let max_offset = total_items.saturating_sub(inner_height);
+            *list_state.offset_mut() = offset.min(max_offset);
+        }
+    }
+
     frame.render_stateful_widget(list, dropdown_area, &mut list_state);
 }
 

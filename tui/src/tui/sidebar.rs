@@ -385,11 +385,11 @@ pub fn render(
                 let dots = ".".repeat(dot_count);
                 format!("Phase: synthesizing{dots}")
             }
-            crate::roundhouse::RoundhousePhase::Reviewing => "Phase: reviewing".to_string(),
-            crate::roundhouse::RoundhousePhase::Executing => {
-                let dot_count = ((tick / 3) % 4) as usize;
-                let dots = ".".repeat(dot_count);
-                format!("Phase: executing{dots}")
+            crate::roundhouse::RoundhousePhase::ReviewingPlans => {
+                "Phase: reviewing plans".to_string()
+            }
+            crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
+                "Phase: reviewing critiques".to_string()
             }
             crate::roundhouse::RoundhousePhase::Complete => "Phase: complete".to_string(),
             crate::roundhouse::RoundhousePhase::Cancelled => "Phase: cancelled".to_string(),
@@ -400,10 +400,10 @@ pub fn render(
         )));
 
         match rh.phase {
-            crate::roundhouse::RoundhousePhase::Reviewing => {
+            crate::roundhouse::RoundhousePhase::ReviewingPlans => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    "  Plan ready for review",
+                    "  Plans ready for review",
                     Style::default().fg(colors.success),
                 )));
                 if let Some(ref path) = rh.plan_file {
@@ -423,11 +423,11 @@ pub fn render(
                     Style::default().fg(colors.text_dim),
                 )));
             }
-            crate::roundhouse::RoundhousePhase::Executing => {
+            crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    "  Executing plan...",
-                    Style::default().fg(colors.warning),
+                    "  Critiques ready for review",
+                    Style::default().fg(colors.success),
                 )));
             }
             crate::roundhouse::RoundhousePhase::Complete => {
@@ -498,6 +498,28 @@ pub fn render(
                     lines.push(Line::from(Span::styled(
                         format!("  Total: ${:.4}", rh.total_cost),
                         Style::default().fg(colors.text_muted),
+                    )));
+                }
+
+                // Key hints — only while session is in an active (scrollable) phase
+                let is_active_phase = !matches!(
+                    rh.phase,
+                    crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                        | crate::roundhouse::RoundhousePhase::SelectingProviders
+                        | crate::roundhouse::RoundhousePhase::Cancelled
+                        | crate::roundhouse::RoundhousePhase::Complete
+                );
+                if is_active_phase {
+                    if rh.model_count() > 1 {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled(
+                            "  j/k  switch model",
+                            Style::default().fg(colors.text_dim),
+                        )));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        "  esc  exit roundhouse",
+                        Style::default().fg(colors.text_dim),
                     )));
                 }
             }

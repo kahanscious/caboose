@@ -7,6 +7,7 @@ use crate::suggest::priority::Finding;
 
 /// Result of a single scan command.
 pub struct ScanResult {
+    #[allow(dead_code)]
     pub name: String,
     pub findings: Vec<Finding>,
     pub error: Option<String>,

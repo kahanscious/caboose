@@ -96,8 +96,8 @@ impl Storage {
                 .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
                 .unwrap_or(0);
             if fts_count == 0 && msg_count > 0 {
-                let _ = conn
-                    .execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+                let _ =
+                    conn.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
             }
         }
 
@@ -787,9 +787,7 @@ mod tests {
     fn search_sessions_no_match_falls_back() {
         let storage = test_storage();
         storage.insert_session(&make_session("s1")).unwrap();
-        storage
-            .insert_message("s1", "user", "hello world")
-            .unwrap();
+        storage.insert_message("s1", "user", "hello world").unwrap();
 
         let results = storage.search_sessions("zzzznotfound", 50).unwrap();
         // Falls back to list_with_content when no FTS matches
@@ -823,8 +821,6 @@ mod tests {
 
         let results = storage.search_sessions("unique_fts_test_word", 50).unwrap();
         // After deletion, FTS should not find it (falls back to empty list)
-        assert!(results
-            .iter()
-            .all(|r| r.session.id != "s1"));
+        assert!(results.iter().all(|r| r.session.id != "s1"));
     }
 }
