@@ -4583,16 +4583,7 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Char('G'), KeyModifiers::SHIFT) if self.state.input.is_empty() => {
-                let max_scroll = self
-                    .state
-                    .total_chat_lines
-                    .get()
-                    .saturating_sub(self.state.chat_area_height.get());
-                self.state.scroll_offset = max_scroll;
-                self.state.user_scrolled_up = false;
-            }
-            (KeyCode::Char('G'), KeyModifiers::NONE) if self.state.input.is_empty() => {
+            (KeyCode::Char('G'), _) if self.state.input.is_empty() => {
                 let max_scroll = self
                     .state
                     .total_chat_lines

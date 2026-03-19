@@ -386,11 +386,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             | crate::agent::AgentState::PendingApproval { .. }
             | crate::agent::AgentState::Compacting
     ) || app.init_rx.is_some();
-    let context_pct = if app.agent.context_window > 0 && app.agent.last_input_tokens > 0 {
-        Some(app.agent.last_input_tokens as f64 / app.agent.context_window as f64)
-    } else {
-        None
-    };
+    let context_pct = app.agent.context_pct();
     crate::tui::footer::render(
         frame,
         outer[1],

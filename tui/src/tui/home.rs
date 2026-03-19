@@ -196,11 +196,7 @@ pub fn render(frame: &mut Frame, state: &State) {
             max_cost: max,
         });
     let is_active = state.init_rx.is_some();
-    let context_pct = if state.agent.context_window > 0 && state.agent.last_input_tokens > 0 {
-        Some(state.agent.last_input_tokens as f64 / state.agent.context_window as f64)
-    } else {
-        None
-    };
+    let context_pct = state.agent.context_pct();
     crate::tui::footer::render(
         frame,
         outer[1],
