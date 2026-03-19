@@ -965,6 +965,64 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
             *app.thinking_click_zones.borrow_mut() = thinking_zones;
         }
+
+        // Compute hover zones for assistant messages (copy badge hit-testing).
+        // Zone = (start_screen_y, end_screen_y, msg_index) for each ChatMessage::Assistant.
+        // msg_boundaries: Vec<(logical_line_index, kind)> where kind 2u8 = assistant.
+        // Index bi into msg_boundaries == index bi into chat_messages (same enumeration).
+        {
+            let mut hover_zones: Vec<(u16, u16, usize)> = Vec::new();
+            let msg_count = app.chat_messages.len();
+
+            // Pre-compute cumulative wrapped rows at each logical line index.
+            // wr_at_logical[i] = total wrapped rows before logical line i.
+            let mut wr_at_logical: Vec<u16> = Vec::with_capacity(lines.len() + 1);
+            {
+                let mut wr: u16 = 0;
+                for line in &lines {
+                    wr_at_logical.push(wr);
+                    let w = line.width().max(1) as u16;
+                    wr += w.div_ceil(area.width);
+                }
+                wr_at_logical.push(wr); // sentinel: total wrapped rows
+            }
+
+            for (bi, &(start_logical, kind)) in msg_boundaries.iter().enumerate() {
+                if kind != 2u8 {
+                    continue;
+                }
+                // bi == msg_index: msg_boundaries is built from the same chat_messages enumeration.
+                // There is no sentinel value in msg_boundaries (unlike thinking_lines).
+                // This guard is purely defensive and will never trigger in practice.
+                let msg_idx = bi;
+                if msg_idx >= msg_count {
+                    continue;
+                }
+
+                // End logical line = start of next message, or end of lines
+                let end_logical = msg_boundaries
+                    .get(bi + 1)
+                    .map(|&(l, _)| l)
+                    .unwrap_or(lines.len());
+
+                let start_wr = wr_at_logical.get(start_logical).copied().unwrap_or(0);
+                let end_wr = wr_at_logical.get(end_logical).copied().unwrap_or(0);
+
+                let start_screen = area.y as i32 + start_wr as i32 - effective_offset as i32;
+                let end_screen = area.y as i32 + end_wr as i32 - effective_offset as i32;
+
+                // Skip zones entirely outside the visible area
+                if end_screen <= area.y as i32 || start_screen >= (area.y + area.height) as i32 {
+                    continue;
+                }
+
+                let start_y = start_screen.max(area.y as i32) as u16;
+                let end_y = end_screen.min((area.y + area.height) as i32) as u16;
+                hover_zones.push((start_y, end_y, msg_idx));
+            }
+
+            *app.copy_hover_zones.borrow_mut() = hover_zones;
+        }
     }
 
     let max_scroll = total_lines.saturating_sub(area.height);
