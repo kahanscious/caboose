@@ -165,6 +165,14 @@ pub struct State {
     /// usize::MAX represents the currently-streaming thinking block.
     /// Populated by the post-render wrapping pass (same pattern as truncation_click_zones).
     pub thinking_click_zones: RefCell<Vec<(u16, usize)>>,
+    /// Index into chat_messages of the assistant message currently hovered by mouse.
+    pub hovered_message: Option<usize>,
+    /// Per-frame hover zones for assistant messages: (start_screen_y, end_screen_y, msg_index).
+    /// Computed post-render in layout.rs; read by Moved mouse handler.
+    pub copy_hover_zones: RefCell<Vec<(u16, u16, usize)>>,
+    /// Screen rect of the copy badge for the currently hovered message.
+    /// Set during badge render; used by Down mouse handler for click detection.
+    pub copy_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
     /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
     pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
@@ -522,6 +530,20 @@ pub struct App {
     pub state: State,
     pub terminal: Terminal,
     provider: Option<Box<dyn Provider>>,
+}
+
+/// Returns true when Roundhouse is in an active running phase
+/// (i.e. keys should be routed to the roundhouse handler, hover-copy disabled).
+pub(crate) fn roundhouse_active(state: &State) -> bool {
+    state.roundhouse_session.as_ref()
+        .map(|s| !matches!(
+            s.phase,
+            crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                | crate::roundhouse::RoundhousePhase::SelectingProviders
+                | crate::roundhouse::RoundhousePhase::Cancelled
+                | crate::roundhouse::RoundhousePhase::Complete
+        ))
+        .unwrap_or(false)
 }
 
 impl App {
@@ -906,6 +928,9 @@ impl App {
                 workspace_scan_last_query: String::new(),
                 truncation_click_zones: RefCell::new(Vec::new()),
                 thinking_click_zones: RefCell::new(Vec::new()),
+                hovered_message: None,
+                copy_hover_zones: RefCell::new(Vec::new()),
+                copy_badge_rect: Cell::new(None),
                 tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
@@ -1825,6 +1850,21 @@ impl App {
                                             continue;
                                         }
 
+                                        // Copy badge click
+                                        let mut badge_handled = false;
+                                        if let Some(badge) = self.state.copy_badge_rect.get() {
+                                            if mouse.row == badge.y
+                                                && mouse.column >= badge.x
+                                                && mouse.column < badge.x + badge.width
+                                            {
+                                                self.copy_hovered_message();
+                                                badge_handled = true;
+                                            }
+                                        }
+                                        if badge_handled {
+                                            continue;
+                                        }
+
                                         // Truncation click zone logic
                                         let zones = self.state.truncation_click_zones.borrow();
                                         let mut truncation_handled = false;
@@ -1926,6 +1966,26 @@ impl App {
                                             self.state.dialog_stack.top_mut()
                                     {
                                         palette.selected = idx;
+                                    }
+
+                                    // Hover detection for copy badge
+                                    let in_chat = self.state.chat_area.get()
+                                        .map(|r| {
+                                            mouse.row >= r.y && mouse.row < r.y + r.height
+                                                && mouse.column >= r.x
+                                                && mouse.column < r.x + r.width
+                                        })
+                                        .unwrap_or(false);
+                                    if in_chat && !roundhouse_active(&self.state) {
+                                        let zones = self.state.copy_hover_zones.borrow();
+                                        self.state.hovered_message = zones
+                                            .iter()
+                                            .find(|&&(sy, ey, _)| {
+                                                mouse.row >= sy && mouse.row < ey
+                                            })
+                                            .map(|&(_, _, idx)| idx);
+                                    } else {
+                                        self.state.hovered_message = None;
                                     }
                                 }
                                 _ => {}
@@ -3555,20 +3615,7 @@ impl App {
 
     async fn handle_chat_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
         // If Roundhouse is in an active phase, delegate all keys to its handler
-        let roundhouse_active = self
-            .state
-            .roundhouse_session
-            .as_ref()
-            .map(|s| {
-                !matches!(
-                    s.phase,
-                    crate::roundhouse::RoundhousePhase::AwaitingPrompt
-                        | crate::roundhouse::RoundhousePhase::SelectingProviders
-                        | crate::roundhouse::RoundhousePhase::Cancelled
-                        | crate::roundhouse::RoundhousePhase::Complete
-                )
-            })
-            .unwrap_or(false);
+        let roundhouse_active = roundhouse_active(&self.state);
         if roundhouse_active {
             self.handle_roundhouse_key(key, modifiers);
             return;
@@ -3837,6 +3884,15 @@ impl App {
                 }
                 _ => return, // Ignore other keys while confirming
             }
+        }
+
+        // Hover-copy: y key copies the currently hovered assistant message
+        if key == KeyCode::Char('y')
+            && self.state.hovered_message.is_some()
+            && !roundhouse_active
+        {
+            self.copy_hovered_message();
+            return;
         }
 
         // Handle budget pause confirmation
@@ -10591,6 +10647,26 @@ impl App {
     }
 
     /// Clear all roundhouse state — session, receivers, model-add flag.
+    fn copy_hovered_message(&mut self) {
+        let Some(i) = self.state.hovered_message else { return };
+        let text = match self.state.chat_messages.get(i) {
+            Some(ChatMessage::Assistant { content, .. }) => content.clone(),
+            _ => return,
+        };
+        match crate::clipboard::copy_to_clipboard(&text) {
+            Ok(()) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Copied to clipboard.".to_string(),
+                });
+            }
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Copy failed: {e}"),
+                });
+            }
+        }
+    }
+
     fn clear_roundhouse_session(&mut self) {
         self.state.roundhouse_session = None;
         self.state.roundhouse_update_rx = None;

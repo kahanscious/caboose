@@ -362,6 +362,52 @@ pub fn render(
         )));
         lines.push(Line::from(""));
 
+        // Show original prompt below header: dim italic, max 2 lines, word-wrapped
+        if let Some(ref prompt) = rh.prompt {
+            let max_width = inner.width.saturating_sub(4) as usize;
+            if max_width > 0 {
+                let mut chars_so_far = 0usize;
+                let mut current_line = String::new();
+                let mut wrapped: Vec<String> = Vec::new();
+                for word in prompt.split_whitespace() {
+                    let word_len = word.chars().count();
+                    let space = if current_line.is_empty() { 0 } else { 1 };
+                    if chars_so_far + space + word_len > max_width && !current_line.is_empty() {
+                        wrapped.push(current_line.clone());
+                        current_line.clear();
+                        chars_so_far = 0;
+                    }
+                    if !current_line.is_empty() {
+                        current_line.push(' ');
+                        chars_so_far += 1;
+                    }
+                    current_line.push_str(word);
+                    chars_so_far += word_len;
+                }
+                if !current_line.is_empty() {
+                    wrapped.push(current_line);
+                }
+                let truncated = wrapped.len() > 2;
+                let display = &wrapped[..wrapped.len().min(2)];
+                for (li, line) in display.iter().enumerate() {
+                    let text = if truncated && li == display.len() - 1 {
+                        let available = max_width.saturating_sub(1);
+                        let t: String = line.chars().take(available).collect();
+                        format!("  {t}…")
+                    } else {
+                        format!("  {line}")
+                    };
+                    lines.push(Line::from(Span::styled(
+                        text,
+                        Style::default()
+                            .fg(colors.text_dim)
+                            .add_modifier(ratatui::style::Modifier::ITALIC),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+        }
+
         // Phase label with animated dots for active phases
         let phase_text = match rh.phase {
             crate::roundhouse::RoundhousePhase::SelectingProviders => {

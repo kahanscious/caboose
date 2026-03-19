@@ -5,6 +5,15 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-03-19
+
+### Added
+
+- **Hover-to-copy on assistant messages** — mouse over any assistant message to reveal a `[ y copy ]` badge in the top-right corner. Press `y` or click the badge to copy the full message text to clipboard. Confirmation shown as a system message.
+- **Roundhouse prompt in sidebar** — the original prompt is shown dim/italic below the Roundhouse header during all phases (including Complete and Cancelled), so you never lose track of what you asked.
+
+---
+
 ## [0.6.0] - 2026-03-18
 
 ### Added
