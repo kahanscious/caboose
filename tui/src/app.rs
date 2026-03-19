@@ -538,23 +538,27 @@ pub struct App {
 /// Returns true when Roundhouse is in an active running phase
 /// (i.e. keys should be routed to the roundhouse handler, hover-copy disabled).
 pub(crate) fn roundhouse_active(state: &State) -> bool {
-    state.roundhouse_session.as_ref()
-        .map(|s| !matches!(
-            s.phase,
-            crate::roundhouse::RoundhousePhase::AwaitingPrompt
-                | crate::roundhouse::RoundhousePhase::SelectingProviders
-                | crate::roundhouse::RoundhousePhase::Cancelled
-                | crate::roundhouse::RoundhousePhase::Complete
-        ))
+    state
+        .roundhouse_session
+        .as_ref()
+        .map(|s| {
+            !matches!(
+                s.phase,
+                crate::roundhouse::RoundhousePhase::AwaitingPrompt
+                    | crate::roundhouse::RoundhousePhase::SelectingProviders
+                    | crate::roundhouse::RoundhousePhase::Cancelled
+                    | crate::roundhouse::RoundhousePhase::Complete
+            )
+        })
         .unwrap_or(false)
 }
 
 /// Returns true if the session has real conversation content (User or Assistant messages)
 /// that warrants a confirmation before starting a new session.
 pub(crate) fn needs_new_session_confirm(messages: &[ChatMessage]) -> bool {
-    messages.iter().any(|m| {
-        matches!(m, ChatMessage::User { .. } | ChatMessage::Assistant { .. })
-    })
+    messages
+        .iter()
+        .any(|m| matches!(m, ChatMessage::User { .. } | ChatMessage::Assistant { .. }))
 }
 
 impl App {
@@ -1864,34 +1868,32 @@ impl App {
 
                                         // Copy badge click
                                         let mut badge_handled = false;
-                                        if let Some(badge) = self.state.copy_badge_rect.get() {
-                                            if mouse.row == badge.y
-                                                && mouse.column >= badge.x
-                                                && mouse.column < badge.x + badge.width
-                                            {
-                                                self.copy_hovered_message();
-                                                badge_handled = true;
-                                            }
+                                        if let Some(badge) = self.state.copy_badge_rect.get()
+                                            && mouse.row == badge.y
+                                            && mouse.column >= badge.x
+                                            && mouse.column < badge.x + badge.width
+                                        {
+                                            self.copy_hovered_message();
+                                            badge_handled = true;
                                         }
                                         if badge_handled {
                                             continue;
                                         }
 
                                         // Scroll-to-bottom badge click
-                                        if let Some(badge) = self.state.scroll_to_bottom_badge_rect.get() {
-                                            if mouse.row == badge.y
-                                                && mouse.column >= badge.x
-                                                && mouse.column < badge.x + badge.width
-                                            {
-                                                let max_scroll = self
-                                                    .state
-                                                    .total_chat_lines
-                                                    .get()
-                                                    .saturating_sub(self.state.chat_area_height.get());
-                                                self.state.scroll_offset = max_scroll;
-                                                self.state.user_scrolled_up = false;
-                                                continue;
-                                            }
+                                        if let Some(badge) =
+                                            self.state.scroll_to_bottom_badge_rect.get()
+                                            && mouse.row == badge.y
+                                            && mouse.column >= badge.x
+                                            && mouse.column < badge.x + badge.width
+                                        {
+                                            let max_scroll =
+                                                self.state.total_chat_lines.get().saturating_sub(
+                                                    self.state.chat_area_height.get(),
+                                                );
+                                            self.state.scroll_offset = max_scroll;
+                                            self.state.user_scrolled_up = false;
+                                            continue;
                                         }
 
                                         // Truncation click zone logic
@@ -1998,9 +2000,13 @@ impl App {
                                     }
 
                                     // Hover detection for copy badge
-                                    let in_chat = self.state.chat_area.get()
+                                    let in_chat = self
+                                        .state
+                                        .chat_area
+                                        .get()
                                         .map(|r| {
-                                            mouse.row >= r.y && mouse.row < r.y + r.height
+                                            mouse.row >= r.y
+                                                && mouse.row < r.y + r.height
                                                 && mouse.column >= r.x
                                                 && mouse.column < r.x + r.width
                                         })
@@ -2009,9 +2015,7 @@ impl App {
                                         let zones = self.state.copy_hover_zones.borrow();
                                         self.state.hovered_message = zones
                                             .iter()
-                                            .find(|&&(sy, ey, _)| {
-                                                mouse.row >= sy && mouse.row < ey
-                                            })
+                                            .find(|&&(sy, ey, _)| mouse.row >= sy && mouse.row < ey)
                                             .map(|&(_, _, idx)| idx);
                                     } else {
                                         self.state.hovered_message = None;
@@ -3933,10 +3937,7 @@ impl App {
         }
 
         // Hover-copy: y key copies the currently hovered assistant message
-        if key == KeyCode::Char('y')
-            && self.state.hovered_message.is_some()
-            && !roundhouse_active
-        {
+        if key == KeyCode::Char('y') && self.state.hovered_message.is_some() && !roundhouse_active {
             self.copy_hovered_message();
             return;
         }
@@ -6952,6 +6953,11 @@ impl App {
     fn should_treat_enter_as_paste_newline(&self) -> bool {
         const PASTE_LIKE_RECENT_MS: u64 = 250;
         const PASTE_LIKE_ENTER_THRESHOLD: usize = 12;
+
+        // Slash commands are never pasted — always let Enter execute them
+        if self.state.input.content().trim_start().starts_with('/') {
+            return false;
+        }
 
         if self
             .state
@@ -10703,7 +10709,9 @@ impl App {
 
     /// Clear all roundhouse state — session, receivers, model-add flag.
     fn copy_hovered_message(&mut self) {
-        let Some(i) = self.state.hovered_message else { return };
+        let Some(i) = self.state.hovered_message else {
+            return;
+        };
         let text = match self.state.chat_messages.get(i) {
             Some(ChatMessage::Assistant { content, .. }) => content.clone(),
             _ => return,
@@ -11746,10 +11754,12 @@ impl App {
         // /new — confirm if session has real content, then extract memories and clear
         if slash == "new" {
             if needs_new_session_confirm(&self.state.chat_messages) {
-                self.state.dialog_stack.push(crate::tui::dialog::DialogKind::Confirm {
-                    message: "start a new session?".into(),
-                    on_confirm: crate::tui::dialog::ConfirmAction::NewSession,
-                });
+                self.state
+                    .dialog_stack
+                    .push(crate::tui::dialog::DialogKind::Confirm {
+                        message: "start a new session?".into(),
+                        on_confirm: crate::tui::dialog::ConfirmAction::NewSession,
+                    });
                 return true;
             }
             // No real conversation — proceed directly
@@ -12098,6 +12108,7 @@ impl App {
         if let Some(ref store) = self.state.agent.cold_store {
             let _ = store.cleanup();
         }
+        self.reset_text_input_activity();
         // Clear all session state (must match session.new execute closure exactly)
         self.state.chat_messages.clear();
         self.state.input.clear();
@@ -13296,7 +13307,9 @@ mod new_session_confirm_tests {
     }
 
     fn system_msg() -> ChatMessage {
-        ChatMessage::System { content: "connected".into() }
+        ChatMessage::System {
+            content: "connected".into(),
+        }
     }
 
     #[test]

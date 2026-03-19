@@ -38,6 +38,7 @@ pub struct BudgetInfo {
 /// Track is always visible in the mode accent color. When the agent is active,
 /// a bold typewriter pulse sweeps across left-to-right then resets.
 /// `is_active` controls whether the bold pulse is shown.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     area: Rect,
