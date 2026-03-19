@@ -46,6 +46,7 @@ pub fn render(
     is_active: bool,
     budget: Option<BudgetInfo>,
     update_available: Option<&str>,
+    context_pct: Option<f64>,
 ) {
     if area.height < 2 {
         return;
@@ -156,17 +157,38 @@ pub fn render(
 
     let mut status_spans = vec![Span::styled(left.clone(), status_style)];
 
-    if let Some(ref text) = budget_text {
-        let budget_style = Style::default().fg(colors.warning).bg(colors.bg_elevated);
+    // Budget indicator (centered, shown only near limit)
+    let center_text: Option<String> = budget_text;
+    if let Some(ref text) = center_text {
+        let center_style = Style::default().fg(colors.warning).bg(colors.bg_elevated);
         let padding_left = w.saturating_sub(left.len() + text.len() + right_text.len()) / 2;
         let padding_right =
             w.saturating_sub(left.len() + text.len() + right_text.len() + padding_left);
         status_spans.push(Span::styled(" ".repeat(padding_left), status_style));
-        status_spans.push(Span::styled(text.clone(), budget_style));
+        status_spans.push(Span::styled(text.clone(), center_style));
         status_spans.push(Span::styled(" ".repeat(padding_right), status_style));
     } else {
-        let padding = w.saturating_sub(left.len() + right_text.len());
+        // Context pct sits right-anchored between left padding and version string
+        let ctx_text = context_pct.map(|pct| format!(" {:.0}% ctx ", pct.clamp(0.0, 1.0) * 100.0));
+        let ctx_color = context_pct.map(|pct| {
+            if pct >= 0.90 {
+                colors.error
+            } else if pct >= 0.75 {
+                colors.warning
+            } else {
+                colors.text_dim
+            }
+        });
+        let ctx_str = ctx_text.unwrap_or_default();
+        let ctx_clr = ctx_color.unwrap_or(colors.text_dim);
+        let padding = w.saturating_sub(left.len() + ctx_str.len() + right_text.len());
         status_spans.push(Span::styled(" ".repeat(padding), status_style));
+        if !ctx_str.is_empty() {
+            status_spans.push(Span::styled(
+                ctx_str,
+                Style::default().fg(ctx_clr).bg(colors.bg_elevated),
+            ));
+        }
     }
 
     status_spans.extend(right_spans);

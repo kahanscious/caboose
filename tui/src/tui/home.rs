@@ -196,6 +196,11 @@ pub fn render(frame: &mut Frame, state: &State) {
             max_cost: max,
         });
     let is_active = state.init_rx.is_some();
+    let context_pct = if state.agent.context_window > 0 && state.agent.last_input_tokens > 0 {
+        Some(state.agent.last_input_tokens as f64 / state.agent.context_window as f64)
+    } else {
+        None
+    };
     crate::tui::footer::render(
         frame,
         outer[1],
@@ -204,6 +209,7 @@ pub fn render(frame: &mut Frame, state: &State) {
         is_active,
         budget,
         state.update_available.as_deref(),
+        context_pct,
     );
 
     // Terminal panel (bottommost, below footer)
