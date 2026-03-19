@@ -131,6 +131,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             } => {
                 render_paste_confirm(frame, *line_count, *char_count, &colors);
             }
+            DialogKind::Confirm { message, .. } => {
+                render_confirm(frame, message, &colors);
+            }
             DialogKind::LocalProviderConnect(state) => {
                 render_local_connect(frame, state, &colors);
             }
@@ -1515,6 +1518,29 @@ fn render_paste_confirm(
 
     let paragraph = Paragraph::new(text)
         .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_confirm(frame: &mut Frame, message: &str, colors: &theme::Colors) {
+    let area = frame.area();
+    let width: u16 = 44;
+    let height: u16 = 5;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Confirm ")
+        .border_style(Style::default().fg(colors.warning));
+
+    let text = format!("{message}\n\n[y] yes    [n] / [Esc] cancel");
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: true })
         .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
     frame.render_widget(paragraph, dialog_area);

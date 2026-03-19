@@ -219,7 +219,13 @@ pub fn build_default_registry() -> CommandRegistry {
         slash: Some("new"),
         available: |_| true,
         execute: |state| {
-            // Clear all chat state and return to home screen
+            if crate::app::needs_new_session_confirm(&state.chat_messages) {
+                return Action::PushDialog(super::dialog::DialogKind::Confirm {
+                    message: "start a new session?".into(),
+                    on_confirm: super::dialog::ConfirmAction::NewSession,
+                });
+            }
+            // No real conversation — clear directly (no memories to extract)
             state.chat_messages.clear();
             state.input.clear();
             state.scroll_offset = 0;
@@ -249,6 +255,17 @@ pub fn build_default_registry() -> CommandRegistry {
             state.session_output_tokens = 0;
             state.agent.session_allows.clear();
             state.agent.handoff_prompted = false;
+            state.expanded_messages.clear();
+            state.expanded_thinking.clear();
+            state.message_queue.clear();
+            state.tool_exec_queue.clear();
+            state.tool_exec_args.clear();
+            state.tool_exec_results.clear();
+            state.tool_exec_running_start = 0;
+            state.tool_exec_pending_rx = None;
+            state.skill_creation = None;
+            state.handoff_agent_pending = false;
+            state.attachments.clear();
             state.dialog_stack.base = super::dialog::Screen::Home;
             state.dialog_stack.clear();
             Action::None

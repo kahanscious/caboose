@@ -549,6 +549,14 @@ pub(crate) fn roundhouse_active(state: &State) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns true if the session has real conversation content (User or Assistant messages)
+/// that warrants a confirmation before starting a new session.
+pub(crate) fn needs_new_session_confirm(messages: &[ChatMessage]) -> bool {
+    messages.iter().any(|m| {
+        matches!(m, ChatMessage::User { .. } | ChatMessage::Assistant { .. })
+    })
+}
+
 impl App {
     pub async fn new(
         mut config: Config,
@@ -2906,6 +2914,23 @@ impl App {
                     {
                         self.state.input.push_str(&text);
                         self.record_text_input_activity(text.len().max(16));
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                _ => {}
+            },
+            Some(DialogKind::Confirm { .. }) => match key {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(DialogKind::Confirm { on_confirm, .. }) =
+                        self.state.dialog_stack.pop()
+                    {
+                        match on_confirm {
+                            crate::tui::dialog::ConfirmAction::NewSession => {
+                                self.execute_new_session().await;
+                            }
+                        }
                     }
                 }
                 KeyCode::Char('n') | KeyCode::Esc => {
@@ -11727,12 +11752,18 @@ impl App {
             self.handle_unpin_command(slash);
             return true;
         }
-        // /new — extract memories and clean up cold storage before clearing session
+        // /new — confirm if session has real content, then extract memories and clear
         if slash == "new" {
-            self.extract_session_memories().await;
-            if let Some(ref store) = self.state.agent.cold_store {
-                let _ = store.cleanup();
+            if needs_new_session_confirm(&self.state.chat_messages) {
+                self.state.dialog_stack.push(crate::tui::dialog::DialogKind::Confirm {
+                    message: "start a new session?".into(),
+                    on_confirm: crate::tui::dialog::ConfirmAction::NewSession,
+                });
+                return true;
             }
+            // No real conversation — proceed directly
+            self.execute_new_session().await;
+            return true;
         }
         // Command registry fallback
         if let Some(cmd) = self.state.commands.find_slash(slash)
@@ -12066,6 +12097,59 @@ impl App {
             self.state.sessions.storage().conn(),
             memory_config.observation_retention_days,
         );
+    }
+
+    /// Extract memories, clean up cold storage, and clear all session state.
+    /// Called when the user confirms a new session via the Confirm dialog,
+    /// or directly from handle_shared_slash when no confirmation is needed.
+    async fn execute_new_session(&mut self) {
+        self.extract_session_memories().await;
+        if let Some(ref store) = self.state.agent.cold_store {
+            let _ = store.cleanup();
+        }
+        // Clear all session state (must match session.new execute closure exactly)
+        self.state.chat_messages.clear();
+        self.state.input.clear();
+        self.state.scroll_offset = 0;
+        self.state.user_scrolled_up = false;
+        self.state.session_title = None;
+        self.state.session_title_source = None;
+        self.state.title_rx = None;
+        self.state.title_manually_set = false;
+        self.state.current_session_id = None;
+        self.state.modified_files.clear();
+        self.state.file_baselines.clear();
+        self.state.tool_counts.clear();
+        self.state.focused_tool = None;
+        self.state.pending_handoff = None;
+        self.state.roundhouse_session = None;
+        self.state.roundhouse_update_rx = None;
+        self.state.roundhouse_synthesis_rx = None;
+        self.state.roundhouse_critique_rx = None;
+        self.state.roundhouse_model_add = false;
+        self.state.pins.clear();
+        self.state.pins_expanded = false;
+        self.state.agent.cancel();
+        self.state.agent.conversation.messages.clear();
+        self.state.agent.turn_count = 0;
+        self.state.session_cost = 0.0;
+        self.state.session_input_tokens = 0;
+        self.state.session_output_tokens = 0;
+        self.state.agent.session_allows.clear();
+        self.state.agent.handoff_prompted = false;
+        self.state.expanded_messages.clear();
+        self.state.expanded_thinking.clear();
+        self.state.message_queue.clear();
+        self.state.tool_exec_queue.clear();
+        self.state.tool_exec_args.clear();
+        self.state.tool_exec_results.clear();
+        self.state.tool_exec_running_start = 0;
+        self.state.tool_exec_pending_rx = None;
+        self.state.skill_creation = None;
+        self.state.handoff_agent_pending = false;
+        self.state.attachments.clear();
+        self.state.dialog_stack.base = crate::tui::dialog::Screen::Home;
+        self.state.dialog_stack.clear();
     }
 
     async fn handle_circuit_command(&mut self, args: &str) {
@@ -13199,5 +13283,48 @@ mod workspace_prompt_tests {
         let block = build_workspace_block(&ws);
         // Path doesn't exist — should be omitted
         assert!(block.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod new_session_confirm_tests {
+    use super::*;
+
+    fn user_msg() -> ChatMessage {
+        ChatMessage::User {
+            content: "hello".into(),
+            images: vec![],
+        }
+    }
+
+    fn assistant_msg() -> ChatMessage {
+        ChatMessage::Assistant {
+            content: "hi".into(),
+            thinking: None,
+        }
+    }
+
+    fn system_msg() -> ChatMessage {
+        ChatMessage::System { content: "connected".into() }
+    }
+
+    #[test]
+    fn empty_messages_no_confirm() {
+        assert!(!needs_new_session_confirm(&[]));
+    }
+
+    #[test]
+    fn only_system_messages_no_confirm() {
+        assert!(!needs_new_session_confirm(&[system_msg(), system_msg()]));
+    }
+
+    #[test]
+    fn user_message_requires_confirm() {
+        assert!(needs_new_session_confirm(&[system_msg(), user_msg()]));
+    }
+
+    #[test]
+    fn assistant_message_requires_confirm() {
+        assert!(needs_new_session_confirm(&[assistant_msg()]));
     }
 }

@@ -13,6 +13,12 @@ pub enum Screen {
     Roundhouse,
 }
 
+/// The action to execute when the user confirms a `Confirm` dialog.
+#[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    NewSession,
+}
+
 /// A dialog overlay that can be pushed onto the stack.
 pub enum DialogKind {
     ApiKeyInput(KeyInputState),
@@ -24,6 +30,10 @@ pub enum DialogKind {
         text: String,
         line_count: usize,
         char_count: usize,
+    },
+    Confirm {
+        message: String,
+        on_confirm: ConfirmAction,
     },
     RoundhouseProviderPicker(RoundhousePickerState),
     CircuitsList(CircuitsListState),
@@ -52,6 +62,7 @@ impl std::fmt::Debug for DialogKind {
             } => {
                 write!(f, "PasteConfirm({line_count} lines, {char_count} chars)")
             }
+            Self::Confirm { message, .. } => write!(f, "Confirm({message:?})"),
             Self::RoundhouseProviderPicker(_) => write!(f, "RoundhouseProviderPicker(...)"),
             Self::CircuitsList(_) => write!(f, "CircuitsList(...)"),
             Self::MigrationChecklist(_) => write!(f, "MigrationChecklist(...)"),
