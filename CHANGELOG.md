@@ -5,6 +5,21 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-03-19
+
+### Added
+
+- **Scroll-to-bottom badge** — when scrolled up, a clickable `[ ↓ new messages ]` badge appears bottom-right of the chat area. Click it or press `G` to jump to the latest message.
+- **Context window usage indicator** — footer shows `XX% ctx` right-anchored next to the version string, colored dim/yellow/red at <75%/≥75%/≥90%. Appears after the first assistant response.
+- **`/new` confirmation dialog** — starting a new session (via `/new` or Ctrl+N) now asks for confirmation when the session has real messages. Empty sessions skip the dialog.
+
+### Fixed
+
+- Enter key inserting a newline instead of executing slash commands when typed quickly. Paste detection now bypasses slash commands entirely.
+- Paste detection state (`rapid_input_streak`) carrying over across `/new` sessions, causing the first Enter in a fresh session to be swallowed.
+
+---
+
 ## [0.6.1] - 2026-03-19
 
 ### Added
