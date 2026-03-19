@@ -49,17 +49,24 @@ Once inside, use slash commands:
 
 ## Highlights
 
-- **Multi-provider** — Anthropic, OpenAI, Gemini, OpenRouter, DeepSeek, Groq, Mistral
+- **15+ API providers** — Anthropic, OpenAI, Gemini, OpenRouter, xAI, Together AI, Fireworks AI, Cerebras, SambaNova, Perplexity, Cohere, Qwen, DeepSeek, Groq, Mistral, and more
 - **Local LLMs** — Ollama, LM Studio, llama.cpp with auto-discovery and one-click connect
-- **Roundhouse** — Multi-LLM planning: multiple models plan independently, then synthesize into one unified plan
+- **Roundhouse** — Multi-LLM planning: multiple models plan in parallel, synthesize into one unified plan with gated review, annotation, and critique phases
+- **Subagents** — Model spawns parallel sub-agents in isolated git worktrees for independent tasks; auto-merge on success with conflict detection
+- **Multi-repo workspaces** — Register sibling repos the agent can read from and write to
+- **Image attachments** — Drag-and-drop, `@path.png` references, or clipboard paste. Auto-compressed before sending
+- **Thinking / reasoning** — Streaming thinking blocks from Anthropic, OpenAI, and Gemini models. Configurable level (Off/Low/Medium/High) via `Ctrl+T` or `/reasoning`
+- **`!` shell shortcut** — Run any shell command inline (`!ls`, `!git log`, etc.) without leaving chat
 - **Circuits** — Scheduled recurring tasks (in-session or persistent via daemon)
 - **SCM integration** — GitHub and GitLab tools (issues, PRs/MRs, file contents) with MCP presets
 - **Settings migration** — Import MCP servers, system prompts, and project files from Claude Code, Open Code, and Codex
+- **`/suggest`** — Codebase scanning: runs clippy, tests, TODO/FIXME grep, and git churn; surfaces prioritized findings
+- **Session search** — Full-text search across all sessions directly in the session picker
 - **Permission modes** — Plan, Create, AutoEdit, Chug. Cycle with `Tab`
 - **Persistent sessions** — SQLite-backed. Resume any session with `Ctrl+O`
 - **Skills** — Built-in slash commands (`/brainstorm`, `/debug`, `/tdd`, `/review`, `/plan`) plus user-defined
 - **Memory** — Cross-session fact extraction
-- **MCP** — Extend tools via Model Context Protocol servers, with built-in presets
+- **MCP** — Extend tools via Model Context Protocol servers (stdio and SSE/HTTP), with built-in presets
 - **Embedded terminal** — Full PTY shell inside the TUI (`Ctrl+=`)
 - **Bring your own keys** — No subscription. Per-turn pricing with optional session budgets
 
