@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/caboose-transparent.svg" width="120" alt="Caboose">
+  <a href="https://docs.trycaboose.dev"><img src="media/caboose-transparent.svg" width="120" alt="Caboose"></a>
 </p>
 
 <h1 align="center">Caboose</h1>
@@ -16,7 +16,7 @@
 
 Most AI coding agents lock you into one model and one subscription. Caboose doesn't. Bring your own API keys, pick any of 15+ providers, and work entirely in your terminal — no browser, no Electron, no cloud account required.
 
-The standout feature is **Roundhouse**: send the same prompt to multiple models in parallel, watch them plan independently, then synthesize the best ideas into one unified implementation plan. It's the closest thing to a second (and third) opinion before you write a line of code.
+Outside of it being a coding assistant, it has **Roundhouse**: send the same prompt to multiple models in parallel, watch them plan independently, then synthesize the best ideas into one unified implementation plan. It's the closest thing to a second (and third) opinion before you write a line of code.
 
 ## Install
 
