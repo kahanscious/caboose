@@ -518,7 +518,7 @@ pub fn render(
                         )));
                     }
                     lines.push(Line::from(Span::styled(
-                        "  ↑/↓  scroll output",
+                        "  esc  exit roundhouse",
                         Style::default().fg(colors.text_dim),
                     )));
                 }

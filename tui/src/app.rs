@@ -50,7 +50,6 @@ pub struct State {
     /// Set on first ctrl+c; second ctrl+c within 2s actually quits.
     pub quit_first_press: Option<Instant>,
     /// Set on first ctrl+c in Roundhouse; second ctrl+c within 2s cancels session.
-    pub roundhouse_cancel_first_press: Option<Instant>,
     pub providers: ProviderRegistry,
     pub tools: ToolRegistry,
     pub mcp_manager: crate::mcp::McpManager,
@@ -221,6 +220,9 @@ pub struct State {
     pub roundhouse_critique_override: Option<bool>,
     /// When true, the model picker adds to roundhouse secondaries instead of switching.
     pub roundhouse_model_add: bool,
+    /// When true, LocalProviderConnect was opened from the model picker (vs /connect command).
+    /// On completion: update discovered_locals + handle roundhouse vs active-provider switch.
+    pub model_picker_connect: bool,
     /// Receiver for roundhouse planner status updates (parallel planning engine).
     pub roundhouse_update_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::roundhouse::PlannerUpdate>>,
@@ -455,6 +457,12 @@ impl State {
         if let Some(auto) = &self.slash_auto
             && auto.is_picker()
         {
+            return;
+        }
+
+        // Disable slash commands while roundhouse is active (awaiting prompt or running)
+        if self.roundhouse_session.is_some() {
+            self.slash_auto = None;
             return;
         }
 
@@ -831,7 +839,6 @@ impl App {
                 input: crate::tui::input_buffer::InputBuffer::new(),
                 should_quit: false,
                 quit_first_press: None,
-                roundhouse_cancel_first_press: None,
                 providers,
                 tools,
                 mcp_manager,
@@ -924,6 +931,7 @@ impl App {
                 roundhouse_session: None,
                 roundhouse_critique_override: None,
                 roundhouse_model_add: false,
+                model_picker_connect: false,
                 roundhouse_update_rx: None,
                 roundhouse_synthesis_rx: None,
                 roundhouse_critique_rx: None,
@@ -1438,11 +1446,6 @@ impl App {
                 && first.elapsed() >= Duration::from_secs(2)
             {
                 self.state.quit_first_press = None;
-            }
-            if let Some(first) = self.state.roundhouse_cancel_first_press
-                && first.elapsed() >= Duration::from_secs(2)
-            {
-                self.state.roundhouse_cancel_first_press = None;
             }
 
             // Advance animation tick
@@ -2164,8 +2167,7 @@ impl App {
                         } => {
                             if let Some(ref mut session) = self.state.roundhouse_session {
                                 // Inject tool call marker into streaming text so it's visible
-                                let marker =
-                                    format!("\n\n⚙ {tool_name}({args_summary})…\n");
+                                let marker = format!("\n\n⚙ {tool_name}({args_summary})…\n");
                                 if planner_index == 0 {
                                     session.primary_streaming_text.push_str(&marker);
                                     session.primary_tool_calls.push(
@@ -2195,12 +2197,9 @@ impl App {
                                 if planner_index == 0 {
                                     session.primary_streaming_text.push_str(&marker);
                                     if let Some(tc) =
-                                        session.primary_tool_calls.iter_mut().rev().find(
-                                            |tc| {
-                                                tc.status
-                                                    == crate::roundhouse::ToolCallStatus::Running
-                                            },
-                                        )
+                                        session.primary_tool_calls.iter_mut().rev().find(|tc| {
+                                            tc.status == crate::roundhouse::ToolCallStatus::Running
+                                        })
                                     {
                                         tc.status = if is_error {
                                             crate::roundhouse::ToolCallStatus::Failed
@@ -2265,7 +2264,7 @@ impl App {
                                         }
 
                                         // Any planner failure cancels the entire roundhouse
-                                        self.state.chat_messages.push(ChatMessage::System {
+                                        self.state.chat_messages.push(ChatMessage::Error {
                                             content: format!(
                                                 "Roundhouse cancelled: {} failed — {e}",
                                                 provider_name
@@ -2880,24 +2879,12 @@ impl App {
     }
 
     fn handle_roundhouse_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
-        // Ctrl+C: first press cancels session → Chat; second press starts quit timer
-        if key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
-            const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
-            if let Some(first) = self.state.roundhouse_cancel_first_press
-                && first.elapsed() < CANCEL_TIMEOUT
-            {
-                // Second Ctrl+C within window — fully cancel and go to Chat
-                self.state.roundhouse_cancel_first_press = None;
-                if let Some(ref mut session) = self.state.roundhouse_session {
-                    session.phase = crate::roundhouse::RoundhousePhase::Cancelled;
-                }
-                self.state.roundhouse_update_rx = None;
-                self.state.roundhouse_critique_rx = None;
-                self.state.dialog_stack.base = Screen::Chat;
-            } else {
-                // First Ctrl+C — arm the cancel
-                self.state.roundhouse_cancel_first_press = Some(Instant::now());
-            }
+        // Ctrl+C or Escape: immediately exit roundhouse and return to Chat
+        if (key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+            || key == KeyCode::Esc
+        {
+            self.clear_roundhouse_session();
+            self.state.dialog_stack.base = Screen::Chat;
             return;
         }
 
@@ -2936,7 +2923,6 @@ impl App {
         // to avoid holding a mutable borrow on self.state.roundhouse_session
         // while calling methods on self.
         let mut action: Option<&str> = None;
-        let mut scroll_delta: i32 = 0;
         let mut model_switched = false;
         match key {
             // Model navigation — reset to auto-scroll bottom on switch
@@ -2947,14 +2933,6 @@ impl App {
             KeyCode::Char('k') => {
                 session.select_prev_model();
                 model_switched = true;
-            }
-
-            // Scroll — use shared scroll_offset (same as normal chat)
-            KeyCode::Down | KeyCode::PageDown => {
-                scroll_delta = if key == KeyCode::PageDown { 10 } else { 3 };
-            }
-            KeyCode::Up | KeyCode::PageUp => {
-                scroll_delta = -(if key == KeyCode::PageUp { 10 } else { 3 });
             }
 
             // Gate actions — only active during review phases
@@ -2985,8 +2963,8 @@ impl App {
                 session.annotation_input = Some(String::new());
             }
             KeyCode::Char('q') => {
-                session.phase = crate::roundhouse::RoundhousePhase::Cancelled;
-                self.state.dialog_stack.base = Screen::Chat;
+                // Handled after match to avoid borrow conflict
+                action = Some("quit");
             }
 
             _ => {}
@@ -2997,31 +2975,14 @@ impl App {
             // Jump back to auto-scroll bottom when switching models
             self.state.user_scrolled_up = false;
         }
-        if scroll_delta > 0 {
-            self.state.scroll_offset =
-                self.state.scroll_offset.saturating_add(scroll_delta as u16);
-            let max_scroll = self
-                .state
-                .total_chat_lines
-                .get()
-                .saturating_sub(self.state.chat_area_height.get());
-            if self.state.scroll_offset >= max_scroll {
-                self.state.scroll_offset = max_scroll;
-                self.state.user_scrolled_up = false;
-            } else {
-                self.state.user_scrolled_up = true;
-            }
-        } else if scroll_delta < 0 {
-            self.state.scroll_offset = self
-                .state
-                .scroll_offset
-                .saturating_sub((-scroll_delta) as u16);
-            self.state.user_scrolled_up = true;
-        }
 
         match action {
             Some("critique") => self.start_roundhouse_critique(),
             Some("synthesis") => self.start_roundhouse_synthesis(),
+            Some("quit") => {
+                self.clear_roundhouse_session();
+                self.state.dialog_stack.base = Screen::Chat;
+            }
             _ => {}
         }
     }
@@ -3403,16 +3364,13 @@ impl App {
                             self.state.user_scrolled_up = false;
                             // Try sh -c first (Unix, macOS, Windows+Git Bash).
                             // On bare Windows (no sh in PATH), fall back to cmd /C.
-                            let shell_result =
-                                tokio::process::Command::new("sh")
-                                    .arg("-c")
-                                    .arg(cmd)
-                                    .output()
-                                    .await;
+                            let shell_result = tokio::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(cmd)
+                                .output()
+                                .await;
                             let shell_result = match shell_result {
-                                Err(e)
-                                    if e.kind() == std::io::ErrorKind::NotFound =>
-                                {
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                                     #[cfg(windows)]
                                     {
                                         tokio::process::Command::new("cmd")
@@ -3428,8 +3386,7 @@ impl App {
                                 }
                                 other => other,
                             };
-                            match shell_result
-                            {
+                            match shell_result {
                                 Ok(output) => {
                                     let stdout = String::from_utf8_lossy(&output.stdout);
                                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3464,9 +3421,9 @@ impl App {
                                     } else {
                                         format!("```\n{display}\n```\n[exit code: {exit_code}]")
                                     };
-                                    self.state.chat_messages.push(ChatMessage::System {
-                                        content,
-                                    });
+                                    self.state
+                                        .chat_messages
+                                        .push(ChatMessage::System { content });
                                 }
                                 Err(e) => {
                                     self.state.chat_messages.push(ChatMessage::System {
@@ -3614,6 +3571,16 @@ impl App {
             .unwrap_or(false);
         if roundhouse_active {
             self.handle_roundhouse_key(key, modifiers);
+            return;
+        }
+
+        // Esc or Ctrl+C while roundhouse exists (passive phases) — clear it
+        if self.state.roundhouse_session.is_some()
+            && ((key == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+                || key == KeyCode::Esc)
+        {
+            self.clear_roundhouse_session();
+            self.state.dialog_stack.base = Screen::Chat;
             return;
         }
 
@@ -4212,16 +4179,13 @@ impl App {
                             self.state.user_scrolled_up = false;
                             // Try sh -c first (Unix, macOS, Windows+Git Bash).
                             // On bare Windows (no sh in PATH), fall back to cmd /C.
-                            let shell_result =
-                                tokio::process::Command::new("sh")
-                                    .arg("-c")
-                                    .arg(cmd)
-                                    .output()
-                                    .await;
+                            let shell_result = tokio::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(cmd)
+                                .output()
+                                .await;
                             let shell_result = match shell_result {
-                                Err(e)
-                                    if e.kind() == std::io::ErrorKind::NotFound =>
-                                {
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                                     #[cfg(windows)]
                                     {
                                         tokio::process::Command::new("cmd")
@@ -4239,10 +4203,8 @@ impl App {
                             };
                             match shell_result {
                                 Ok(output) => {
-                                    let stdout =
-                                        String::from_utf8_lossy(&output.stdout);
-                                    let stderr =
-                                        String::from_utf8_lossy(&output.stderr);
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
                                     let mut result = String::new();
                                     if !stdout.is_empty() {
                                         result.push_str(&stdout);
@@ -4256,11 +4218,9 @@ impl App {
                                     if result.is_empty() {
                                         result.push_str("(no output)");
                                     }
-                                    let lines: Vec<&str> =
-                                        result.lines().collect();
+                                    let lines: Vec<&str> = result.lines().collect();
                                     let display = if lines.len() > 200 {
-                                        let mut truncated: String =
-                                            lines[..200].join("\n");
+                                        let mut truncated: String = lines[..200].join("\n");
                                         truncated.push_str(&format!(
                                             "\n\n... ({} more lines truncated)",
                                             lines.len() - 200
@@ -4269,27 +4229,20 @@ impl App {
                                     } else {
                                         result.to_string()
                                     };
-                                    let exit_code =
-                                        output.status.code().unwrap_or(-1);
+                                    let exit_code = output.status.code().unwrap_or(-1);
                                     let content = if exit_code == 0 {
                                         format!("```\n{display}\n```")
                                     } else {
-                                        format!(
-                                            "```\n{display}\n```\n[exit code: {exit_code}]"
-                                        )
+                                        format!("```\n{display}\n```\n[exit code: {exit_code}]")
                                     };
                                     self.state
                                         .chat_messages
                                         .push(ChatMessage::System { content });
                                 }
                                 Err(e) => {
-                                    self.state.chat_messages.push(
-                                        ChatMessage::System {
-                                            content: format!(
-                                                "Failed to run command: {e}"
-                                            ),
-                                        },
-                                    );
+                                    self.state.chat_messages.push(ChatMessage::System {
+                                        content: format!("Failed to run command: {e}"),
+                                    });
                                 }
                             }
                         }
@@ -4891,12 +4844,18 @@ impl App {
                     self.restore_session(&id);
                 }
             }
-            DropdownMode::Models { models, recent, .. } => {
+            DropdownMode::Models {
+                models,
+                recent,
+                collapsed,
+                ..
+            } => {
                 let selection = crate::tui::slash_auto::resolve_model_selection(
                     models,
                     recent,
                     &auto.filter,
                     auto.selected,
+                    collapsed,
                 );
                 // Look up capabilities before clearing slash_auto (borrows models/recent)
                 let (supports_tools, supports_vision, supports_thinking) = selection
@@ -4918,6 +4877,28 @@ impl App {
                         .unwrap_or_else(|| provider.clone());
                     (provider.clone(), display, model_id.clone())
                 });
+                // Handle group header selection — toggle collapse, keep picker open
+                if let Some((ref provider, ref group_id)) = selection
+                    && provider == "_group"
+                {
+                    let group_id = group_id.clone();
+                    if let Some(crate::tui::slash_auto::SlashAutoState {
+                        mode:
+                            crate::tui::slash_auto::DropdownMode::Models {
+                                ref mut collapsed, ..
+                            },
+                        ..
+                    }) = self.state.slash_auto
+                    {
+                        if collapsed.contains(&group_id) {
+                            collapsed.remove(&group_id);
+                        } else {
+                            collapsed.insert(group_id);
+                        }
+                    }
+                    return;
+                }
+
                 self.state.slash_auto = None;
                 self.state.input.clear();
                 if self.state.handoff_agent_pending {
@@ -4940,14 +4921,45 @@ impl App {
                             });
                     }
                 } else if let Some((provider, model_id)) = selection {
-                    self.state.model_supports_tools = supports_tools;
-                    self.state.model_supports_vision = supports_vision;
-                    self.state.model_supports_thinking = supports_thinking;
-                    // Reset thinking mode when switching to a model that doesn't support it
-                    if !supports_thinking {
-                        self.state.thinking_mode = crate::provider::ThinkingMode::Off;
+                    if provider == "_local" {
+                        // Open the local connect dialog for the chosen server type
+                        let server_type = match model_id.as_str() {
+                            "ollama" => crate::provider::local::LocalServerType::Ollama,
+                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
+                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
+                            _ => crate::provider::local::LocalServerType::Custom,
+                        };
+                        let provider_name = match model_id.as_str() {
+                            "ollama" => "Ollama",
+                            "lmstudio" => "LM Studio",
+                            "llamacpp" => "llama.cpp",
+                            _ => "Custom",
+                        };
+                        self.state.model_picker_connect = true;
+                        self.state.dialog_stack.push(
+                            crate::tui::dialog::DialogKind::LocalProviderConnect(
+                                crate::tui::dialog::LocalProviderConnectState {
+                                    provider_id: model_id.clone(),
+                                    provider_name: provider_name.to_string(),
+                                    address: server_type.default_address().to_string(),
+                                    models: vec![],
+                                    selected_model: 0,
+                                    phase: crate::tui::dialog::LocalConnectPhase::Address,
+                                    error: None,
+                                    probe_rx: None,
+                                },
+                            ),
+                        );
+                    } else {
+                        self.state.model_supports_tools = supports_tools;
+                        self.state.model_supports_vision = supports_vision;
+                        self.state.model_supports_thinking = supports_thinking;
+                        // Reset thinking mode when switching to a model that doesn't support it
+                        if !supports_thinking {
+                            self.state.thinking_mode = crate::provider::ThinkingMode::Off;
+                        }
+                        self.select_model(&provider, &model_id);
                     }
-                    self.select_model(&provider, &model_id);
                 }
             }
             DropdownMode::Providers => {
@@ -5339,9 +5351,17 @@ impl App {
             DropdownMode::Sessions { results, .. } => {
                 crate::tui::session_picker::filter_search_results(results, &auto.filter).len()
             }
-            DropdownMode::Models { models, recent, .. } => {
-                crate::tui::slash_auto::filtered_model_count(models, recent, &auto.filter)
-            }
+            DropdownMode::Models {
+                models,
+                recent,
+                collapsed,
+                ..
+            } => crate::tui::slash_auto::filtered_model_count(
+                models,
+                recent,
+                &auto.filter,
+                collapsed,
+            ),
             DropdownMode::Providers => {
                 use crate::provider::catalog;
                 let needle = auto.filter.to_lowercase();
@@ -6010,11 +6030,64 @@ impl App {
                         .local_providers
                         .insert(provider_id.clone(), local_config);
 
-                    // Connect provider
-                    self.connect_provider(&provider_id).await;
+                    // Always update discovered_locals so this server's models are available
+                    // in the picker for the rest of the session.
+                    {
+                        use crate::provider::local::{LocalServer, LocalServerType};
+                        let server_type = match provider_id.as_str() {
+                            "ollama" => LocalServerType::Ollama,
+                            "lmstudio" => LocalServerType::LmStudio,
+                            "llamacpp" => LocalServerType::LlamaCpp,
+                            _ => LocalServerType::Custom,
+                        };
+                        let probed_models = match self.state.dialog_stack.top() {
+                            Some(crate::tui::dialog::DialogKind::LocalProviderConnect(s)) => {
+                                s.models.clone()
+                            }
+                            _ => vec![model_name.clone()],
+                        };
+                        let new_server = LocalServer {
+                            server_type,
+                            address: address.clone(),
+                            available: true,
+                            models: probed_models,
+                        };
+                        if let Some(existing) = self
+                            .state
+                            .discovered_locals
+                            .iter_mut()
+                            .find(|s| s.address == address)
+                        {
+                            *existing = new_server;
+                        } else {
+                            self.state.discovered_locals.push(new_server);
+                        }
+                    }
 
-                    // Close all overlays
-                    self.state.dialog_stack.clear();
+                    let from_picker = self.state.model_picker_connect;
+                    self.state.model_picker_connect = false;
+
+                    if from_picker && self.state.roundhouse_model_add {
+                        // Add directly as a roundhouse secondary
+                        self.state.roundhouse_model_add = false;
+                        self.state.dialog_stack.pop(); // close LocalProviderConnect
+                        if let Some(crate::tui::dialog::DialogKind::RoundhouseProviderPicker(
+                            picker,
+                        )) = self.state.dialog_stack.top_mut()
+                        {
+                            picker
+                                .secondaries
+                                .push(crate::tui::dialog::RoundhouseSecondary {
+                                    provider_id: provider_id.clone(),
+                                    display_name: provider_name.clone(),
+                                    model: model_name.clone(),
+                                });
+                        }
+                    } else {
+                        // Connect as active provider and close dialogs
+                        self.connect_provider(&provider_id).await;
+                        self.state.dialog_stack.clear();
+                    }
                 }
                 _ => {}
             },
@@ -6905,9 +6978,11 @@ impl App {
     async fn open_model_dropdown(&mut self) {
         let mut models = Vec::new();
         let mut error = None;
+        let active = self.state.active_provider_name.clone();
+
+        // Fetch models from the active provider
         if let Some(ref provider) = self.provider {
-            // OpenRouter: use list_models_with_pricing to also populate pricing registry
-            if self.state.active_provider_name == "openrouter" {
+            if active == "openrouter" {
                 if let Some(api_key) = self.state.config.keys.get("openrouter") {
                     let or_provider = crate::provider::openrouter::OpenRouterProvider::new(
                         api_key.to_string(),
@@ -6919,7 +6994,7 @@ impl App {
                                 self.state.pricing.insert(model_id, model_pricing);
                             }
                             for m in model_list {
-                                models.push((self.state.active_provider_name.clone(), m));
+                                models.push((active.clone(), m));
                             }
                         }
                         Err(e) => {
@@ -6931,7 +7006,7 @@ impl App {
                 match provider.list_models().await {
                     Ok(model_list) => {
                         for m in model_list {
-                            models.push((self.state.active_provider_name.clone(), m));
+                            models.push((active.clone(), m));
                         }
                     }
                     Err(e) => {
@@ -6941,6 +7016,30 @@ impl App {
             }
         } else {
             error = Some("No provider connected. Use /connect first.".to_string());
+        }
+
+        // Also fetch OpenRouter models if key exists and it's not the active provider
+        if active != "openrouter"
+            && let Some(api_key) = self.state.config.keys.get("openrouter")
+        {
+            let or_provider = crate::provider::openrouter::OpenRouterProvider::new(
+                api_key.to_string(),
+                "anthropic/claude-sonnet-4.6".to_string(),
+            );
+            if let Ok((model_list, pricing_entries)) = or_provider.list_models_with_pricing().await
+            {
+                for (model_id, model_pricing) in pricing_entries {
+                    self.state.pricing.insert(model_id, model_pricing);
+                }
+                for m in model_list {
+                    if !models
+                        .iter()
+                        .any(|(p, mo)| p == "openrouter" && mo.id == m.id)
+                    {
+                        models.push(("openrouter".to_string(), m));
+                    }
+                }
+            }
         }
         // Add models from local providers
         for (name, local_cfg) in &self.state.config.local_providers {
@@ -6958,6 +7057,38 @@ impl App {
                 ));
             }
         }
+        // Add models from auto-discovered local servers (Ollama, LM Studio, etc.)
+        for server in &self.state.discovered_locals {
+            if !server.available {
+                continue;
+            }
+            let provider_id = match server.server_type {
+                crate::provider::local::LocalServerType::Ollama => "ollama",
+                crate::provider::local::LocalServerType::LmStudio => "lmstudio",
+                crate::provider::local::LocalServerType::LlamaCpp => "llamacpp",
+                crate::provider::local::LocalServerType::Custom => "custom",
+            };
+            for model_id in &server.models {
+                // Skip if already present from configured local providers
+                if models
+                    .iter()
+                    .any(|(p, m)| p == provider_id && &m.id == model_id)
+                {
+                    continue;
+                }
+                models.push((
+                    provider_id.to_string(),
+                    crate::provider::ModelInfo {
+                        id: model_id.clone(),
+                        name: model_id.clone(),
+                        context_window: None,
+                        supports_tools: true,
+                        supports_vision: false,
+                        supports_thinking: false,
+                    },
+                ));
+            }
+        }
         // Cache context windows from provider API for models not in the static table
         let cw_entries: Vec<(String, Option<u32>)> = models
             .iter()
@@ -6966,6 +7097,31 @@ impl App {
         crate::provider::models_dev::cache_from_model_list(&cw_entries);
 
         models.sort_by(|(pa, a), (pb, b)| pa.cmp(pb).then(a.id.cmp(&b.id)));
+
+        // Prepend local server connect entries at the very top (shown before all other models).
+        // Provider "_local" sorts before any alphabetical id, and they're pinned here explicitly.
+        let local_connect_entries: &[(&str, &str)] = &[
+            ("ollama", "Ollama"),
+            ("lmstudio", "LM Studio"),
+            ("llamacpp", "llama.cpp"),
+            ("custom", "Custom server"),
+        ];
+        for (id, name) in local_connect_entries.iter().rev() {
+            models.insert(
+                0,
+                (
+                    "_local".to_string(),
+                    crate::provider::ModelInfo {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        context_window: None,
+                        supports_tools: true,
+                        supports_vision: false,
+                        supports_thinking: false,
+                    },
+                ),
+            );
+        }
 
         // Build recent models from prefs
         let prefs = crate::config::prefs::TuiPrefs::load();
@@ -6992,9 +7148,23 @@ impl App {
             })
             .collect();
 
+        // By default, collapse all providers except the active one
+        let mut collapsed: std::collections::HashSet<String> = models
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .filter(|p| p != &active && p != "_local")
+            .collect();
+        // Also collapse "_local" if active provider is not a local one
+        let local_providers = ["ollama", "lmstudio", "llamacpp", "custom"];
+        if !local_providers.contains(&active.as_str()) {
+            collapsed.insert("_local".to_string());
+        }
+
         self.state.input.clear();
         self.state.slash_auto = Some(crate::tui::slash_auto::SlashAutoState::with_models(
-            models, error, recent,
+            models, error, recent, collapsed,
         ));
     }
 
@@ -10418,6 +10588,15 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Clear all roundhouse state — session, receivers, model-add flag.
+    fn clear_roundhouse_session(&mut self) {
+        self.state.roundhouse_session = None;
+        self.state.roundhouse_update_rx = None;
+        self.state.roundhouse_synthesis_rx = None;
+        self.state.roundhouse_critique_rx = None;
+        self.state.roundhouse_model_add = false;
     }
 
     /// Handle `/roundhouse cancel` and `/roundhouse clear` subcommands.

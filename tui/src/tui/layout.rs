@@ -135,7 +135,9 @@ pub fn render(frame: &mut Frame, app: &State) {
                 render_local_connect(frame, state, &colors);
             }
             DialogKind::RoundhouseProviderPicker(picker) => {
-                render_roundhouse_picker(frame, picker, app, &colors);
+                if app.slash_auto.is_none() {
+                    render_roundhouse_picker(frame, picker, app, &colors);
+                }
             }
             DialogKind::CircuitsList(list_state) => {
                 render_circuits_list(frame, list_state, app, &colors);
@@ -449,7 +451,11 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
             ]));
-            lines.extend(crate::tui::chat::parse_markdown(&content, colors, colors.roundhouse));
+            lines.extend(crate::tui::chat::parse_markdown(
+                &content,
+                colors,
+                colors.roundhouse,
+            ));
             lines.push(Line::from(""));
             lines.push(Line::from(""));
 
@@ -1072,9 +1078,9 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             | crate::roundhouse::RoundhousePhase::Critiquing
             | crate::roundhouse::RoundhousePhase::Synthesizing => {
                 let hint = match session.phase {
-                    crate::roundhouse::RoundhousePhase::Planning => "  planning…  ctrl+c+c to cancel",
-                    crate::roundhouse::RoundhousePhase::Critiquing => "  critiquing…  ctrl+c+c to cancel",
-                    _ => "  synthesizing…  ctrl+c+c to cancel",
+                    crate::roundhouse::RoundhousePhase::Planning => "  what's in your roundhouse?",
+                    crate::roundhouse::RoundhousePhase::Critiquing => "  critiquing plans…",
+                    _ => "  synthesizing plans…",
                 };
                 let para = ratatui::widgets::Paragraph::new(hint)
                     .block(
@@ -1088,7 +1094,10 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             }
             crate::roundhouse::RoundhousePhase::ReviewingPlans => {
                 let hint = if session.annotation_input.is_some() {
-                    format!("  annotation: {}█", session.annotation_input.as_deref().unwrap_or(""))
+                    format!(
+                        "  annotation: {}█",
+                        session.annotation_input.as_deref().unwrap_or("")
+                    )
                 } else if session.critique_enabled {
                     "  [c] critique   [s] skip to synthesis   [a] annotate   [q] cancel".to_string()
                 } else {
@@ -1106,7 +1115,10 @@ fn render_input(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Colo
             }
             crate::roundhouse::RoundhousePhase::ReviewingCritiques => {
                 let hint = if session.annotation_input.is_some() {
-                    format!("  annotation: {}█", session.annotation_input.as_deref().unwrap_or(""))
+                    format!(
+                        "  annotation: {}█",
+                        session.annotation_input.as_deref().unwrap_or("")
+                    )
                 } else {
                     "  [s] synthesize   [a] annotate   [q] cancel".to_string()
                 };
@@ -1486,7 +1498,19 @@ fn render_roundhouse_picker(
     app: &State,
     colors: &theme::Colors,
 ) {
-    let area = frame.area();
+    let full = frame.area();
+    // Compute main area (excluding sidebar) so the dialog centers correctly
+    let sidebar_w = if app.sidebar_visible && full.width >= SIDEBAR_MIN_TERMINAL_WIDTH {
+        app.sidebar_width
+    } else {
+        0
+    };
+    let area = Rect {
+        x: full.x,
+        y: full.y,
+        width: full.width.saturating_sub(sidebar_w),
+        height: full.height,
+    };
     // 2 border + 1 primary + 1 blank + max(1, N secondaries) + 1 blank + 1 footer = max(1,N) + 6
     let list_rows = picker.secondaries.len().max(1) as u16;
     let content_lines = list_rows + 6;

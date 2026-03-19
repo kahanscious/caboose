@@ -286,7 +286,11 @@ async fn run_planner_inner(
             // Build the completed summary with result details
             let summary = if is_error {
                 let msg = output.lines().next().unwrap_or(&output).to_string();
-                if msg.len() > 60 { msg[..60].to_string() } else { msg }
+                if msg.len() > 60 {
+                    msg[..60].to_string()
+                } else {
+                    msg
+                }
             } else {
                 match name.as_str() {
                     names::READ_FILE => {

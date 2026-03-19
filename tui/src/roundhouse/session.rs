@@ -164,7 +164,11 @@ impl RoundhouseSession {
         } else {
             self.secondaries
                 .get(self.selected_model_index - 1)
-                .map(|s| s.critique.as_deref().unwrap_or(s.critique_streaming_text.as_str()))
+                .map(|s| {
+                    s.critique
+                        .as_deref()
+                        .unwrap_or(s.critique_streaming_text.as_str())
+                })
                 .unwrap_or("")
         }
     }

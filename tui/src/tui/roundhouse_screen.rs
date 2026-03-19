@@ -135,16 +135,6 @@ fn status_text(status: &PlannerStatus) -> &str {
     }
 }
 
-/// Render just the model content viewer — used when Roundhouse runs inside the Chat layout.
-pub fn render_viewer(
-    frame: &mut Frame,
-    session: &crate::roundhouse::session::RoundhouseSession,
-    colors: &theme::Colors,
-    area: Rect,
-) {
-    render_model_viewer(frame, session, colors, area);
-}
-
 fn render_model_viewer(
     frame: &mut Frame,
     session: &crate::roundhouse::session::RoundhouseSession,
@@ -295,7 +285,7 @@ fn render_navigator(
         Style::default().fg(colors.text_dim),
     )));
     lines.push(Line::from(Span::styled(
-        "  ↑/↓  scroll output",
+        "  esc  exit roundhouse",
         Style::default().fg(colors.text_dim),
     )));
 

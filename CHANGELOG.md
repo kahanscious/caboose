@@ -12,12 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Roundhouse v2** — complete overhaul with a dedicated full-screen experience. Left panel (65%) streams model output; right panel (35%) shows phase navigator, model list with status icons, cost, and annotation count. Replaces inline chat rendering.
 - **Gated phase flow** — human checkpoints between planning, critique, and synthesis. After each phase: `[c]` critique, `[s]` skip to synthesis, `[a]` annotate, `[q]` cancel. `j`/`k` switches between models in real-time.
 - **Roundhouse annotations** — type feedback at any review gate (e.g. "Use Claude's DB approach"). Injected into subsequent phase prompts as a "User Guidance" section; models instructed to respect user guidance above their own judgment. Included in output file.
+- **Collapsible model picker groups** — `/model` picker now groups models by provider with `▼`/`▶` headers. Press Enter on a header to expand/collapse. Active provider expanded by default; others collapsed. OpenRouter and other configured providers always shown regardless of active provider.
+- **Local server connect entries** — Ollama, LM Studio, llama.cpp, and Custom server connect options pinned at the top of the model picker. Select to connect on a custom port. Session remembers manually connected servers.
 - **`!` shell shortcut** — type `!<command>` to run a shell command directly without LLM involvement. Output shown as a system message in chat. Supports pipes, redirects, and shell builtins via `sh -c`. Truncates at 200 lines. Shows `[exit code: N]` on failure. Works with no API key configured.
 
 ### Changed
 
 - Roundhouse output files now saved to `.caboose/roundhouse/<YYYY-MM-DD>-<slug>.md`; synthesis inserted as an Assistant message in Chat on completion.
 - Removed `/roundhouse execute` subcommand — synthesis flows naturally into chat.
+- Model picker selected item now stays centered in the viewport while scrolling.
+- Roundhouse cancellation errors now display in red.
+- Escape or Ctrl+C immediately exits roundhouse from any phase.
+- Slash commands disabled while roundhouse is active to prevent conflicts.
 
 ---
 
