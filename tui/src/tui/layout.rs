@@ -131,6 +131,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             } => {
                 render_paste_confirm(frame, *line_count, *char_count, &colors);
             }
+            DialogKind::Confirm { message, .. } => {
+                render_confirm(frame, message, &colors);
+            }
             DialogKind::LocalProviderConnect(state) => {
                 render_local_connect(frame, state, &colors);
             }
@@ -383,6 +386,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             | crate::agent::AgentState::PendingApproval { .. }
             | crate::agent::AgentState::Compacting
     ) || app.init_rx.is_some();
+    let context_pct = app.agent.context_pct();
     crate::tui::footer::render(
         frame,
         outer[1],
@@ -391,6 +395,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
         is_active,
         budget,
         app.update_available.as_deref(),
+        context_pct,
     );
 
     // --- Terminal panel (bottommost, below footer) ---
@@ -1051,27 +1056,27 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     // Copy badge overlay: shown on the hovered assistant message header row.
     // Rendered after the main Paragraph so it floats on top.
     app.copy_badge_rect.set(None); // clear previous frame's rect
-    if let Some(hovered_idx) = app.hovered_message {
-        if !crate::app::roundhouse_active(app) {
-            let zones = app.copy_hover_zones.borrow();
-            if let Some(&(start_y, _, _)) = zones.iter().find(|&&(_, _, idx)| idx == hovered_idx) {
-                if start_y >= area.y && start_y < area.y + area.height {
-                    let badge_rect = ratatui::prelude::Rect {
-                        x: area.x + area.width.saturating_sub(10),
-                        y: start_y,
-                        width: 10.min(area.width),
-                        height: 1,
-                    };
-                    frame.render_widget(ratatui::widgets::Clear, badge_rect);
-                    frame.render_widget(
-                        Paragraph::new("[ y copy ]").style(
-                            Style::default().bg(colors.bg_elevated).fg(colors.text_dim),
-                        ),
-                        badge_rect,
-                    );
-                    app.copy_badge_rect.set(Some(badge_rect));
-                }
-            }
+    if let Some(hovered_idx) = app.hovered_message
+        && !crate::app::roundhouse_active(app)
+    {
+        let zones = app.copy_hover_zones.borrow();
+        if let Some(&(start_y, _, _)) = zones.iter().find(|&&(_, _, idx)| idx == hovered_idx)
+            && start_y >= area.y
+            && start_y < area.y + area.height
+        {
+            let badge_rect = ratatui::prelude::Rect {
+                x: area.x + area.width.saturating_sub(10),
+                y: start_y,
+                width: 10.min(area.width),
+                height: 1,
+            };
+            frame.render_widget(ratatui::widgets::Clear, badge_rect);
+            frame.render_widget(
+                Paragraph::new("[ y copy ]")
+                    .style(Style::default().bg(colors.bg_elevated).fg(colors.text_dim)),
+                badge_rect,
+            );
+            app.copy_badge_rect.set(Some(badge_rect));
         }
     }
 
@@ -1109,19 +1114,22 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         }
     }
 
-    // "New messages" indicator when scrolled up
+    // Scroll-to-bottom badge: clickable, floats over chat content bottom-right.
+    app.scroll_to_bottom_badge_rect.set(None); // clear previous frame
     if app.user_scrolled_up && effective_offset < max_scroll {
-        let indicator = Line::from(Span::styled(
-            " \u{2193} New messages ",
-            Style::default().fg(colors.bg_primary).bg(colors.info),
-        ));
-        let indicator_area = Rect {
-            x: area.x + area.width.saturating_sub(16),
+        const BADGE: &str = "[ \u{2193} new messages ]"; // 18 terminal columns
+        let badge_rect = Rect {
+            x: area.x + area.width.saturating_sub(18),
             y: area.y + area.height.saturating_sub(1),
-            width: 16.min(area.width),
+            width: 18_u16.min(area.width),
             height: 1,
         };
-        frame.render_widget(Paragraph::new(indicator), indicator_area);
+        frame.render_widget(ratatui::widgets::Clear, badge_rect);
+        frame.render_widget(
+            Paragraph::new(BADGE).style(Style::default().bg(colors.bg_elevated).fg(colors.info)),
+            badge_rect,
+        );
+        app.scroll_to_bottom_badge_rect.set(Some(badge_rect));
     }
 }
 
@@ -1505,6 +1513,29 @@ fn render_paste_confirm(
 
     let paragraph = Paragraph::new(text)
         .block(block)
+        .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_confirm(frame: &mut Frame, message: &str, colors: &theme::Colors) {
+    let area = frame.area();
+    let width: u16 = 44;
+    let height: u16 = 5;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .title(" Confirm ")
+        .border_style(Style::default().fg(colors.warning));
+
+    let text = format!("{message}\n\n[y] yes    [n] / [Esc] cancel");
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: true })
         .style(Style::default().fg(colors.text).bg(colors.bg_elevated));
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
     frame.render_widget(paragraph, dialog_area);

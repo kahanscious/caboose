@@ -196,6 +196,7 @@ pub fn render(frame: &mut Frame, state: &State) {
             max_cost: max,
         });
     let is_active = state.init_rx.is_some();
+    let context_pct = state.agent.context_pct();
     crate::tui::footer::render(
         frame,
         outer[1],
@@ -204,6 +205,7 @@ pub fn render(frame: &mut Frame, state: &State) {
         is_active,
         budget,
         state.update_available.as_deref(),
+        context_pct,
     );
 
     // Terminal panel (bottommost, below footer)

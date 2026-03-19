@@ -89,6 +89,7 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Permission modes** — Plan, Create, AutoEdit, Chug. Cycle with `Tab`
 - **Memory** — cross-session fact extraction
 - **Hover-to-copy** — mouse over any assistant message to copy it with `y` or a click
+- **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
 
 ## Built-in Skills
 

@@ -175,6 +175,16 @@ impl AgentLoop {
         }
     }
 
+    /// Fraction of the context window consumed by the last request.
+    /// Returns `None` if either value is zero (no data yet).
+    pub fn context_pct(&self) -> Option<f64> {
+        if self.context_window > 0 && self.last_input_tokens > 0 {
+            Some(self.last_input_tokens as f64 / self.context_window as f64)
+        } else {
+            None
+        }
+    }
+
     /// Initialize cold storage for this session.
     pub fn init_cold_store(&mut self, session_id: &str) {
         self.cold_store = Some(ColdStore::new(session_id));
