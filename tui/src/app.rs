@@ -173,6 +173,9 @@ pub struct State {
     /// Screen rect of the copy badge for the currently hovered message.
     /// Set during badge render; used by Down mouse handler for click detection.
     pub copy_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
+    /// Screen rect of the scroll-to-bottom badge, shown when the user has scrolled up.
+    /// Set during badge render; cleared each frame; used by mouse Down handler.
+    pub scroll_to_bottom_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
     /// Screen y → message index for clickable diff toggle indicators (▶/▼ expand/collapse).
     pub tool_toggle_rects: RefCell<Vec<(u16, usize)>>,
     /// Active mouse text selection in the chat area.
@@ -931,6 +934,7 @@ impl App {
                 hovered_message: None,
                 copy_hover_zones: RefCell::new(Vec::new()),
                 copy_badge_rect: Cell::new(None),
+                scroll_to_bottom_badge_rect: Cell::new(None),
                 tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
                 chat_area: Cell::new(None),
@@ -1863,6 +1867,23 @@ impl App {
                                         }
                                         if badge_handled {
                                             continue;
+                                        }
+
+                                        // Scroll-to-bottom badge click
+                                        if let Some(badge) = self.state.scroll_to_bottom_badge_rect.get() {
+                                            if mouse.row == badge.y
+                                                && mouse.column >= badge.x
+                                                && mouse.column < badge.x + badge.width
+                                            {
+                                                let max_scroll = self
+                                                    .state
+                                                    .total_chat_lines
+                                                    .get()
+                                                    .saturating_sub(self.state.chat_area_height.get());
+                                                self.state.scroll_offset = max_scroll;
+                                                self.state.user_scrolled_up = false;
+                                                continue;
+                                            }
                                         }
 
                                         // Truncation click zone logic
@@ -4536,6 +4557,24 @@ impl App {
                         self.state.user_scrolled_up = false;
                     }
                 }
+            }
+            (KeyCode::Char('G'), KeyModifiers::SHIFT) if self.state.input.is_empty() => {
+                let max_scroll = self
+                    .state
+                    .total_chat_lines
+                    .get()
+                    .saturating_sub(self.state.chat_area_height.get());
+                self.state.scroll_offset = max_scroll;
+                self.state.user_scrolled_up = false;
+            }
+            (KeyCode::Char('G'), KeyModifiers::NONE) if self.state.input.is_empty() => {
+                let max_scroll = self
+                    .state
+                    .total_chat_lines
+                    .get()
+                    .saturating_sub(self.state.chat_area_height.get());
+                self.state.scroll_offset = max_scroll;
+                self.state.user_scrolled_up = false;
             }
             (KeyCode::End, _) => {
                 let max_scroll = self

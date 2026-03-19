@@ -1109,19 +1109,23 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         }
     }
 
-    // "New messages" indicator when scrolled up
+    // Scroll-to-bottom badge: clickable, floats over chat content bottom-right.
+    app.scroll_to_bottom_badge_rect.set(None); // clear previous frame
     if app.user_scrolled_up && effective_offset < max_scroll {
-        let indicator = Line::from(Span::styled(
-            " \u{2193} New messages ",
-            Style::default().fg(colors.bg_primary).bg(colors.info),
-        ));
-        let indicator_area = Rect {
-            x: area.x + area.width.saturating_sub(16),
+        const BADGE: &str = "[ \u{2193} new messages ]"; // 18 terminal columns
+        let badge_rect = Rect {
+            x: area.x + area.width.saturating_sub(18),
             y: area.y + area.height.saturating_sub(1),
-            width: 16.min(area.width),
+            width: 18_u16.min(area.width),
             height: 1,
         };
-        frame.render_widget(Paragraph::new(indicator), indicator_area);
+        frame.render_widget(ratatui::widgets::Clear, badge_rect);
+        frame.render_widget(
+            Paragraph::new(BADGE)
+                .style(Style::default().bg(colors.bg_elevated).fg(colors.info)),
+            badge_rect,
+        );
+        app.scroll_to_bottom_badge_rect.set(Some(badge_rect));
     }
 }
 
