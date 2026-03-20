@@ -26,7 +26,7 @@ pub async fn execute_with_env(input: &Value, additional_secrets: &[String]) -> R
         .unwrap_or(DEFAULT_TIMEOUT_SECS * 1000);
     let cwd = input.get("cwd").and_then(|v| v.as_str());
 
-    let safe_env = crate::safety::env_filter::filtered_env(additional_secrets);
+    let safe_env = caboose_core::safety::env_filter::filtered_env(additional_secrets);
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command).env_clear().envs(safe_env);
     if let Some(cwd) = cwd {

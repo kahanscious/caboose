@@ -206,8 +206,8 @@ pub async fn execute_tool(
             };
 
             // Check deny list
-            let deny_decision = crate::safety::command_policy::check(&full_command, &[], deny_list);
-            if let crate::safety::command_policy::Decision::Deny(reason) = deny_decision {
+            let deny_decision = caboose_core::safety::command_policy::check(&full_command, &[], deny_list);
+            if let caboose_core::safety::command_policy::Decision::Deny(reason) = deny_decision {
                 return Ok(ToolResult {
                     tool_use_id: String::new(),
                     output: format!("CLI tool blocked by deny list: {reason}"),
@@ -240,8 +240,8 @@ pub async fn execute_tool(
 
             // Check deny list against the executable path
             let deny_decision =
-                crate::safety::command_policy::check(&exec_config.path, &[], deny_list);
-            if let crate::safety::command_policy::Decision::Deny(reason) = deny_decision {
+                caboose_core::safety::command_policy::check(&exec_config.path, &[], deny_list);
+            if let caboose_core::safety::command_policy::Decision::Deny(reason) = deny_decision {
                 return Ok(ToolResult {
                     tool_use_id: String::new(),
                     output: format!("Executable tool blocked by deny list: {reason}"),

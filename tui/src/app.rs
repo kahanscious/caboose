@@ -93,7 +93,7 @@ pub struct State {
     /// Current active session ID (for persistence).
     pub current_session_id: Option<String>,
     /// Memory store for cross-session persistence.
-    pub memory: crate::memory::MemoryStore,
+    pub memory: caboose_core::memory::MemoryStore,
     /// Input history for Up/Down browsing across sessions.
     pub history: crate::tui::input_history::InputHistory,
     /// Timestamp of the most recent text insertion into the composer.
@@ -637,7 +637,7 @@ impl App {
             .join("caboose")
             .join("memory");
         let project_memory_dir = std::path::PathBuf::from(".caboose").join("memory");
-        let memory_store = crate::memory::MemoryStore::new(
+        let memory_store = caboose_core::memory::MemoryStore::new(
             global_memory_dir,
             project_memory_dir,
             memory_config.enabled,
@@ -10097,7 +10097,7 @@ impl App {
                     result.tool_name.as_deref().unwrap_or("unknown"),
                     target,
                 );
-                let _ = crate::memory::observations::record(
+                let _ = caboose_core::memory::observations::record(
                     self.state.sessions.storage().conn(),
                     session_id,
                     obs_kind,
@@ -12309,18 +12309,18 @@ impl App {
         };
 
         // Check observation count
-        let count = crate::memory::observations::count_for_session(
+        let count = caboose_core::memory::observations::count_for_session(
             self.state.sessions.storage().conn(),
             &session_id,
         )
         .unwrap_or(0);
 
-        if count < crate::memory::extraction::MIN_OBSERVATIONS {
+        if count < caboose_core::memory::extraction::MIN_OBSERVATIONS {
             return;
         }
 
         // Load observations
-        let observations = match crate::memory::observations::for_session(
+        let observations = match caboose_core::memory::observations::for_session(
             self.state.sessions.storage().conn(),
             &session_id,
         ) {
@@ -12332,7 +12332,7 @@ impl App {
         let memory_ctx = self.state.memory.load_context();
 
         // Build extraction prompt
-        let prompt = crate::memory::extraction::build_extraction_prompt(
+        let prompt = caboose_core::memory::extraction::build_extraction_prompt(
             &observations,
             memory_ctx.project.as_deref(),
         );
@@ -12355,11 +12355,11 @@ impl App {
             }
 
             // Parse and append
-            if let Some(new_lines) = crate::memory::extraction::parse_extraction_response(&response)
+            if let Some(new_lines) = caboose_core::memory::extraction::parse_extraction_response(&response)
             {
                 let memory_path = self.state.memory.project_dir().join("MEMORY.md");
                 if let Err(e) =
-                    crate::memory::extraction::append_to_memory_file(&memory_path, &new_lines)
+                    caboose_core::memory::extraction::append_to_memory_file(&memory_path, &new_lines)
                 {
                     tracing::warn!("Failed to append memories: {e}");
                 }
@@ -12367,7 +12367,7 @@ impl App {
         }
 
         // Prune old observations
-        let _ = crate::memory::observations::prune(
+        let _ = caboose_core::memory::observations::prune(
             self.state.sessions.storage().conn(),
             memory_config.observation_retention_days,
         );
