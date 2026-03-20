@@ -173,6 +173,13 @@ pub struct State {
     /// Screen rect of the copy badge for the currently hovered message.
     /// Set during badge render; used by Down mouse handler for click detection.
     pub copy_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
+    /// Per-frame hover zones for code blocks: (start_y, end_y, msg_index, block_index).
+    /// Computed during chat render in layout.rs; read by Moved mouse handler.
+    pub code_block_hover_zones: RefCell<Vec<(u16, u16, usize, usize)>>,
+    /// Screen rect of the code block copy badge (when hovering a code block).
+    pub code_block_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
+    /// Currently hovered code block: (msg_index, block_index).
+    pub hovered_code_block: Option<(usize, usize)>,
     /// Screen rect of the scroll-to-bottom badge, shown when the user has scrolled up.
     /// Set during badge render; cleared each frame; used by mouse Down handler.
     pub scroll_to_bottom_badge_rect: Cell<Option<ratatui::prelude::Rect>>,
@@ -946,6 +953,9 @@ impl App {
                 hovered_message: None,
                 copy_hover_zones: RefCell::new(Vec::new()),
                 copy_badge_rect: Cell::new(None),
+                code_block_hover_zones: RefCell::new(Vec::new()),
+                code_block_badge_rect: Cell::new(None),
+                hovered_code_block: None,
                 scroll_to_bottom_badge_rect: Cell::new(None),
                 tool_toggle_rects: RefCell::new(Vec::new()),
                 text_selection: None,
@@ -1866,6 +1876,16 @@ impl App {
                                             continue;
                                         }
 
+                                        // Code block copy badge click
+                                        if let Some(badge) = self.state.code_block_badge_rect.get()
+                                            && mouse.row == badge.y
+                                            && mouse.column >= badge.x
+                                            && mouse.column < badge.x + badge.width
+                                        {
+                                            self.copy_hovered_code_block();
+                                            continue;
+                                        }
+
                                         // Copy badge click
                                         let mut badge_handled = false;
                                         if let Some(badge) = self.state.copy_badge_rect.get()
@@ -2012,13 +2032,32 @@ impl App {
                                         })
                                         .unwrap_or(false);
                                     if in_chat && !roundhouse_active(&self.state) {
-                                        let zones = self.state.copy_hover_zones.borrow();
-                                        self.state.hovered_message = zones
+                                        // Code block hover takes priority
+                                        let cb_zones = self.state.code_block_hover_zones.borrow();
+                                        let cb_hit = cb_zones
                                             .iter()
-                                            .find(|&&(sy, ey, _)| mouse.row >= sy && mouse.row < ey)
-                                            .map(|&(_, _, idx)| idx);
+                                            .find(|&&(sy, ey, _, _)| {
+                                                mouse.row >= sy && mouse.row < ey
+                                            })
+                                            .map(|&(_, _, mi, bi)| (mi, bi));
+                                        drop(cb_zones);
+
+                                        if let Some(hit) = cb_hit {
+                                            self.state.hovered_code_block = Some(hit);
+                                            self.state.hovered_message = None;
+                                        } else {
+                                            self.state.hovered_code_block = None;
+                                            let zones = self.state.copy_hover_zones.borrow();
+                                            self.state.hovered_message = zones
+                                                .iter()
+                                                .find(|&&(sy, ey, _)| {
+                                                    mouse.row >= sy && mouse.row < ey
+                                                })
+                                                .map(|&(_, _, idx)| idx);
+                                        }
                                     } else {
                                         self.state.hovered_message = None;
+                                        self.state.hovered_code_block = None;
                                     }
                                 }
                                 _ => {}
@@ -3952,10 +3991,16 @@ impl App {
             }
         }
 
-        // Hover-copy: y key copies the currently hovered assistant message
-        if key == KeyCode::Char('y') && self.state.hovered_message.is_some() && !roundhouse_active {
-            self.copy_hovered_message();
-            return;
+        // Hover-copy: y key copies hovered code block or assistant message
+        if key == KeyCode::Char('y') && !roundhouse_active {
+            if self.state.hovered_code_block.is_some() {
+                self.copy_hovered_code_block();
+                return;
+            }
+            if self.state.hovered_message.is_some() {
+                self.copy_hovered_message();
+                return;
+            }
         }
 
         // Handle budget pause confirmation
@@ -10723,7 +10768,59 @@ impl App {
         }
     }
 
-    /// Clear all roundhouse state — session, receivers, model-add flag.
+    /// Extract code block bodies from markdown content.
+    fn extract_code_blocks(content: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut in_block = false;
+        let mut current: Vec<&str> = Vec::new();
+
+        for line in content.lines() {
+            if line.trim_start().starts_with("```") {
+                if in_block {
+                    blocks.push(current.join("\n"));
+                    current.clear();
+                    in_block = false;
+                } else {
+                    in_block = true;
+                }
+            } else if in_block {
+                current.push(line);
+            }
+        }
+        if in_block && !current.is_empty() {
+            blocks.push(current.join("\n"));
+        }
+        blocks
+    }
+
+    fn copy_hovered_code_block(&mut self) {
+        let Some((mi, bi)) = self.state.hovered_code_block else {
+            return;
+        };
+        let text = match self.state.chat_messages.get(mi) {
+            Some(ChatMessage::Assistant { content, .. }) => {
+                let blocks = Self::extract_code_blocks(content);
+                match blocks.get(bi) {
+                    Some(b) => b.clone(),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        match crate::clipboard::copy_to_clipboard(&text) {
+            Ok(()) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Copied code block to clipboard.".to_string(),
+                });
+            }
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Copy failed: {e}"),
+                });
+            }
+        }
+    }
+
     fn copy_hovered_message(&mut self) {
         let Some(i) = self.state.hovered_message else {
             return;
