@@ -8,8 +8,6 @@ mod prefs;
 mod agent;
 mod agents;
 mod app;
-mod attachment;
-mod checkpoint;
 mod circuits;
 mod clipboard;
 mod hooks;
@@ -27,6 +25,11 @@ mod terminal;
 mod tools;
 mod tui;
 mod update;
+
+// Re-export modules moved to caboose-core so existing `crate::` paths keep working.
+use caboose_core::attachment;
+use caboose_core::checkpoint;
+
 
 /// Caboose — a terminal-native AI coding agent
 #[derive(Parser, Debug)]

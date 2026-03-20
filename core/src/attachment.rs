@@ -53,7 +53,7 @@ pub fn media_type_from_ext(path: &Path) -> Option<String> {
 /// Read an image file and create an Attachment.
 pub fn read_image_attachment(
     path: &Path,
-    config: &caboose_core::config::schema::ImagesConfig,
+    config: &crate::config::schema::ImagesConfig,
 ) -> Result<Attachment, String> {
     if !is_image_path(path) {
         return Err(format!("Not a supported image format: {}", path.display()));
@@ -140,7 +140,7 @@ pub fn attachment_from_rgba(
     rgba: Vec<u8>,
     width: usize,
     height: usize,
-    config: &caboose_core::config::schema::ImagesConfig,
+    config: &crate::config::schema::ImagesConfig,
 ) -> Result<Attachment, String> {
     let w: u32 = width
         .try_into()
@@ -158,7 +158,7 @@ pub fn attachment_from_rgba(
     }
 
     // Resize RGBA buffer directly if dimensions exceed limit
-    // (avoids encode → decode → resize → re-encode round-trip)
+    // (avoids encode -> decode -> resize -> re-encode round-trip)
     let max_dim = config.max_dimension();
     let (rgba, w, h) = if config.enabled() && (w > max_dim || h > max_dim) {
         let img_buf = image::RgbaImage::from_raw(w, h, rgba)
@@ -216,7 +216,7 @@ pub fn attachment_from_rgba(
 pub fn compress_image(
     data: &[u8],
     media_type: &str,
-    config: &caboose_core::config::schema::ImagesConfig,
+    config: &crate::config::schema::ImagesConfig,
 ) -> Result<(Vec<u8>, String), String> {
     use image::ImageFormat;
 
@@ -343,7 +343,7 @@ pub fn compress_image(
 }
 
 /// Remove shell-style backslash escapes from a path string.
-/// e.g. `Screen\ shot\ 2026.png` → `Screen shot 2026.png`
+/// e.g. `Screen\ shot\ 2026.png` -> `Screen shot 2026.png`
 ///
 /// Only unescapes `\` before shell-special characters (space, parens, brackets,
 /// quotes, etc.) to avoid mangling Windows path separators like `C:\Users\`.
@@ -443,7 +443,7 @@ pub fn extract_at_image_paths(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use caboose_core::config::schema::ImagesConfig;
+    use crate::config::schema::ImagesConfig;
     use std::io::Write;
 
     fn default_images_config() -> ImagesConfig {
@@ -519,7 +519,6 @@ mod tests {
         let config = default_images_config();
         let png = make_test_png_with_alpha(3000, 3000);
         let (_, media_type) = compress_image(&png, "image/png", &config).unwrap();
-        // Should stay PNG because it has alpha
         assert_eq!(media_type, "image/png");
     }
 
@@ -545,8 +544,6 @@ mod tests {
     #[test]
     fn compress_image_gif_passthrough() {
         let config = default_images_config();
-        // GIFs are short-circuited before decode (media_type check), so even
-        // invalid GIF data passes through unchanged.
         let gif_bytes = b"GIF89a".to_vec();
         let (data, media_type) = compress_image(&gif_bytes, "image/gif", &config).unwrap();
         assert_eq!(data, gif_bytes, "GIF should pass through unchanged");
@@ -587,10 +584,8 @@ mod tests {
         assert!(is_image_path(Path::new("photo.jpeg")));
         assert!(is_image_path(Path::new("photo.webp")));
         assert!(is_image_path(Path::new("photo.gif")));
-        // Case insensitive
         assert!(is_image_path(Path::new("photo.PNG")));
         assert!(is_image_path(Path::new("photo.JPG")));
-        // Non-image extensions
         assert!(!is_image_path(Path::new("file.txt")));
         assert!(!is_image_path(Path::new("file.rs")));
         assert!(!is_image_path(Path::new("noext")));
@@ -598,26 +593,11 @@ mod tests {
 
     #[test]
     fn media_type_from_ext_maps_correctly() {
-        assert_eq!(
-            media_type_from_ext(Path::new("a.png")),
-            Some("image/png".to_string())
-        );
-        assert_eq!(
-            media_type_from_ext(Path::new("a.jpg")),
-            Some("image/jpeg".to_string())
-        );
-        assert_eq!(
-            media_type_from_ext(Path::new("a.jpeg")),
-            Some("image/jpeg".to_string())
-        );
-        assert_eq!(
-            media_type_from_ext(Path::new("a.webp")),
-            Some("image/webp".to_string())
-        );
-        assert_eq!(
-            media_type_from_ext(Path::new("a.gif")),
-            Some("image/gif".to_string())
-        );
+        assert_eq!(media_type_from_ext(Path::new("a.png")), Some("image/png".to_string()));
+        assert_eq!(media_type_from_ext(Path::new("a.jpg")), Some("image/jpeg".to_string()));
+        assert_eq!(media_type_from_ext(Path::new("a.jpeg")), Some("image/jpeg".to_string()));
+        assert_eq!(media_type_from_ext(Path::new("a.webp")), Some("image/webp".to_string()));
+        assert_eq!(media_type_from_ext(Path::new("a.gif")), Some("image/gif".to_string()));
         assert_eq!(media_type_from_ext(Path::new("a.txt")), None);
     }
 
@@ -632,10 +612,7 @@ mod tests {
 
     #[test]
     fn read_image_attachment_nonexistent() {
-        let result = read_image_attachment(
-            Path::new("/nonexistent/photo.png"),
-            &default_images_config(),
-        );
+        let result = read_image_attachment(Path::new("/nonexistent/photo.png"), &default_images_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot read"));
     }
@@ -651,10 +628,8 @@ mod tests {
     fn read_image_attachment_valid_file() {
         let dir = tempfile::tempdir().unwrap();
         let img_path = dir.path().join("test.png");
-        // Write a minimal PNG header
         let mut f = std::fs::File::create(&img_path).unwrap();
-        f.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
-            .unwrap();
+        f.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
         drop(f);
 
         let att = read_image_attachment(&img_path, &default_images_config()).unwrap();
@@ -666,18 +641,16 @@ mod tests {
 
     #[test]
     fn attachment_from_rgba_produces_valid_png() {
-        // 2x2 RGBA image
         let rgba = vec![
-            255, 0, 0, 255, // red
-            0, 255, 0, 255, // green
-            0, 0, 255, 255, // blue
-            255, 255, 0, 255, // yellow
+            255, 0, 0, 255,
+            0, 255, 0, 255,
+            0, 0, 255, 255,
+            255, 255, 0, 255,
         ];
         let att = attachment_from_rgba(rgba, 2, 2, &default_images_config()).unwrap();
         assert_eq!(att.media_type, "image/png");
         assert!(att.display_name.starts_with("clipboard-"));
         assert!(att.display_name.ends_with(".png"));
-        // Verify PNG magic bytes
         assert_eq!(&att.data[..4], &[0x89, b'P', b'N', b'G']);
     }
 
@@ -690,7 +663,6 @@ mod tests {
 
     #[test]
     fn attachment_from_rgba_rejects_mismatched_data() {
-        // 2x2 image needs 16 bytes of RGBA, but we give 4
         let result = attachment_from_rgba(vec![0, 0, 0, 0], 2, 2, &default_images_config());
         assert!(result.is_err());
     }
@@ -785,7 +757,6 @@ mod tests {
         let img = dir.path().join("Screen shot 2026.png");
         std::fs::write(&img, &[0x89]).unwrap();
 
-        // Warp and other terminals paste paths with backslash-escaped spaces
         let escaped = format!("{}/Screen\\ shot\\ 2026.png", dir.path().display());
         let (paths, remainder) = try_attach_pasted_images(&escaped);
         assert_eq!(paths.len(), 1, "should detect shell-escaped image path");
@@ -796,20 +767,10 @@ mod tests {
     #[test]
     fn unescape_shell_path_works() {
         assert_eq!(unescape_shell_path("Screen\\ shot.png"), "Screen shot.png");
-        assert_eq!(
-            unescape_shell_path("no\\ spaces\\ here.png"),
-            "no spaces here.png"
-        );
+        assert_eq!(unescape_shell_path("no\\ spaces\\ here.png"), "no spaces here.png");
         assert_eq!(unescape_shell_path("noescape.png"), "noescape.png");
-        assert_eq!(
-            unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"),
-            "/path/to/Screen shot (1).png"
-        );
-        // Windows path separators should be preserved
-        assert_eq!(
-            unescape_shell_path("C:\\Users\\test\\photo.png"),
-            "C:\\Users\\test\\photo.png"
-        );
+        assert_eq!(unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"), "/path/to/Screen shot (1).png");
+        assert_eq!(unescape_shell_path("C:\\Users\\test\\photo.png"), "C:\\Users\\test\\photo.png");
     }
 
     #[test]
@@ -834,7 +795,6 @@ mod tests {
 
     #[test]
     fn extract_bare_ignores_relative_paths() {
-        // Relative paths should NOT be matched to avoid false positives
         let (paths, remainder) = extract_bare_image_paths("check screenshot.png please");
         assert!(paths.is_empty());
         assert_eq!(remainder, "check screenshot.png please");
@@ -847,10 +807,7 @@ mod tests {
         let img = dir.path().join("Screen shot 2026.png");
         std::fs::write(&img, &[0x89]).unwrap();
 
-        let msg = format!(
-            "{}/Screen\\ shot\\ 2026.png\ndescribe this",
-            dir.path().display()
-        );
+        let msg = format!("{}/Screen\\ shot\\ 2026.png\ndescribe this", dir.path().display());
         let (paths, remainder) = extract_bare_image_paths(&msg);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], img);

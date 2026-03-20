@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::Path;
 
-use crate::agent::tools::ToolResult;
+use crate::tools::ToolResult;
 
 /// Search file contents with a regex pattern.
 pub async fn execute(input: &Value) -> Result<ToolResult> {

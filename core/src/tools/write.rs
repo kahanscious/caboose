@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::agent::tools::ToolResult;
+use crate::tools::ToolResult;
 
 /// Extract path from input, trying common parameter name variants.
 fn resolve_path(input: &Value) -> Option<&str> {

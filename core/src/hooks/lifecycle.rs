@@ -1,6 +1,6 @@
 //! Lifecycle hooks — fire shell commands at agent lifecycle events.
 
-use caboose_core::config::schema::HookEntry;
+use crate::config::schema::HookEntry;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::process::Command;
@@ -313,8 +313,6 @@ mod tests {
 
     #[test]
     fn parse_action_from_session_end_hook() {
-        // SessionEnd hooks are non-blocking — they fire but don't return actions.
-        // Verify the hook infrastructure handles no-action hooks gracefully.
         assert_eq!(parse_action("some log output"), None);
         assert_eq!(parse_action(""), None);
     }

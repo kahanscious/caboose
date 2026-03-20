@@ -1,17 +1,20 @@
 //! Tool registry — definitions and dispatch for all agent tools.
 
+// LSP-dependent tools stay in TUI.
 pub mod diagnostics;
-pub mod executable;
-pub mod fetch;
-pub mod glob;
-pub mod grep;
 pub mod lsp;
-pub mod names;
-pub mod patch;
-pub mod read;
-pub mod shell;
-pub mod web_search;
-pub mod write;
+
+// Re-export tool modules from caboose-core so existing `crate::tools::X` paths keep working.
+pub use caboose_core::tools::executable;
+pub use caboose_core::tools::fetch;
+pub use caboose_core::tools::glob;
+pub use caboose_core::tools::grep;
+pub use caboose_core::tools::names;
+pub use caboose_core::tools::patch;
+pub use caboose_core::tools::read;
+pub use caboose_core::tools::shell;
+pub use caboose_core::tools::web_search;
+pub use caboose_core::tools::write;
 
 use caboose_core::provider::ToolDefinition;
 

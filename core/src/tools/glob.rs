@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::agent::tools::ToolResult;
+use crate::tools::ToolResult;
 
 /// Find files matching a glob pattern.
 pub async fn execute(input: &Value) -> Result<ToolResult> {

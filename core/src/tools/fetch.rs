@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::agent::tools::ToolResult;
+use crate::tools::ToolResult;
 
 /// Fetch content from a URL.
 pub async fn execute(input: &Value) -> Result<ToolResult> {

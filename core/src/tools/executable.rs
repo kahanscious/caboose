@@ -1,5 +1,5 @@
 //! Executable tool discovery and execution — JSON stdin/stdout protocol.
-use caboose_core::config::schema::{CliToolArg, ExecutableToolConfig};
+use crate::config::schema::{CliToolArg, ExecutableToolConfig};
 use std::collections::HashMap;
 
 /// Discovered schema from running `path --schema`.
@@ -82,7 +82,7 @@ pub async fn execute(
     config: &ExecutableToolConfig,
     tool_name: &str,
     input: &serde_json::Value,
-) -> crate::agent::tools::ToolResult {
+) -> crate::tools::ToolResult {
     let timeout_secs = config.timeout.unwrap_or(60);
 
     let exec_input = serde_json::json!({
@@ -119,7 +119,7 @@ pub async fn execute(
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
             if !output.status.success() {
-                return crate::agent::tools::ToolResult {
+                return crate::tools::ToolResult {
                     tool_use_id: String::new(),
                     output: if stderr.is_empty() { stdout } else { stderr },
                     is_error: true,
@@ -139,7 +139,7 @@ pub async fn execute(
                     .get("is_error")
                     .and_then(|e| e.as_bool())
                     .unwrap_or(false);
-                return crate::agent::tools::ToolResult {
+                return crate::tools::ToolResult {
                     tool_use_id: String::new(),
                     output: output_text.to_string(),
                     is_error,
@@ -152,7 +152,7 @@ pub async fn execute(
             }
 
             // Plain text output
-            crate::agent::tools::ToolResult {
+            crate::tools::ToolResult {
                 tool_use_id: String::new(),
                 output: stdout,
                 is_error: false,
@@ -163,7 +163,7 @@ pub async fn execute(
                 lines_removed: 0,
             }
         }
-        Ok(Err(e)) => crate::agent::tools::ToolResult {
+        Ok(Err(e)) => crate::tools::ToolResult {
             tool_use_id: String::new(),
             output: format!("Failed to execute tool: {e}"),
             is_error: true,
@@ -173,7 +173,7 @@ pub async fn execute(
             lines_added: 0,
             lines_removed: 0,
         },
-        Err(_) => crate::agent::tools::ToolResult {
+        Err(_) => crate::tools::ToolResult {
             tool_use_id: String::new(),
             output: format!("Tool '{tool_name}' timed out after {timeout_secs}s"),
             is_error: true,

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::agent::tools::ToolResult;
+use crate::tools::ToolResult;
 
 /// Apply a unified diff to one or more files.
 pub async fn execute(input: &Value) -> Result<ToolResult> {
@@ -490,7 +490,7 @@ fn context_matches(lines: &[String], start: usize, expected: &[&str]) -> bool {
     true
 }
 
-/// Search ±30 lines around the declared position for a context match.
+/// Search +-30 lines around the declared position for a context match.
 fn find_context_match(lines: &[String], declared: usize, expected: &[&str]) -> Option<usize> {
     if expected.is_empty() {
         return Some(declared.min(lines.len()));
@@ -805,7 +805,6 @@ mod tests {
 
     #[test]
     fn parse_diff_with_git_prefix_lines() {
-        // Models often emit `diff --git` lines before the --- / +++ headers
         let diff = "\
 diff --git a/src/main.rs b/src/main.rs
 --- a/src/main.rs
@@ -844,14 +843,12 @@ diff --git a/b.rs b/b.rs
 
     #[test]
     fn parse_hunk_header_with_section_label() {
-        // `@@ -10,5 +10,7 @@ fn some_function()` — git adds function context
         let (os, oc, ns, nc) = parse_hunk_header("@@ -10,5 +10,7 @@ fn some_function()").unwrap();
         assert_eq!((os, oc, ns, nc), (10, 5, 10, 7));
     }
 
     #[test]
     fn apply_multiple_hunks_same_file() {
-        // Two non-overlapping hunks in the same file
         let original = "a\nb\nc\nd\ne\nf\ng\nh";
         let hunks = vec![
             Hunk {
@@ -871,7 +868,6 @@ diff --git a/b.rs b/b.rs
 
     #[test]
     fn apply_hunk_pure_addition() {
-        // Adding lines without removing any (common LLM pattern)
         let original = "line1\nline2\nline3";
         let hunks = vec![Hunk {
             original_start: 2,
@@ -924,7 +920,6 @@ diff --git a/b.rs b/b.rs
 
     #[test]
     fn parse_no_newline_at_eof_marker() {
-        // Models sometimes include the `\ No newline at end of file` marker
         let diff = "\
 --- a/f.txt
 +++ b/f.txt
@@ -937,7 +932,6 @@ diff --git a/b.rs b/b.rs
         let files = parse_patch(diff);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].hunks.len(), 1);
-        // Parser should still extract the correct +/- lines
         let hunk = &files[0].hunks[0];
         assert!(hunk.lines.iter().any(|l| l == "-line2"));
         assert!(hunk.lines.iter().any(|l| l == "+LINE2"));
@@ -945,7 +939,6 @@ diff --git a/b.rs b/b.rs
 
     #[tokio::test]
     async fn end_to_end_create_and_modify() {
-        // Full flow: create a file via patch, then modify it via a second patch
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("new_file.txt");
         let file_str = file.to_str().unwrap();
@@ -1012,7 +1005,6 @@ diff --git a/b.rs b/b.rs
 
     #[tokio::test]
     async fn fenced_diff_applies_end_to_end() {
-        // LLMs commonly wrap diffs in markdown fences
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("fenced.txt");
         std::fs::write(&file, "old_line").unwrap();
