@@ -11349,10 +11349,55 @@ impl App {
     /// Handle /pin — add a pinned rule, auto-creates session from home screen.
     fn handle_pin_command(&mut self, slash: &str) {
         let args = slash.strip_prefix("pin").unwrap_or("").trim();
+
+        // /pin --save <text> — append rule to CABOOSE.md (persistent across sessions)
+        if let Some(save_text) = args.strip_prefix("--save") {
+            let save_text = save_text.trim();
+            if save_text.is_empty() {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Usage: /pin --save <text>".to_string(),
+                });
+                self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+                self.state.dialog_stack.clear();
+                return;
+            }
+            let caboose_path = self.state.primary_root.join("CABOOSE.md");
+            let mut content = std::fs::read_to_string(&caboose_path).unwrap_or_default();
+            if content.is_empty() {
+                content = "# CABOOSE.md\n\n## Rules\n".to_string();
+            }
+            // Append under a Rules section if it exists, otherwise at the end
+            if !content.contains("## Rules") {
+                content.push_str("\n## Rules\n");
+            }
+            content.push_str(&format!("\n- {save_text}\n"));
+            match std::fs::write(&caboose_path, &content) {
+                Ok(()) => {
+                    // Also add as a session pin for immediate effect
+                    self.state.pins.push(save_text.to_string());
+                    self.sync_pins_to_system_prompt();
+                    if let Some(ref sid) = self.state.current_session_id {
+                        let _ = self.state.sessions.update_pins(sid, &self.state.pins);
+                    }
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Saved to CABOOSE.md and pinned: {save_text}"),
+                    });
+                }
+                Err(e) => {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to write CABOOSE.md: {e}"),
+                    });
+                }
+            }
+            self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
+            self.state.dialog_stack.clear();
+            return;
+        }
+
         let text = args.to_string();
         if text.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
-                content: "Usage: /pin <text>".to_string(),
+                content: "Usage: /pin <text>  or  /pin --save <text>".to_string(),
             });
             // Still switch to chat so the error is visible
             self.state.dialog_stack.base = crate::tui::dialog::Screen::Chat;
