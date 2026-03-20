@@ -525,6 +525,176 @@ impl ProviderRegistry {
                 }
                 Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
             }
+            "ai21" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("ai21")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for ai21. Set AI21_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("jamba-1.5-large").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.ai21.com/studio/v1".to_string())
+                    .with_provider_name("ai21".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("jamba-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "moonshot" | "kimi" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("moonshot")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for moonshot. Set MOONSHOT_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("moonshot-v1-128k").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.moonshot.ai/v1".to_string())
+                    .with_provider_name("moonshot".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("moonshot-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "yi" | "01ai" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("yi")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for yi. Set YI_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("yi-large").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.01.ai/v1".to_string())
+                    .with_provider_name("yi".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("yi-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "zhipu" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("zhipu")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for zhipu. Set ZHIPU_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("glm-4-plus").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://open.bigmodel.cn/api/paas/v4".to_string())
+                    .with_provider_name("zhipu".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("glm-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "novita" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("novita")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for novita. Set NOVITA_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("deepseek/deepseek-v3-0324").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.novita.ai/v3/openai".to_string())
+                    .with_provider_name("novita".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "inflection" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("inflection")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for inflection. Set INFLECTION_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("inflection-3-pi").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.inflection.ai/v1".to_string())
+                    .with_provider_name("inflection".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("inflection-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "huggingface" | "hf" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("huggingface")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for huggingface. Set HF_TOKEN or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model
+                    .unwrap_or("meta-llama/Llama-3.3-70B-Instruct")
+                    .to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://router.huggingface.co/v1".to_string())
+                    .with_provider_name("huggingface".to_string())
+                    .with_model_filter(None);
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
+            "reka" => {
+                let api_key = self
+                    .config
+                    .keys
+                    .get("reka")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No API key for reka. Set REKA_API_KEY or add to config."
+                        )
+                    })?
+                    .to_string();
+                let model = model.unwrap_or("reka-core").to_string();
+                let mut provider = openai::OpenAiProvider::new(api_key, model)
+                    .with_base_url("https://api.reka.ai/v1".to_string())
+                    .with_provider_name("reka".to_string())
+                    .with_model_filter(Some(|id: &str| id.starts_with("reka-")));
+                if let Some(base_url) = provider_cfg.and_then(|c| c.base_url.as_deref()) {
+                    provider = provider.with_base_url(base_url.to_string());
+                }
+                Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
+            }
             "qwen" | "dashscope" => {
                 let api_key = self
                     .config
@@ -585,7 +755,7 @@ impl ProviderRegistry {
                 Ok(Box::new(retry::RetryProvider::new(Arc::new(provider))))
             }
             other => bail!(
-                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, deepseek, groq, mistral, xai, together, fireworks, cerebras, sambanova, perplexity, cohere, qwen, ollama, lmstudio, llamacpp, custom"
+                "Unknown provider: '{other}'. Supported: anthropic, openai, gemini, openrouter, ai21, cerebras, cohere, deepseek, fireworks, groq, huggingface, inflection, mistral, moonshot, novita, perplexity, qwen, reka, sambanova, together, xai, yi, zhipu, ollama, lmstudio, llamacpp, custom"
             ),
         }
     }
@@ -686,10 +856,18 @@ mod tests {
         let registry = ProviderRegistry::new(&config);
         let result = registry.get_provider(Some("not-a-provider"), None);
         let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("ai21"));
         assert!(msg.contains("deepseek"));
         assert!(msg.contains("groq"));
+        assert!(msg.contains("huggingface"));
+        assert!(msg.contains("inflection"));
         assert!(msg.contains("mistral"));
+        assert!(msg.contains("moonshot"));
+        assert!(msg.contains("novita"));
+        assert!(msg.contains("reka"));
         assert!(msg.contains("xai"));
+        assert!(msg.contains("yi"));
+        assert!(msg.contains("zhipu"));
         assert!(msg.contains("together"));
         assert!(msg.contains("fireworks"));
         assert!(msg.contains("cerebras"));
@@ -987,6 +1165,270 @@ mod tests {
         let registry = ProviderRegistry::new(&config);
         let provider = registry.get_provider(Some("dashscope"), None).unwrap();
         assert_eq!(provider.name(), "qwen");
+    }
+
+    // --- AI21 Labs ---
+
+    #[test]
+    fn ai21_provider_has_correct_name_and_model() {
+        let config = config_with_key("ai21", "ai21-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("ai21"), None).unwrap();
+        assert_eq!(provider.name(), "ai21");
+        assert_eq!(provider.model(), "jamba-1.5-large");
+    }
+
+    #[test]
+    fn ai21_provider_respects_model_override() {
+        let config = config_with_key("ai21", "ai21-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("ai21"), Some("jamba-1.5-mini"))
+            .unwrap();
+        assert_eq!(provider.model(), "jamba-1.5-mini");
+    }
+
+    #[test]
+    fn missing_ai21_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("ai21"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("AI21_API_KEY"));
+    }
+
+    // --- Moonshot AI ---
+
+    #[test]
+    fn moonshot_provider_has_correct_name_and_model() {
+        let config = config_with_key("moonshot", "ms-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("moonshot"), None).unwrap();
+        assert_eq!(provider.name(), "moonshot");
+        assert_eq!(provider.model(), "moonshot-v1-128k");
+    }
+
+    #[test]
+    fn moonshot_provider_respects_model_override() {
+        let config = config_with_key("moonshot", "ms-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("moonshot"), Some("moonshot-v1-32k"))
+            .unwrap();
+        assert_eq!(provider.model(), "moonshot-v1-32k");
+    }
+
+    #[test]
+    fn missing_moonshot_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("moonshot"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("MOONSHOT_API_KEY"));
+    }
+
+    #[test]
+    fn kimi_alias_resolves_to_moonshot() {
+        let config = config_with_key("moonshot", "ms-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("kimi"), None).unwrap();
+        assert_eq!(provider.name(), "moonshot");
+    }
+
+    // --- 01.AI (Yi) ---
+
+    #[test]
+    fn yi_provider_has_correct_name_and_model() {
+        let config = config_with_key("yi", "yi-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("yi"), None).unwrap();
+        assert_eq!(provider.name(), "yi");
+        assert_eq!(provider.model(), "yi-large");
+    }
+
+    #[test]
+    fn yi_provider_respects_model_override() {
+        let config = config_with_key("yi", "yi-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("yi"), Some("yi-medium"))
+            .unwrap();
+        assert_eq!(provider.model(), "yi-medium");
+    }
+
+    #[test]
+    fn missing_yi_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("yi"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("YI_API_KEY"));
+    }
+
+    #[test]
+    fn o1ai_alias_resolves_to_yi() {
+        let config = config_with_key("yi", "yi-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("01ai"), None).unwrap();
+        assert_eq!(provider.name(), "yi");
+    }
+
+    // --- Zhipu AI ---
+
+    #[test]
+    fn zhipu_provider_has_correct_name_and_model() {
+        let config = config_with_key("zhipu", "zhipu-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("zhipu"), None).unwrap();
+        assert_eq!(provider.name(), "zhipu");
+        assert_eq!(provider.model(), "glm-4-plus");
+    }
+
+    #[test]
+    fn zhipu_provider_respects_model_override() {
+        let config = config_with_key("zhipu", "zhipu-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("zhipu"), Some("glm-4"))
+            .unwrap();
+        assert_eq!(provider.model(), "glm-4");
+    }
+
+    #[test]
+    fn missing_zhipu_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("zhipu"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("ZHIPU_API_KEY"));
+    }
+
+    // --- Novita AI ---
+
+    #[test]
+    fn novita_provider_has_correct_name_and_model() {
+        let config = config_with_key("novita", "novita-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("novita"), None).unwrap();
+        assert_eq!(provider.name(), "novita");
+        assert_eq!(provider.model(), "deepseek/deepseek-v3-0324");
+    }
+
+    #[test]
+    fn novita_provider_respects_model_override() {
+        let config = config_with_key("novita", "novita-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("novita"), Some("meta-llama/llama-3.3-70b"))
+            .unwrap();
+        assert_eq!(provider.model(), "meta-llama/llama-3.3-70b");
+    }
+
+    #[test]
+    fn missing_novita_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("novita"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("NOVITA_API_KEY"));
+    }
+
+    // --- Inflection AI ---
+
+    #[test]
+    fn inflection_provider_has_correct_name_and_model() {
+        let config = config_with_key("inflection", "inf-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("inflection"), None).unwrap();
+        assert_eq!(provider.name(), "inflection");
+        assert_eq!(provider.model(), "inflection-3-pi");
+    }
+
+    #[test]
+    fn inflection_provider_respects_model_override() {
+        let config = config_with_key("inflection", "inf-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("inflection"), Some("inflection-3-productivity"))
+            .unwrap();
+        assert_eq!(provider.model(), "inflection-3-productivity");
+    }
+
+    #[test]
+    fn missing_inflection_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("inflection"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("INFLECTION_API_KEY"));
+    }
+
+    // --- Hugging Face ---
+
+    #[test]
+    fn huggingface_provider_has_correct_name_and_model() {
+        let config = config_with_key("huggingface", "hf-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("huggingface"), None).unwrap();
+        assert_eq!(provider.name(), "huggingface");
+        assert_eq!(provider.model(), "meta-llama/Llama-3.3-70B-Instruct");
+    }
+
+    #[test]
+    fn huggingface_provider_respects_model_override() {
+        let config = config_with_key("huggingface", "hf-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("huggingface"), Some("mistralai/Mistral-7B-Instruct-v0.3"))
+            .unwrap();
+        assert_eq!(provider.model(), "mistralai/Mistral-7B-Instruct-v0.3");
+    }
+
+    #[test]
+    fn missing_huggingface_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("huggingface"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("HF_TOKEN"));
+    }
+
+    #[test]
+    fn hf_alias_resolves_to_huggingface() {
+        let config = config_with_key("huggingface", "hf-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("hf"), None).unwrap();
+        assert_eq!(provider.name(), "huggingface");
+    }
+
+    // --- Reka AI ---
+
+    #[test]
+    fn reka_provider_has_correct_name_and_model() {
+        let config = config_with_key("reka", "reka-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry.get_provider(Some("reka"), None).unwrap();
+        assert_eq!(provider.name(), "reka");
+        assert_eq!(provider.model(), "reka-core");
+    }
+
+    #[test]
+    fn reka_provider_respects_model_override() {
+        let config = config_with_key("reka", "reka-test");
+        let registry = ProviderRegistry::new(&config);
+        let provider = registry
+            .get_provider(Some("reka"), Some("reka-flash"))
+            .unwrap();
+        assert_eq!(provider.model(), "reka-flash");
+    }
+
+    #[test]
+    fn missing_reka_key_returns_error() {
+        let config = Config::default();
+        let registry = ProviderRegistry::new(&config);
+        let result = registry.get_provider(Some("reka"), None);
+        let msg = result.err().expect("expected error").to_string();
+        assert!(msg.contains("REKA_API_KEY"));
     }
 
     #[test]

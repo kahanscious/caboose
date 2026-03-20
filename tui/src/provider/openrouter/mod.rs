@@ -98,10 +98,10 @@ impl OpenRouterProvider {
                 if input_per_token > 0.0 || output_per_token > 0.0 {
                     pricing.push((
                         m.id,
-                        crate::provider::pricing::ModelPricing {
-                            input_per_m: input_per_token * 1_000_000.0,
-                            output_per_m: output_per_token * 1_000_000.0,
-                        },
+                        crate::provider::pricing::ModelPricing::standard(
+                            input_per_token * 1_000_000.0,
+                            output_per_token * 1_000_000.0,
+                        ),
                     ));
                 }
             }

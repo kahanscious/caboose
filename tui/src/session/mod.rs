@@ -21,6 +21,12 @@ pub struct Session {
     pub parent_session_id: Option<String>,
     pub fork_message_count: Option<u32>,
     pub pins: Vec<String>,
+    /// Total input tokens consumed in this session.
+    pub total_input_tokens: u64,
+    /// Total output tokens consumed in this session.
+    pub total_output_tokens: u64,
+    /// Total estimated cost in USD for this session.
+    pub total_cost_usd: f64,
 }
 
 /// Manages session lifecycle.
@@ -58,6 +64,9 @@ impl SessionManager {
             parent_session_id: parent_session_id.map(|s| s.to_string()),
             fork_message_count,
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         };
         self.storage.insert_session(&session)?;
         Ok(session)

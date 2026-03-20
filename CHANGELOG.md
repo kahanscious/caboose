@@ -5,6 +5,26 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-03-20
+
+### Added
+
+- **8 new LLM providers** — AI21 Labs, Moonshot AI (Kimi), 01.AI (Yi), Zhipu AI (GLM), Novita AI, Inflection AI, Hugging Face, Reka AI. Caboose now supports 23 API providers + 4 local options. Aliases: `kimi` → moonshot, `01ai` → yi, `hf` → huggingface.
+- **Cache-aware cost calculation** — `cache_read_tokens` and `cache_creation_tokens` now factor into cost estimates. Anthropic models use explicit rates from docs (10% for cache reads, 125% for cache creation). All providers use default cache rates.
+- **Session cost persistence** — `total_input_tokens`, `total_output_tokens`, and `total_cost_usd` saved to the session SQLite table. Auto-migrates existing databases.
+- **`/cost` command** — alias for `/status`, opens the session status dialog showing provider, tokens, cost, and per-M rates.
+- **`/checkpoint <name>`** — save a named checkpoint at the current state. Named checkpoints appear in the `/rewind` picker with their name instead of a prompt preview.
+- **Diff preview on rewind** — after rewinding via `/rewind`, the system message now includes per-file detail: which files were restored (with +/- line counts) and which were deleted.
+- **`compaction_model` config wired** — set `compaction_model = "claude-haiku-4-5-20251001"` in `[behavior]` config to use a cheaper model for context compaction summarization. Falls back to active model if resolution fails.
+- **Pricing for new providers** — 15 new model entries across AI21, Moonshot, Yi, Zhipu, Novita, Inflection, Hugging Face, and Reka.
+
+### Changed
+
+- **Pricing refactored** — `ModelPricing::standard()` helper with default cache rates. `estimate_cost_with_cache()` method for full cache-aware cost breakdown.
+- **README updated** — added documentation for hooks/lifecycle events, context compaction, checkpoint/rewind, and cost tracking. Provider count updated to 23+.
+
+---
+
 ## [0.6.3] - 2026-03-19
 
 ### Added

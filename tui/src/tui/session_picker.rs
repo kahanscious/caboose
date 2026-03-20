@@ -256,6 +256,9 @@ mod tests {
             parent_session_id: None,
             fork_message_count: None,
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         }
     }
 

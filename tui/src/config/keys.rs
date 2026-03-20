@@ -20,6 +20,14 @@ pub struct ApiKeys {
     pub perplexity: Option<String>,
     pub cohere: Option<String>,
     pub qwen: Option<String>,
+    pub ai21: Option<String>,
+    pub moonshot: Option<String>,
+    pub yi: Option<String>,
+    pub zhipu: Option<String>,
+    pub novita: Option<String>,
+    pub inflection: Option<String>,
+    pub huggingface: Option<String>,
+    pub reka: Option<String>,
 }
 
 impl ApiKeys {
@@ -41,6 +49,14 @@ impl ApiKeys {
         load_env(&mut self.perplexity, "PERPLEXITY_API_KEY");
         load_env(&mut self.cohere, "COHERE_API_KEY");
         load_env(&mut self.qwen, "DASHSCOPE_API_KEY");
+        load_env(&mut self.ai21, "AI21_API_KEY");
+        load_env(&mut self.moonshot, "MOONSHOT_API_KEY");
+        load_env(&mut self.yi, "YI_API_KEY");
+        load_env(&mut self.zhipu, "ZHIPU_API_KEY");
+        load_env(&mut self.novita, "NOVITA_API_KEY");
+        load_env(&mut self.inflection, "INFLECTION_API_KEY");
+        load_env(&mut self.huggingface, "HF_TOKEN");
+        load_env(&mut self.reka, "REKA_API_KEY");
     }
 
     /// Merge another keys set into this one (other takes precedence).
@@ -60,6 +76,14 @@ impl ApiKeys {
         merge_opt(&mut self.perplexity, other.perplexity);
         merge_opt(&mut self.cohere, other.cohere);
         merge_opt(&mut self.qwen, other.qwen);
+        merge_opt(&mut self.ai21, other.ai21);
+        merge_opt(&mut self.moonshot, other.moonshot);
+        merge_opt(&mut self.yi, other.yi);
+        merge_opt(&mut self.zhipu, other.zhipu);
+        merge_opt(&mut self.novita, other.novita);
+        merge_opt(&mut self.inflection, other.inflection);
+        merge_opt(&mut self.huggingface, other.huggingface);
+        merge_opt(&mut self.reka, other.reka);
     }
 
     /// Set a key for a provider by name.
@@ -80,6 +104,14 @@ impl ApiKeys {
             "perplexity" => self.perplexity = Some(key),
             "cohere" => self.cohere = Some(key),
             "qwen" | "dashscope" => self.qwen = Some(key),
+            "ai21" => self.ai21 = Some(key),
+            "moonshot" | "kimi" => self.moonshot = Some(key),
+            "yi" | "01ai" => self.yi = Some(key),
+            "zhipu" => self.zhipu = Some(key),
+            "novita" => self.novita = Some(key),
+            "inflection" => self.inflection = Some(key),
+            "huggingface" | "hf" => self.huggingface = Some(key),
+            "reka" => self.reka = Some(key),
             _ => {}
         }
     }
@@ -102,6 +134,14 @@ impl ApiKeys {
             "perplexity",
             "cohere",
             "qwen",
+            "ai21",
+            "moonshot",
+            "yi",
+            "zhipu",
+            "novita",
+            "inflection",
+            "huggingface",
+            "reka",
         ];
         for &p in &providers {
             if let Some(key) = store.get(p) {
@@ -128,6 +168,14 @@ impl ApiKeys {
             "perplexity" => self.perplexity = None,
             "cohere" => self.cohere = None,
             "qwen" | "dashscope" => self.qwen = None,
+            "ai21" => self.ai21 = None,
+            "moonshot" | "kimi" => self.moonshot = None,
+            "yi" | "01ai" => self.yi = None,
+            "zhipu" => self.zhipu = None,
+            "novita" => self.novita = None,
+            "inflection" => self.inflection = None,
+            "huggingface" | "hf" => self.huggingface = None,
+            "reka" => self.reka = None,
             _ => {}
         }
     }
@@ -150,6 +198,14 @@ impl ApiKeys {
             "perplexity" => self.perplexity.as_deref(),
             "cohere" => self.cohere.as_deref(),
             "qwen" | "dashscope" => self.qwen.as_deref(),
+            "ai21" => self.ai21.as_deref(),
+            "moonshot" | "kimi" => self.moonshot.as_deref(),
+            "yi" | "01ai" => self.yi.as_deref(),
+            "zhipu" => self.zhipu.as_deref(),
+            "novita" => self.novita.as_deref(),
+            "inflection" => self.inflection.as_deref(),
+            "huggingface" | "hf" => self.huggingface.as_deref(),
+            "reka" => self.reka.as_deref(),
             _ => None,
         }
     }

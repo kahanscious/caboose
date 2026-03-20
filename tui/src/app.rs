@@ -1015,6 +1015,9 @@ impl App {
             provider,
         };
 
+        // Resolve dedicated compaction provider (if configured)
+        app.resolve_compaction_provider();
+
         // Fetch OpenRouter pricing at startup so sidebar shows costs immediately
         if app.state.active_provider_name == "openrouter"
             && let Some(api_key) = app.state.config.keys.get("openrouter")
@@ -1025,7 +1028,9 @@ impl App {
             );
             if let Ok((models, pricing_entries)) = or_provider.list_models_with_pricing().await {
                 for (model_id, model_pricing) in &pricing_entries {
-                    app.state.pricing.insert(model_id.clone(), *model_pricing);
+                    app.state
+                        .pricing
+                        .insert_with_cross_map(model_id.clone(), *model_pricing);
                 }
                 // Set capabilities for the active model from the fetched list
                 if let Some(info) = models.iter().find(|m| m.id == app.state.active_model_name) {
@@ -1034,6 +1039,11 @@ impl App {
                     app.state.model_supports_thinking = info.supports_thinking;
                 }
             }
+        }
+
+        // Load user pricing overrides from config (highest priority — applied last)
+        if !app.state.config.pricing.is_empty() {
+            app.state.pricing.load_from_config(&app.state.config.pricing);
         }
 
         // For non-OpenRouter providers, look up capabilities from the provider's model list
@@ -1290,6 +1300,9 @@ impl App {
                 parent_session_id: None,
                 fork_message_count: None,
                 pins: vec![],
+                total_input_tokens: self.state.session_input_tokens,
+                total_output_tokens: self.state.session_output_tokens,
+                total_cost_usd: self.state.session_cost,
             };
             if let Err(e) = self.state.sessions.update(&session) {
                 tracing::warn!("Failed to update session: {e}");
@@ -1407,6 +1420,7 @@ impl App {
                 self.state.active_provider_name = p.name().to_string();
                 self.state.active_model_name = p.model().to_string();
                 self.provider = Some(p);
+                self.resolve_compaction_provider();
                 true
             }
             Err(_) => {
@@ -1417,6 +1431,38 @@ impl App {
                 });
                 false
             }
+        }
+    }
+
+    /// Resolve the `compaction_model` config to a dedicated compaction provider.
+    /// Uses the active provider name with a model override. Falls back silently on error.
+    fn resolve_compaction_provider(&mut self) {
+        let model = self
+            .state
+            .config
+            .behavior
+            .as_ref()
+            .and_then(|b| b.compaction_model.clone());
+        if let Some(model) = model {
+            match self
+                .state
+                .providers
+                .get_provider(Some(&self.state.active_provider_name), Some(&model))
+            {
+                Ok(p) => {
+                    tracing::info!(compaction_model = %model, "Resolved compaction provider");
+                    self.state.agent.compaction_provider = Some(p);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        compaction_model = %model,
+                        "Failed to resolve compaction_model, using active provider: {e}"
+                    );
+                    self.state.agent.compaction_provider = None;
+                }
+            }
+        } else {
+            self.state.agent.compaction_provider = None;
         }
     }
 
@@ -4251,20 +4297,6 @@ impl App {
                                 self.state.input.set(&message);
                                 return;
                             }
-                            // NOTE: compaction_model override deferred to post-launch.
-                            // When wired, resolve compaction_model to a Provider via ProviderRegistry.
-                            if let Some(ref model) = self
-                                .state
-                                .config
-                                .behavior
-                                .as_ref()
-                                .and_then(|b| b.compaction_model.clone())
-                            {
-                                tracing::info!(
-                                    compaction_model = %model,
-                                    "compaction_model configured but not yet wired — using active provider"
-                                );
-                            }
                             // Fire PreCompact hooks and collect must_keep context
                             let must_keep_context = if let Some(ref hooks_config) =
                                 self.state.config.hooks
@@ -5135,57 +5167,85 @@ impl App {
                     }
                 }
             }
-            DropdownMode::Providers => {
-                use crate::provider::catalog;
-                let needle = auto.filter.to_lowercase();
-                let filtered: Vec<&catalog::ProviderEntry> = catalog::CATALOG
-                    .iter()
-                    .filter(|e| {
-                        needle.is_empty()
-                            || e.display_name.to_lowercase().contains(&needle)
-                            || e.id.to_lowercase().contains(&needle)
-                    })
-                    .collect();
-                let selected_id = filtered.get(auto.selected).map(|e| e.id.to_string());
-                if let Some(provider_id) = selected_id {
-                    self.state.slash_auto = None;
-                    self.state.input.clear();
+            DropdownMode::Providers { .. } => {
+                use crate::tui::slash_auto::build_provider_entries;
+                let collapsed_snapshot = if let DropdownMode::Providers { ref collapsed } =
+                    auto.mode
+                {
+                    collapsed.clone()
+                } else {
+                    std::collections::HashSet::new()
+                };
+                let entries = build_provider_entries(
+                    &auto.filter,
+                    &collapsed_snapshot,
+                    &self.state.discovered_locals,
+                );
+                if let Some(entry) = entries.get(auto.selected) {
+                    match entry {
+                        crate::tui::slash_auto::ProviderPickerEntry::GroupHeader(group_id) => {
+                            // Toggle collapse
+                            let group_id = group_id.clone();
+                            if let Some(ref mut auto) = self.state.slash_auto
+                                && let DropdownMode::Providers {
+                                    ref mut collapsed, ..
+                                } = auto.mode
+                            {
+                                if collapsed.contains(&group_id) {
+                                    collapsed.remove(&group_id);
+                                } else {
+                                    collapsed.insert(group_id);
+                                }
+                            }
+                        }
+                        crate::tui::slash_auto::ProviderPickerEntry::Provider(provider_id) => {
+                            let provider_id = provider_id.clone();
+                            self.state.slash_auto = None;
+                            self.state.input.clear();
 
-                    // Local providers use address+probe flow instead of API key
-                    if crate::provider::catalog::by_id(&provider_id)
-                        .map(|p| p.is_local())
-                        .unwrap_or(false)
-                    {
-                        let entry = crate::provider::catalog::by_id(&provider_id).unwrap();
-                        let server_type = match provider_id.as_str() {
-                            "ollama" => crate::provider::local::LocalServerType::Ollama,
-                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
-                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
-                            _ => crate::provider::local::LocalServerType::Custom,
-                        };
-                        self.state
-                            .dialog_stack
-                            .push(DialogKind::LocalProviderConnect(
-                                crate::tui::dialog::LocalProviderConnectState {
-                                    provider_id: provider_id.clone(),
-                                    provider_name: entry.display_name.to_string(),
-                                    address: server_type.default_address().to_string(),
-                                    models: vec![],
-                                    selected_model: 0,
-                                    phase: crate::tui::dialog::LocalConnectPhase::Address,
-                                    error: None,
-                                    probe_rx: None,
-                                },
-                            ));
-                    } else {
-                        // Always show key input so user can add, update, or clear their key
-                        let has_existing = self.state.config.keys.get(&provider_id).is_some();
-                        self.state
-                            .dialog_stack
-                            .push(DialogKind::ApiKeyInput(KeyInputState::new(
-                                provider_id,
-                                has_existing,
-                            )));
+                            // Local providers use address+probe flow instead of API key
+                            if crate::provider::catalog::by_id(&provider_id)
+                                .map(|p| p.is_local())
+                                .unwrap_or(false)
+                            {
+                                let entry =
+                                    crate::provider::catalog::by_id(&provider_id).unwrap();
+                                let server_type = match provider_id.as_str() {
+                                    "ollama" => crate::provider::local::LocalServerType::Ollama,
+                                    "lmstudio" => {
+                                        crate::provider::local::LocalServerType::LmStudio
+                                    }
+                                    "llamacpp" => {
+                                        crate::provider::local::LocalServerType::LlamaCpp
+                                    }
+                                    _ => crate::provider::local::LocalServerType::Custom,
+                                };
+                                self.state.dialog_stack.push(
+                                    DialogKind::LocalProviderConnect(
+                                        crate::tui::dialog::LocalProviderConnectState {
+                                            provider_id: provider_id.clone(),
+                                            provider_name: entry.display_name.to_string(),
+                                            address: server_type
+                                                .default_address()
+                                                .to_string(),
+                                            models: vec![],
+                                            selected_model: 0,
+                                            phase:
+                                                crate::tui::dialog::LocalConnectPhase::Address,
+                                            error: None,
+                                            probe_rx: None,
+                                        },
+                                    ),
+                                );
+                            } else {
+                                // Always show key input so user can add, update, or clear their key
+                                let has_existing =
+                                    self.state.config.keys.get(&provider_id).is_some();
+                                self.state.dialog_stack.push(DialogKind::ApiKeyInput(
+                                    KeyInputState::new(provider_id, has_existing),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -5403,14 +5463,41 @@ impl App {
                 if let Some((id, preview, _, _)) = items.get(auto.selected) {
                     let checkpoint_id = *id;
                     let preview = preview.clone();
+                    // Collect preview before rewinding
+                    let preview_entries = self.state.checkpoints.preview(checkpoint_id).ok();
                     self.state.slash_auto = None;
                     self.state.input.clear();
                     match self.state.checkpoints.rewind(checkpoint_id) {
                         Ok(summary) => {
                             // Recompute modified_files from baselines (files are now restored on disk)
                             self.recompute_modified_files();
+                            let mut msg = format!("Rewound to before \"{preview}\". {summary}");
+                            if let Some(entries) = preview_entries
+                                && !entries.is_empty()
+                            {
+                                    msg.push('\n');
+                                    for entry in &entries {
+                                        match &entry.action {
+                                            crate::checkpoint::PreviewAction::Restore { lines_added, lines_removed } => {
+                                                msg.push_str(&format!(
+                                                    "\n  Restore: {} (+{} -{})",
+                                                    entry.path.display(),
+                                                    lines_added,
+                                                    lines_removed,
+                                                ));
+                                            }
+                                            crate::checkpoint::PreviewAction::Delete => {
+                                                msg.push_str(&format!(
+                                                    "\n  Delete: {}",
+                                                    entry.path.display(),
+                                                ));
+                                            }
+                                            crate::checkpoint::PreviewAction::NoChange => {}
+                                        }
+                                    }
+                            }
                             self.state.chat_messages.push(ChatMessage::System {
-                                content: format!("Rewound to before \"{preview}\". {summary}"),
+                                content: msg,
                             });
                         }
                         Err(e) => {
@@ -5535,17 +5622,13 @@ impl App {
                 &auto.filter,
                 collapsed,
             ),
-            DropdownMode::Providers => {
-                use crate::provider::catalog;
-                let needle = auto.filter.to_lowercase();
-                catalog::CATALOG
-                    .iter()
-                    .filter(|e| {
-                        needle.is_empty()
-                            || e.display_name.to_lowercase().contains(&needle)
-                            || e.id.to_lowercase().contains(&needle)
-                    })
-                    .count()
+            DropdownMode::Providers { collapsed } => {
+                crate::tui::slash_auto::build_provider_entries(
+                    &auto.filter,
+                    collapsed,
+                    &self.state.discovered_locals,
+                )
+                .len()
             }
             DropdownMode::McpServers { servers } => {
                 servers.len() + 1 // +1 for "Add new server"
@@ -5597,6 +5680,7 @@ impl App {
                     ),
                 });
                 self.provider = Some(p);
+                self.resolve_compaction_provider();
 
                 // Persist last-used provider so we reconnect on restart
                 let mut prefs = crate::config::prefs::TuiPrefs::load();
@@ -7169,7 +7253,9 @@ impl App {
                     match or_provider.list_models_with_pricing().await {
                         Ok((model_list, pricing_entries)) => {
                             for (model_id, model_pricing) in pricing_entries {
-                                self.state.pricing.insert(model_id, model_pricing);
+                                self.state
+                                    .pricing
+                                    .insert_with_cross_map(model_id, model_pricing);
                             }
                             for m in model_list {
                                 models.push((active.clone(), m));
@@ -7207,7 +7293,9 @@ impl App {
             if let Ok((model_list, pricing_entries)) = or_provider.list_models_with_pricing().await
             {
                 for (model_id, model_pricing) in pricing_entries {
-                    self.state.pricing.insert(model_id, model_pricing);
+                    self.state
+                        .pricing
+                        .insert_with_cross_map(model_id, model_pricing);
                 }
                 for m in model_list {
                     if !models
@@ -7481,6 +7569,7 @@ impl App {
                 // Sync thinking mode to the new provider
                 new_provider.set_thinking_mode(self.state.thinking_mode);
                 self.provider = Some(new_provider);
+                self.resolve_compaction_provider();
 
                 // Update context window for compaction and sidebar display
                 self.state.agent.context_window =
@@ -7552,10 +7641,12 @@ impl App {
             .state
             .session_output_tokens
             .saturating_add(self.state.agent.last_output_tokens as u64);
-        if let Some(cost) = self.state.pricing.estimate_cost(
+        if let Some(cost) = self.state.pricing.estimate_cost_with_cache(
             &self.state.active_model_name,
             self.state.agent.last_input_tokens,
             self.state.agent.last_output_tokens,
+            self.state.agent.last_cache_read_tokens,
+            self.state.agent.last_cache_creation_tokens,
         ) {
             self.state.session_cost += cost;
         }
@@ -11330,7 +11421,8 @@ impl App {
                 } else {
                     format!("{}m ago", elapsed.as_secs() / 60)
                 };
-                (cp.id, cp.prompt_preview.clone(), age, cp.files.len())
+                let label = cp.name.as_deref().unwrap_or(&cp.prompt_preview).to_string();
+                (cp.id, label, age, cp.files.len())
             })
             .collect();
         if items.is_empty() {
@@ -11650,6 +11742,9 @@ impl App {
             parent_session_id: Some(parent_id.clone()),
             fork_message_count: Some(message_count),
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         };
         if let Err(e) = self.state.sessions.update(&title_session) {
             tracing::warn!("Failed to set fork title: {e}");
@@ -11727,7 +11822,7 @@ impl App {
             self.handle_init_command();
             return true;
         }
-        if slash == "status" || slash == "usage" {
+        if slash == "status" || slash == "usage" || slash == "cost" {
             self.state.dialog_stack.push(DialogKind::Status);
             return true;
         }
@@ -11793,6 +11888,26 @@ impl App {
         }
         if slash == "settings" {
             self.open_settings_picker();
+            return true;
+        }
+        if let Some(name) = slash.strip_prefix("checkpoint ") {
+            let name = name.trim();
+            if name.is_empty() {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /checkpoint <name>".into(),
+                });
+            } else {
+                let id = self.state.checkpoints.create_named(name);
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Checkpoint \"{name}\" saved (id {id})."),
+                });
+            }
+            return true;
+        }
+        if slash == "checkpoint" {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Usage: /checkpoint <name>".into(),
+            });
             return true;
         }
         if slash == "rewind" {

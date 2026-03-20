@@ -14,7 +14,7 @@
 
 ---
 
-Most AI coding agents lock you into one model and one subscription. Caboose doesn't. Bring your own API keys, pick any of 15+ providers, and work entirely in your terminal — no browser, no Electron, no cloud account required.
+Most AI coding agents lock you into one model and one subscription. Caboose doesn't. Bring your own API keys, pick any of 23+ providers, and work entirely in your terminal — no browser, no Electron, no cloud account required.
 
 Outside of it being a coding assistant, it has **Roundhouse**: send the same prompt to multiple models in parallel, watch them plan independently, then synthesize the best ideas into one unified implementation plan. It's the closest thing to a second (and third) opinion before you write a line of code.
 
@@ -62,8 +62,8 @@ Once inside:
 **Roundhouse — multi-model parallel planning**
 Send a prompt to Claude, GPT-4o, and Gemini at the same time. Each model plans independently. You review, annotate, and critique between phases. Caboose synthesizes the best approach into one plan and drops it into chat. Saved to `.caboose/roundhouse/` for reference.
 
-**Bring your own keys, 15+ providers**
-Anthropic, OpenAI, Gemini, OpenRouter, xAI, Together AI, Fireworks AI, Cerebras, SambaNova, Perplexity, Cohere, Qwen, DeepSeek, Groq, Mistral — plus Ollama, LM Studio, and llama.cpp for local models. No subscription. You pay the provider directly, per token.
+**Bring your own keys, 23+ providers**
+Anthropic, OpenAI, Gemini, OpenRouter, xAI, Together AI, Fireworks AI, Cerebras, SambaNova, Perplexity, Cohere, Qwen, DeepSeek, Groq, Mistral, AI21 Labs, Moonshot AI, 01.AI, Zhipu AI, Novita AI, Inflection AI, Hugging Face, Reka AI — plus Ollama, LM Studio, and llama.cpp for local models. No subscription. You pay the provider directly, per token.
 
 **Subagents in isolated git worktrees**
 Spawn parallel sub-agents for independent tasks. Each runs in its own worktree, merges back on success, and flags conflicts for review. You stay in the main session the whole time.
@@ -79,6 +79,10 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 
 ## More features
 
+- **Hooks / lifecycle events** — 13 hook events (SessionStart, PreToolUse, PostToolUse, Stop, PreCompact, and more). Run external shell commands on tool execution, session start/end, or any lifecycle event. PreToolUse hooks can block tool calls. Configure in `config.toml` with tool name filtering and timeouts.
+- **Context compaction** — three-pass automatic summarization when context fills up. Tool output pruning, mechanical noise removal, then LLM-generated structured summary. Configurable threshold, optional cheaper model for summarization. Sessions run indefinitely without hitting context limits.
+- **Checkpoint / rewind** — automatic file snapshots before every tool execution. `/undo` reverts the last change; `/rewind` opens a picker showing all checkpoints with prompt previews and file counts. `/checkpoint <name>` saves a named bookmark. Rewind to any point in your session.
+- **Cost tracking** — real-time token and cost display in sidebar and `/status` dialog. Per-turn, per-session, and per-subagent cost breakdown. Cache-aware pricing (Anthropic cache read/creation rates). Session budgets with pause/raise/stop dialog. Cost persisted to SQLite across sessions.
 - **Thinking / reasoning** — streaming thinking blocks from Anthropic, OpenAI, and Gemini. Configurable level via `Ctrl+T`
 - **`!` shell shortcut** — run shell commands inline without leaving chat (`!git log`, `!ls`, etc.)
 - **Circuits** — scheduled recurring prompts, in-session or persistent via background daemon
