@@ -44,6 +44,8 @@ pub enum DialogKind {
     AgentsList(AgentsListState),
     /// /status — session token, cost, provider, and mode snapshot.
     Status,
+    /// /help — keybinding and command reference overlay.
+    Help(HelpState),
 }
 
 // Debug impl needed for Action derive
@@ -71,6 +73,7 @@ impl std::fmt::Debug for DialogKind {
             Self::AgentStreamOverlay(_) => write!(f, "AgentStreamOverlay(...)"),
             Self::AgentsList(_) => write!(f, "AgentsList(...)"),
             Self::Status => write!(f, "Status"),
+            Self::Help(_) => write!(f, "Help(...)"),
         }
     }
 }
@@ -102,6 +105,18 @@ impl Default for AgentStreamOverlayState {
 /// State for the agents list dialog.
 pub struct AgentsListState {
     pub selected: usize,
+}
+
+/// State for the help overlay.
+#[derive(Debug, Clone)]
+pub struct HelpState {
+    pub scroll_offset: usize,
+}
+
+impl HelpState {
+    pub fn new() -> Self {
+        Self { scroll_offset: 0 }
+    }
 }
 
 /// State for the command palette overlay.

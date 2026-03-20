@@ -1,7 +1,7 @@
 //! Main layout — composes header, chat, sidebar, input, and footer.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::agent::AgentState;
 use crate::agent::permission::Mode;
@@ -162,6 +162,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             }
             DialogKind::Status => {
                 render_status_dialog(frame, app, &colors);
+            }
+            DialogKind::Help(help_state) => {
+                render_help_overlay(frame, app, help_state, &colors);
             }
         }
     }
@@ -456,11 +459,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                     Style::default().fg(colors.text_secondary).bold(),
                 ),
             ]));
-            lines.extend(crate::tui::chat::parse_markdown(
-                &content,
-                colors,
-                colors.roundhouse,
-            ));
+            let (parsed, _) = crate::tui::chat::parse_markdown(&content, colors, colors.roundhouse);
+            lines.extend(parsed);
             lines.push(Line::from(""));
             lines.push(Line::from(""));
 
@@ -505,6 +505,8 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
     let mut thinking_lines: Vec<(usize, usize)> = Vec::new();
     // Track message boundaries for connector grouping: 0=other, 1=tool, 2=assistant
     let mut msg_boundaries: Vec<(usize, u8)> = Vec::new();
+    // Track code block boundaries: (start_logical, end_logical, msg_index, block_index)
+    let mut code_block_boundaries: Vec<(usize, usize, usize, usize)> = Vec::new();
 
     // Index of the last Pending tool message — receives live diff state.
     let last_pending_idx = app.chat_messages.iter().rposition(|m| {
@@ -555,9 +557,14 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
                 // Standard assistant rendering (header + truncated text)
                 let expanded = app.expanded_messages.contains(&i);
                 let accent = mode_accent(app.mode, colors);
-                msg_lines.extend(crate::tui::chat::render_assistant_message_truncated(
+                let cb_offset = start_idx + msg_lines.len();
+                let (rendered, cb_ranges) = crate::tui::chat::render_assistant_message_truncated(
                     content, colors, expanded, accent,
-                ));
+                );
+                for (s, e, bi) in cb_ranges {
+                    code_block_boundaries.push((s + cb_offset, e + cb_offset, i, bi));
+                }
+                msg_lines.extend(rendered);
                 msg_lines
             }
             ChatMessage::Tool(tool_msg) => {
@@ -672,12 +679,14 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         let accent = mode_accent(app.mode, colors);
         if app.agent.streaming_thinking.is_empty() {
             // No thinking — render full assistant message with header (existing behavior)
-            msg_boundaries.push((lines.len(), 2u8)); // assistant streaming
-            let streaming_lines = crate::tui::chat::render_assistant_message(
+            let stream_start = lines.len();
+            msg_boundaries.push((stream_start, 2u8)); // assistant streaming
+            let (streaming_lines, _cb_ranges) = crate::tui::chat::render_assistant_message(
                 &app.agent.streaming_text,
                 colors,
                 accent,
             );
+            // Code block ranges from streaming text are unstable — skip zone tracking
             // Remove the trailing blank line and add an animated spinner
             if !streaming_lines.is_empty() {
                 let mut sl = streaming_lines;
@@ -689,7 +698,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
         } else {
             // Thinking already rendered header — just render text content without header
-            let parsed =
+            let (parsed, _) =
                 crate::tui::chat::parse_markdown(&app.agent.streaming_text, colors, accent);
             if !parsed.is_empty() {
                 let mut sl = parsed;
@@ -727,7 +736,7 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         } else {
             &app.init_text
         };
-        let parsed = crate::tui::chat::parse_markdown(display_text, colors, init_accent);
+        let (parsed, _) = crate::tui::chat::parse_markdown(display_text, colors, init_accent);
         lines.extend(parsed);
         // Animated spinner on last line
         const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -1027,6 +1036,25 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
             }
 
             *app.copy_hover_zones.borrow_mut() = hover_zones;
+
+            // Compute code block hover zones for per-block copy (reuses wr_at_logical).
+            let mut cb_zones: Vec<(u16, u16, usize, usize)> = Vec::new();
+            for &(start_logical, end_logical, msg_idx, block_idx) in &code_block_boundaries {
+                let start_wr = wr_at_logical.get(start_logical).copied().unwrap_or(0);
+                let end_wr = wr_at_logical.get(end_logical).copied().unwrap_or(0);
+
+                let start_screen = area.y as i32 + start_wr as i32 - effective_offset as i32;
+                let end_screen = area.y as i32 + end_wr as i32 - effective_offset as i32;
+
+                if end_screen <= area.y as i32 || start_screen >= (area.y + area.height) as i32 {
+                    continue;
+                }
+
+                let start_y = start_screen.max(area.y as i32) as u16;
+                let end_y = end_screen.min((area.y + area.height) as i32) as u16;
+                cb_zones.push((start_y, end_y, msg_idx, block_idx));
+            }
+            *app.code_block_hover_zones.borrow_mut() = cb_zones;
         }
     }
 
@@ -1053,30 +1081,53 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &State, colors: &theme::Color
         .scroll((effective_offset, 0));
     frame.render_widget(chat, area);
 
-    // Copy badge overlay: shown on the hovered assistant message header row.
-    // Rendered after the main Paragraph so it floats on top.
-    app.copy_badge_rect.set(None); // clear previous frame's rect
-    if let Some(hovered_idx) = app.hovered_message
-        && !crate::app::roundhouse_active(app)
-    {
-        let zones = app.copy_hover_zones.borrow();
-        if let Some(&(start_y, _, _)) = zones.iter().find(|&&(_, _, idx)| idx == hovered_idx)
-            && start_y >= area.y
-            && start_y < area.y + area.height
-        {
-            let badge_rect = ratatui::prelude::Rect {
-                x: area.x + area.width.saturating_sub(10),
-                y: start_y,
-                width: 10.min(area.width),
-                height: 1,
-            };
-            frame.render_widget(ratatui::widgets::Clear, badge_rect);
-            frame.render_widget(
-                Paragraph::new("[ y copy ]")
-                    .style(Style::default().bg(colors.bg_elevated).fg(colors.text_dim)),
-                badge_rect,
-            );
-            app.copy_badge_rect.set(Some(badge_rect));
+    // Copy badge overlays: code block badge takes priority over message badge.
+    app.copy_badge_rect.set(None);
+    app.code_block_badge_rect.set(None);
+    if !crate::app::roundhouse_active(app) {
+        if let Some((mi, bi)) = app.hovered_code_block {
+            // Code block copy badge
+            let cb_zones = app.code_block_hover_zones.borrow();
+            if let Some(&(start_y, _, _, _)) =
+                cb_zones.iter().find(|&&(_, _, m, b)| m == mi && b == bi)
+                && start_y >= area.y
+                && start_y < area.y + area.height
+            {
+                let badge_rect = ratatui::prelude::Rect {
+                    x: area.x + area.width.saturating_sub(10),
+                    y: start_y,
+                    width: 10.min(area.width),
+                    height: 1,
+                };
+                frame.render_widget(Clear, badge_rect);
+                frame.render_widget(
+                    Paragraph::new("[ y copy ]")
+                        .style(Style::default().bg(colors.bg_elevated).fg(colors.text_dim)),
+                    badge_rect,
+                );
+                app.code_block_badge_rect.set(Some(badge_rect));
+            }
+        } else if let Some(hovered_idx) = app.hovered_message {
+            // Message-level copy badge (only when no code block is hovered)
+            let zones = app.copy_hover_zones.borrow();
+            if let Some(&(start_y, _, _)) = zones.iter().find(|&&(_, _, idx)| idx == hovered_idx)
+                && start_y >= area.y
+                && start_y < area.y + area.height
+            {
+                let badge_rect = ratatui::prelude::Rect {
+                    x: area.x + area.width.saturating_sub(10),
+                    y: start_y,
+                    width: 10.min(area.width),
+                    height: 1,
+                };
+                frame.render_widget(Clear, badge_rect);
+                frame.render_widget(
+                    Paragraph::new("[ y copy ]")
+                        .style(Style::default().bg(colors.bg_elevated).fg(colors.text_dim)),
+                    badge_rect,
+                );
+                app.copy_badge_rect.set(Some(badge_rect));
+            }
         }
     }
 
@@ -1552,6 +1603,141 @@ fn format_with_commas(n: u64) -> String {
         result.push(c);
     }
     result
+}
+
+/// Render the /help keybinding reference overlay.
+fn render_help_overlay(
+    frame: &mut Frame,
+    app: &State,
+    help_state: &super::dialog::HelpState,
+    colors: &theme::Colors,
+) {
+    use super::command::Category;
+
+    let area = frame.area();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Registry commands grouped by category
+    let category_order = [
+        Category::Navigation,
+        Category::Session,
+        Category::Provider,
+        Category::Tools,
+    ];
+    let category_name = |c: &Category| match c {
+        Category::Navigation => "Navigation",
+        Category::Session => "Session",
+        Category::Provider => "Provider",
+        Category::Tools => "Tools",
+    };
+
+    for cat in &category_order {
+        let cmds: Vec<_> = app
+            .commands
+            .available(app)
+            .into_iter()
+            .filter(|c| c.category == *cat)
+            .collect();
+
+        if cmds.is_empty() {
+            continue;
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", category_name(cat)),
+            Style::default().fg(colors.brand).bold(),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", "\u{2500}".repeat(54)),
+            Style::default().fg(colors.text_dim),
+        )));
+
+        for cmd in cmds {
+            let key_display = cmd.keybind.map(|kb| kb.display()).unwrap_or_default();
+            let slash_display = cmd.slash.map(|s| format!("/{s}")).unwrap_or_default();
+
+            let shortcut = if !key_display.is_empty() && !slash_display.is_empty() {
+                format!("{key_display}  {slash_display}")
+            } else if !key_display.is_empty() {
+                key_display
+            } else {
+                slash_display
+            };
+
+            if shortcut.is_empty() {
+                continue;
+            }
+
+            let pad = 26usize.saturating_sub(shortcut.len());
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {shortcut}"), Style::default().fg(colors.brand)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(cmd.name.to_string(), Style::default().fg(colors.text_dim)),
+            ]));
+        }
+    }
+
+    // Context keys not in registry
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Context Keys",
+        Style::default().fg(colors.brand).bold(),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", "\u{2500}".repeat(54)),
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let context_keys: &[(&str, &str)] = &[
+        ("Y / N / A", "Approve / Deny / Approve all"),
+        ("D", "Toggle diff expanded/collapsed"),
+        ("J / K", "Scroll diff up/down"),
+        ("G", "Jump to bottom (empty input)"),
+        ("y", "Copy hovered message or code block"),
+        ("Tab", "Cycle permission mode (empty input)"),
+        ("Shift+Enter", "Insert newline"),
+        ("E", "Quick edit (empty input)"),
+        ("!cmd", "Run shell command directly"),
+        ("Esc", "Cancel / close overlay"),
+        ("Ctrl+C \u{00d7}2", "Quit"),
+    ];
+
+    for &(key, desc) in context_keys {
+        let pad = 26usize.saturating_sub(key.len());
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {key}"), Style::default().fg(colors.brand)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(desc.to_string(), Style::default().fg(colors.text_dim)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Clamp scroll
+    let content_height = lines.len() as u16;
+    let overlay_width = 60u16.min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * 80 / 100).min(content_height + 2).max(6);
+    let max_scroll = content_height.saturating_sub(overlay_height.saturating_sub(2));
+    let scroll = (help_state.scroll_offset as u16).min(max_scroll);
+
+    let overlay_x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let overlay_y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_rect = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_rect);
+    let block = Block::default()
+        .title(" Help ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors.brand))
+        .style(Style::default().bg(colors.bg_primary));
+
+    let inner = block.inner(overlay_rect);
+    frame.render_widget(block, overlay_rect);
+
+    let para = Paragraph::new(lines).scroll((scroll, 0));
+    frame.render_widget(para, inner);
 }
 
 /// Render the /status session stats dialog.

@@ -536,9 +536,13 @@ fn build_session_items<'a>(
 
         items.push(ListItem::new(Line::from(Span::styled(label, style))));
 
-        // Snippet line for content matches
-        if let Some(snippet) = &entry.matched_snippet {
-            let snippet_text = format!("    \"{snippet}\"");
+        // Preview line: matched snippet (search) or first-message preview (default)
+        let preview_text = entry
+            .matched_snippet
+            .as_deref()
+            .or(entry.content_preview.as_deref());
+        if let Some(preview) = preview_text {
+            let snippet_text = format!("    \"{preview}\"");
             let max_width = (width as usize).saturating_sub(6);
             let truncated = if snippet_text.len() > max_width {
                 format!(

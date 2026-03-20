@@ -667,6 +667,20 @@ pub fn build_default_registry() -> CommandRegistry {
         execute: |_state| Action::None, // Handled in app.rs handle_workspace_command
     });
 
+    registry.register(Command {
+        id: "help.show",
+        name: "Help",
+        category: Category::Navigation,
+        keybind: None,
+        slash: Some("help"),
+        available: |_| true,
+        execute: |_state| {
+            Action::PushDialog(super::dialog::DialogKind::Help(
+                super::dialog::HelpState::new(),
+            ))
+        },
+    });
+
     registry
 }
 

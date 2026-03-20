@@ -45,6 +45,10 @@ pub const TIPS: &[&str] = &[
     "Pipe input:  echo 'explain this' | caboose",
     "--prompt  run non-interactively from the CLI",
     "/create-skill  make a custom slash command",
+    "/pin --save  add a permanent project rule to CABOOSE.md",
+    "/memories  view what the agent remembers across sessions",
+    "/doc  generate documentation for your code",
+    "/help  see all keybindings and commands",
     "Ctrl+C twice  quit caboose",
 ];
 

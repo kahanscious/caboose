@@ -1,4 +1,4 @@
-//! 11 built-in skills shipped with Caboose.
+//! 12 built-in skills shipped with Caboose.
 
 use super::types::{ResponseFormat, Skill, SkillSource};
 
@@ -17,6 +17,13 @@ pub fn builtin_skills() -> Vec<Skill> {
             name: "debug".into(),
             description: "Isolate faults by narrowing scope".into(),
             template: DEBUG_TEMPLATE.into(),
+            source: SkillSource::Builtin,
+            response_format: ResponseFormat::Prose,
+        },
+        Skill {
+            name: "doc".into(),
+            description: "Generate documentation comments".into(),
+            template: DOC_TEMPLATE.into(),
             source: SkillSource::Builtin,
             response_format: ResponseFormat::Prose,
         },
@@ -123,6 +130,22 @@ Isolate the fault systematically. Do NOT guess-and-check.
 4. **Prove** — Write a failing test that captures the bug. Fix the code. Test passes. Run full suite to check for regressions.
 
 Do not move to the next step until the current one is complete.
+"#;
+
+const DOC_TEMPLATE: &str = r#"# Doc
+
+Generate documentation comments for: $ARGS
+
+1. **Read** the target code first. Understand what it does before writing anything.
+2. **Add doc comments** using the language's idiomatic format (/// for Rust, /** */ for JS/TS, """ for Python, etc.).
+   - Module/file-level doc: one paragraph on purpose and usage.
+   - Public functions/methods: what it does, parameters, return value, panics/errors if applicable.
+   - Public types/structs: what it represents, when to use it.
+3. **Skip** obvious getters, setters, and trivial one-liners — only document what adds value.
+4. **Include examples** in doc comments for non-obvious APIs (only where they help).
+5. **Write the changes** — edit the files directly, don't just show the docs.
+
+Match the project's existing documentation style. Be concise — good docs explain *why*, not *what*.
 "#;
 
 const EXPLAIN_TEMPLATE: &str = r#"# Explain
@@ -271,8 +294,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_eleven_builtin_skills() {
-        assert_eq!(BUILTIN_SKILLS.len(), 11);
+    fn has_twelve_builtin_skills() {
+        assert_eq!(BUILTIN_SKILLS.len(), 12);
     }
 
     #[test]

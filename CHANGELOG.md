@@ -5,6 +5,19 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-03-19
+
+### Added
+
+- **`/help` overlay** — scrollable modal showing all keybindings and commands, grouped by category (Navigation, Session, Provider, Tools, Context Keys). Scroll with `j`/`k`, close with `Esc`.
+- **Session picker message preview** — each row in the `/sessions` picker now shows a dimmed first-message preview below the title. Search results show matched content snippets instead.
+- **Per-code-block hover-to-copy** — hovering over a code block in an assistant message shows `[ y copy ]` on the block header. Press `y` or click to copy just that block. Code block hover takes priority over message-level copy.
+- **`/doc` skill** — new built-in skill that generates idiomatic documentation comments for modules, functions, and types.
+- **`/pin --save`** — promotes a session pin to `CABOOSE.md` so the rule persists across all future sessions. Creates a `## Rules` section if one doesn't exist.
+- **Home screen tips** — added tips for `/memories`, `/pin --save`, `/doc`, and `/help`.
+
+---
+
 ## [0.6.2] - 2026-03-19
 
 ### Added

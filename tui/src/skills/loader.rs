@@ -356,9 +356,9 @@ mod tests {
     #[test]
     fn load_all_merges_builtins_and_user() {
         let dir = TempDir::new().unwrap();
-        // No user skills — should get all 11 builtins
+        // No user skills — should get all 12 builtins
         let all = load_all_skills(dir.path(), &[]);
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 12);
     }
 
     #[test]
@@ -367,7 +367,7 @@ mod tests {
         let all = load_all_skills(dir.path(), &["review".to_string(), "DEBUG".to_string()]);
         assert!(!all.iter().any(|s| s.name == "review"));
         assert!(!all.iter().any(|s| s.name == "debug"));
-        assert_eq!(all.len(), 9);
+        assert_eq!(all.len(), 10);
     }
 
     #[test]

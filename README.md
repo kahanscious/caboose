@@ -71,8 +71,11 @@ Spawn parallel sub-agents for independent tasks. Each runs in its own worktree, 
 **Single binary, pure terminal**
 Written in Rust. One binary, no runtime dependencies. Runs on macOS, Linux, and Windows. The TUI includes syntax highlighting, collapsible diffs, an embedded PTY terminal, and full mouse support.
 
+**Persistent memory and project rules**
+Caboose remembers across sessions — project conventions, architectural decisions, recurring patterns. Memory lives in human-editable markdown files with dual scoping (project `.caboose/memory/` vs global `~/.config/caboose/memory/`). End-of-session extraction captures what you did. `/pin` sets session rules; `/pin --save` promotes them to `CABOOSE.md` so every future session follows them.
+
 **Skills**
-Slash-command workflows that load structured prompts into the agent. Ships with 11 built-in skills (`/brainstorm`, `/tdd`, `/debug`, `/review`, and more). Add your own in `~/.config/caboose/skills/` or drop them in `.caboose/skills/` per project.
+Slash-command workflows that load structured prompts into the agent. Ships with 12 built-in skills (`/brainstorm`, `/tdd`, `/debug`, `/review`, `/doc`, and more). Add your own in `~/.config/caboose/skills/` or drop them in `.caboose/skills/` per project.
 
 ## More features
 
@@ -87,8 +90,9 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Persistent sessions** — SQLite-backed. Resume any session with `Ctrl+O`
 - **Settings migration** — import MCP servers, system prompts, and project files from Claude Code, Open Code, and Codex
 - **Permission modes** — Plan, Create, AutoEdit, Chug. Cycle with `Tab`
-- **Memory** — cross-session fact extraction
-- **Hover-to-copy** — mouse over any assistant message to copy it with `y` or a click
+- **Memory** — dual-scoped (project + global), auto-extraction at session end, FTS5 search across all stored facts. Human-editable markdown — no hidden database
+- **Session pins** — `/pin` adds runtime rules; `/pin --save` writes them to `CABOOSE.md` so they persist permanently
+- **Hover-to-copy** — mouse over any assistant message or code block to copy with `y` or a click
 - **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
 
 ## Built-in Skills
@@ -100,6 +104,7 @@ Every skill can be toggled on or off via `/settings`. Add your own in `~/.config
 | `/brainstorm` | Explore 3–5 design approaches, then converge on the best option with a decision record |
 | `/plan` | Write a granular, step-by-step implementation plan with file paths, code, and test commands |
 | `/debug` | Systematic fault isolation — reproduce, bisect, read, prove with a failing test |
+| `/doc` | Generate idiomatic documentation comments for modules, functions, and types |
 | `/tdd` | Enforce strict RED-GREEN-REFACTOR test-driven development |
 | `/finish` | Audit the current branch before integration — build, tests, lint, diff review |
 | `/handoff` | Generate a structured session summary so the next session picks up where you left off |

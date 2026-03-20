@@ -120,6 +120,8 @@ pub struct FilteredSession {
     pub session: crate::session::Session,
     /// If the match came from content (not title/metadata), a snippet around the match.
     pub matched_snippet: Option<String>,
+    /// First line of conversation content for preview display.
+    pub content_preview: Option<String>,
 }
 
 /// Extract a snippet centered on the first occurrence of `query` in `content`.
@@ -159,6 +161,18 @@ pub fn extract_snippet(content: &str, query: &str, max_len: usize) -> Option<Str
     Some(snippet)
 }
 
+/// Extract the first non-empty line from content_index for preview display.
+pub fn extract_content_preview(content_index: &str, max_len: usize) -> Option<String> {
+    let line = content_index.lines().find(|l| !l.trim().is_empty())?;
+    let trimmed = line.trim();
+    if trimmed.len() <= max_len {
+        Some(trimmed.to_string())
+    } else {
+        let boundary = trimmed.floor_char_boundary(max_len.saturating_sub(1));
+        Some(format!("{}…", &trimmed[..boundary]))
+    }
+}
+
 /// Filter session search results against a query string.
 /// Matches (in priority order): title, ID prefix, provider, model, content.
 /// Only content matches get a `matched_snippet`.
@@ -169,6 +183,7 @@ pub fn filter_search_results(results: &[SessionSearchResult], query: &str) -> Ve
             .map(|r| FilteredSession {
                 session: r.session.clone(),
                 matched_snippet: None,
+                content_preview: extract_content_preview(&r.content_index, 60),
             })
             .collect();
     }
@@ -215,6 +230,7 @@ pub fn filter_search_results(results: &[SessionSearchResult], query: &str) -> Ve
             filtered.push(FilteredSession {
                 session: r.session.clone(),
                 matched_snippet,
+                content_preview: extract_content_preview(&r.content_index, 60),
             });
         }
     }
@@ -471,5 +487,36 @@ mod tests {
         let long = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let result = truncate_at_word_boundary(long, 10);
         assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn content_preview_basic() {
+        assert_eq!(
+            extract_content_preview("hello world\nsecond line", 60),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn content_preview_empty() {
+        assert_eq!(extract_content_preview("", 60), None);
+        assert_eq!(extract_content_preview("   \n  \n", 60), None);
+    }
+
+    #[test]
+    fn content_preview_truncation() {
+        let long = "a".repeat(100);
+        let result = extract_content_preview(&long, 20).unwrap();
+        // 19 ASCII chars + "…" (3 bytes UTF-8) = 22 bytes, but 20 chars
+        assert!(result.chars().count() <= 20);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn content_preview_skips_blank_lines() {
+        assert_eq!(
+            extract_content_preview("\n\n  \nhello", 60),
+            Some("hello".to_string())
+        );
     }
 }

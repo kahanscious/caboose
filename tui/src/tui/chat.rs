@@ -59,11 +59,12 @@ pub fn render_image_placeholder(
 }
 
 /// Render an assistant message with basic markdown detection.
+/// Returns (lines, code_block_ranges) where ranges are offset into the returned lines vec.
 pub fn render_assistant_message(
     content: &str,
     colors: &Colors,
     accent: ratatui::style::Color,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, usize, usize)>) {
     let mut lines = Vec::new();
 
     // Role header: ● Caboose (lighter grey dot)
@@ -72,12 +73,18 @@ pub fn render_assistant_message(
         Span::styled("Caboose", Style::default().fg(colors.text_secondary).bold()),
     ]));
 
-    // Parse content with basic markdown detection
-    let parsed = parse_markdown(content, colors, accent);
+    let header_offset = lines.len();
+    let (parsed, code_block_ranges) = parse_markdown(content, colors, accent);
     lines.extend(parsed);
 
+    // Offset ranges to account for header lines
+    let ranges = code_block_ranges
+        .into_iter()
+        .map(|(s, e, idx)| (s + header_offset, e + header_offset, idx))
+        .collect();
+
     lines.push(Line::from("")); // blank separator
-    lines
+    (lines, ranges)
 }
 
 const TRUNCATE_THRESHOLD: usize = 100;
@@ -85,12 +92,13 @@ const TRUNCATE_HEAD: usize = 20;
 const TRUNCATE_TAIL: usize = 10;
 
 /// Render an assistant message with optional truncation for long messages.
+/// Returns (lines, code_block_ranges) where ranges are offset into the returned lines vec.
 pub fn render_assistant_message_truncated(
     content: &str,
     colors: &Colors,
     expanded: bool,
     accent: ratatui::style::Color,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, usize, usize)>) {
     let mut lines = Vec::new();
 
     // Role header (lighter grey dot)
@@ -99,11 +107,17 @@ pub fn render_assistant_message_truncated(
         Span::styled("Caboose", Style::default().fg(colors.text_secondary).bold()),
     ]));
 
-    let parsed = parse_markdown(content, colors, accent);
+    let header_offset = lines.len();
+    let (parsed, code_block_ranges) = parse_markdown(content, colors, accent);
     let total = parsed.len();
 
-    if total <= TRUNCATE_THRESHOLD || expanded {
+    let ranges = if total <= TRUNCATE_THRESHOLD || expanded {
         lines.extend(parsed);
+        // Offset ranges for header
+        code_block_ranges
+            .into_iter()
+            .map(|(s, e, idx)| (s + header_offset, e + header_offset, idx))
+            .collect()
     } else {
         // Head
         lines.extend(parsed[..TRUNCATE_HEAD].to_vec());
@@ -115,10 +129,12 @@ pub fn render_assistant_message_truncated(
         )));
         // Tail
         lines.extend(parsed[total - TRUNCATE_TAIL..].to_vec());
-    }
+        // Code block ranges don't map cleanly when truncated — skip them
+        Vec::new()
+    };
 
     lines.push(Line::from("")); // blank separator
-    lines
+    (lines, ranges)
 }
 
 /// Render a system message.
@@ -300,16 +316,20 @@ fn render_table(table_lines: &[&str], colors: &Colors) -> Vec<Line<'static>> {
 }
 
 /// Markdown parser — headers, lists, code blocks, blockquotes, links, bold, inline code.
+/// Returns (lines, code_block_ranges) where each range is (start_line_idx, end_line_idx, block_index).
 pub fn parse_markdown(
     content: &str,
     colors: &Colors,
     accent: ratatui::style::Color,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, usize, usize)>) {
     let mut lines = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
     let mut code_lines: Vec<String> = Vec::new();
     let mut table_lines: Vec<&str> = Vec::new();
+    let mut code_block_ranges: Vec<(usize, usize, usize)> = Vec::new();
+    let mut code_block_start: usize = 0;
+    let mut code_block_count: usize = 0;
 
     for text_line in content.lines() {
         let trimmed = text_line.trim_start();
@@ -333,6 +353,8 @@ pub fn parse_markdown(
                     }
                     lines.push(Line::from(line_spans));
                 }
+                code_block_ranges.push((code_block_start, lines.len(), code_block_count));
+                code_block_count += 1;
                 in_code_block = false;
                 code_lang.clear();
                 code_lines.clear();
@@ -349,6 +371,7 @@ pub fn parse_markdown(
                     Style::default().fg(colors.code_border).bg(colors.code_bg),
                 )));
                 in_code_block = true;
+                code_block_start = lines.len().saturating_sub(1); // includes the lang label line
             }
             continue;
         }
@@ -488,9 +511,10 @@ pub fn parse_markdown(
                 Style::default().fg(colors.code_text).bg(colors.code_bg),
             )));
         }
+        code_block_ranges.push((code_block_start, lines.len(), code_block_count));
     }
 
-    lines
+    (lines, code_block_ranges)
 }
 
 /// Parse inline markdown formatting: **bold**, `code`.
@@ -707,7 +731,7 @@ mod tests {
 
     #[test]
     fn parse_h1_header() {
-        let lines = parse_markdown("# Hello World", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("# Hello World", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Hello World"));
@@ -715,7 +739,7 @@ mod tests {
 
     #[test]
     fn parse_h2_header() {
-        let lines = parse_markdown("## Section Title", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("## Section Title", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Section Title"));
@@ -723,7 +747,7 @@ mod tests {
 
     #[test]
     fn parse_unordered_list() {
-        let lines = parse_markdown("- Item one\n- Item two", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("- Item one\n- Item two", &colors(), Color::Blue);
         assert_eq!(lines.len(), 2);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("\u{2022}") && text.contains("Item one"));
@@ -731,7 +755,7 @@ mod tests {
 
     #[test]
     fn parse_ordered_list() {
-        let lines = parse_markdown("1. First\n2. Second", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("1. First\n2. Second", &colors(), Color::Blue);
         assert_eq!(lines.len(), 2);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("1.") && text.contains("First"));
@@ -739,7 +763,7 @@ mod tests {
 
     #[test]
     fn parse_link() {
-        let lines = parse_markdown(
+        let (lines, _) = parse_markdown(
             "See [docs](https://example.com) here",
             &colors(),
             Color::Blue,
@@ -753,7 +777,7 @@ mod tests {
 
     #[test]
     fn parse_horizontal_rule() {
-        let lines = parse_markdown("---", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("---", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("\u{2500}"));
@@ -761,7 +785,7 @@ mod tests {
 
     #[test]
     fn parse_blockquote() {
-        let lines = parse_markdown("> This is quoted", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("> This is quoted", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("\u{2502}") && text.contains("This is quoted"));
@@ -769,7 +793,7 @@ mod tests {
 
     #[test]
     fn code_block_with_syntax_highlighting() {
-        let lines = parse_markdown("```rust\nlet x = 42;\n```", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("```rust\nlet x = 42;\n```", &colors(), Color::Blue);
         assert!(
             lines.len() >= 2,
             "should have lang label + highlighted code line"
@@ -778,7 +802,7 @@ mod tests {
 
     #[test]
     fn bold_text_preserved() {
-        let lines = parse_markdown("This is **bold** text", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("This is **bold** text", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("bold"));
@@ -786,7 +810,7 @@ mod tests {
 
     #[test]
     fn inline_code_preserved() {
-        let lines = parse_markdown("Use `foo()` here", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("Use `foo()` here", &colors(), Color::Blue);
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("foo()"));
@@ -794,7 +818,7 @@ mod tests {
 
     #[test]
     fn unclosed_code_block_renders() {
-        let lines = parse_markdown("```python\nprint('hello')", &colors(), Color::Blue);
+        let (lines, _) = parse_markdown("```python\nprint('hello')", &colors(), Color::Blue);
         // Should render something (not panic)
         assert!(lines.len() >= 2);
     }
@@ -802,7 +826,7 @@ mod tests {
     #[test]
     fn parse_table() {
         let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
-        let lines = parse_markdown(md, &colors(), Color::Blue);
+        let (lines, _) = parse_markdown(md, &colors(), Color::Blue);
         // Should produce 4 lines (header, separator, 2 data rows)
         assert!(
             lines.len() >= 3,
@@ -818,7 +842,7 @@ mod tests {
 
     #[test]
     fn detect_image_path() {
-        let lines = parse_markdown(
+        let (lines, _) = parse_markdown(
             "Here is screenshot.png in the output",
             &colors(),
             Color::Blue,
@@ -837,7 +861,8 @@ mod tests {
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_assistant_message_truncated(&content, &colors(), false, Color::Blue);
+        let (lines, _) =
+            render_assistant_message_truncated(&content, &colors(), false, Color::Blue);
         assert!(
             lines.len() < 140,
             "expected truncation, got {} lines",
@@ -856,7 +881,7 @@ mod tests {
     #[test]
     fn short_message_not_truncated() {
         let content = "Short message\nJust two lines";
-        let lines = render_assistant_message_truncated(content, &colors(), false, Color::Blue);
+        let (lines, _) = render_assistant_message_truncated(content, &colors(), false, Color::Blue);
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -870,7 +895,7 @@ mod tests {
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_assistant_message_truncated(&content, &colors(), true, Color::Blue);
+        let (lines, _) = render_assistant_message_truncated(&content, &colors(), true, Color::Blue);
         assert!(
             lines.len() > 140,
             "expanded should show all, got {} lines",
@@ -964,5 +989,40 @@ mod tests {
         let lines = render_thinking_block("", false, &colors(), 0, false);
         // Empty thinking should still show the header
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn code_block_ranges_single() {
+        let (_, ranges) = parse_markdown(
+            "text\n```rust\nlet x = 1;\n```\nmore",
+            &colors(),
+            Color::Blue,
+        );
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].2, 0); // block_index 0
+    }
+
+    #[test]
+    fn code_block_ranges_multiple() {
+        let (_, ranges) = parse_markdown(
+            "```\nblock1\n```\nmid\n```py\nblock2\n```",
+            &colors(),
+            Color::Blue,
+        );
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].2, 0);
+        assert_eq!(ranges[1].2, 1);
+    }
+
+    #[test]
+    fn code_block_ranges_unclosed() {
+        let (_, ranges) = parse_markdown("```\nunclosed\nstill going", &colors(), Color::Blue);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn code_block_ranges_none() {
+        let (_, ranges) = parse_markdown("no code blocks here", &colors(), Color::Blue);
+        assert!(ranges.is_empty());
     }
 }
