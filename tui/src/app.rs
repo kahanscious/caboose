@@ -2959,6 +2959,22 @@ impl App {
             Some(DialogKind::AgentsList(_)) => {
                 self.handle_agents_list_key(key);
             }
+            Some(DialogKind::Help(_)) => match key {
+                KeyCode::Esc => {
+                    self.state.dialog_stack.pop();
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if let Some(DialogKind::Help(h)) = self.state.dialog_stack.top_mut() {
+                        h.scroll_offset = h.scroll_offset.saturating_sub(1);
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if let Some(DialogKind::Help(h)) = self.state.dialog_stack.top_mut() {
+                        h.scroll_offset = h.scroll_offset.saturating_add(1);
+                    }
+                }
+                _ => {}
+            },
             Some(DialogKind::Status) => match key {
                 KeyCode::Esc | KeyCode::Enter => {
                     self.state.dialog_stack.pop();

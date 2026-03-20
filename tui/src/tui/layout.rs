@@ -1,7 +1,7 @@
 //! Main layout — composes header, chat, sidebar, input, and footer.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::agent::AgentState;
 use crate::agent::permission::Mode;
@@ -162,6 +162,9 @@ pub fn render(frame: &mut Frame, app: &State) {
             }
             DialogKind::Status => {
                 render_status_dialog(frame, app, &colors);
+            }
+            DialogKind::Help(help_state) => {
+                render_help_overlay(frame, app, help_state, &colors);
             }
         }
     }
@@ -1552,6 +1555,141 @@ fn format_with_commas(n: u64) -> String {
         result.push(c);
     }
     result
+}
+
+/// Render the /help keybinding reference overlay.
+fn render_help_overlay(
+    frame: &mut Frame,
+    app: &State,
+    help_state: &super::dialog::HelpState,
+    colors: &theme::Colors,
+) {
+    use super::command::Category;
+
+    let area = frame.area();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Registry commands grouped by category
+    let category_order = [
+        Category::Navigation,
+        Category::Session,
+        Category::Provider,
+        Category::Tools,
+    ];
+    let category_name = |c: &Category| match c {
+        Category::Navigation => "Navigation",
+        Category::Session => "Session",
+        Category::Provider => "Provider",
+        Category::Tools => "Tools",
+    };
+
+    for cat in &category_order {
+        let cmds: Vec<_> = app
+            .commands
+            .available(app)
+            .into_iter()
+            .filter(|c| c.category == *cat)
+            .collect();
+
+        if cmds.is_empty() {
+            continue;
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", category_name(cat)),
+            Style::default().fg(colors.brand).bold(),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", "\u{2500}".repeat(54)),
+            Style::default().fg(colors.text_dim),
+        )));
+
+        for cmd in cmds {
+            let key_display = cmd.keybind.map(|kb| kb.display()).unwrap_or_default();
+            let slash_display = cmd.slash.map(|s| format!("/{s}")).unwrap_or_default();
+
+            let shortcut = if !key_display.is_empty() && !slash_display.is_empty() {
+                format!("{key_display}  {slash_display}")
+            } else if !key_display.is_empty() {
+                key_display
+            } else {
+                slash_display
+            };
+
+            if shortcut.is_empty() {
+                continue;
+            }
+
+            let pad = 26usize.saturating_sub(shortcut.len());
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {shortcut}"), Style::default().fg(colors.brand)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(cmd.name.to_string(), Style::default().fg(colors.text_dim)),
+            ]));
+        }
+    }
+
+    // Context keys not in registry
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Context Keys",
+        Style::default().fg(colors.brand).bold(),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", "\u{2500}".repeat(54)),
+        Style::default().fg(colors.text_dim),
+    )));
+
+    let context_keys: &[(&str, &str)] = &[
+        ("Y / N / A", "Approve / Deny / Approve all"),
+        ("D", "Toggle diff expanded/collapsed"),
+        ("J / K", "Scroll diff up/down"),
+        ("G", "Jump to bottom (empty input)"),
+        ("y", "Copy hovered message or code block"),
+        ("Tab", "Cycle permission mode (empty input)"),
+        ("Shift+Enter", "Insert newline"),
+        ("E", "Quick edit (empty input)"),
+        ("!cmd", "Run shell command directly"),
+        ("Esc", "Cancel / close overlay"),
+        ("Ctrl+C \u{00d7}2", "Quit"),
+    ];
+
+    for &(key, desc) in context_keys {
+        let pad = 26usize.saturating_sub(key.len());
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {key}"), Style::default().fg(colors.brand)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(desc.to_string(), Style::default().fg(colors.text_dim)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Clamp scroll
+    let content_height = lines.len() as u16;
+    let overlay_width = 60u16.min(area.width.saturating_sub(4));
+    let overlay_height = (area.height * 80 / 100).min(content_height + 2).max(6);
+    let max_scroll = content_height.saturating_sub(overlay_height.saturating_sub(2));
+    let scroll = (help_state.scroll_offset as u16).min(max_scroll);
+
+    let overlay_x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let overlay_y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_rect = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_rect);
+    let block = Block::default()
+        .title(" Help ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors.brand))
+        .style(Style::default().bg(colors.bg_primary));
+
+    let inner = block.inner(overlay_rect);
+    frame.render_widget(block, overlay_rect);
+
+    let para = Paragraph::new(lines).scroll((scroll, 0));
+    frame.render_widget(para, inner);
 }
 
 /// Render the /status session stats dialog.
