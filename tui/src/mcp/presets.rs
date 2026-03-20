@@ -1,6 +1,6 @@
 //! Built-in MCP server presets — well-known servers users can toggle on.
 
-use crate::config::schema::McpServerConfig;
+use caboose_core::config::schema::McpServerConfig;
 
 /// A built-in MCP server preset.
 #[derive(Debug, Clone)]

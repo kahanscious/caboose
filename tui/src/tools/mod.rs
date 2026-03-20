@@ -13,7 +13,7 @@ pub mod shell;
 pub mod web_search;
 pub mod write;
 
-use crate::provider::ToolDefinition;
+use caboose_core::provider::ToolDefinition;
 
 /// Registry of available tools. Provides tool definitions to send to the LLM.
 pub struct ToolRegistry {
@@ -22,9 +22,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new(
-        cli_tools: Option<&std::collections::HashMap<String, crate::config::schema::CliToolConfig>>,
+        cli_tools: Option<&std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>>,
         exec_tools: Option<
-            &std::collections::HashMap<String, crate::config::schema::ExecutableToolConfig>,
+            &std::collections::HashMap<String, caboose_core::config::schema::ExecutableToolConfig>,
         >,
         scm_provider: &crate::scm::detection::ScmProvider,
     ) -> Self {
@@ -559,7 +559,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "test".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "cargo test".into(),
                 description: "Run tests".into(),
                 args: None,
@@ -587,7 +587,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(
             "environment".into(),
-            crate::config::schema::CliToolArg {
+            caboose_core::config::schema::CliToolArg {
                 arg_type: "string".into(),
                 description: Some("Target env".into()),
                 required: Some(true),
@@ -597,7 +597,7 @@ mod tests {
         );
         args.insert(
             "dry_run".into(),
-            crate::config::schema::CliToolArg {
+            caboose_core::config::schema::CliToolArg {
                 arg_type: "boolean".into(),
                 description: Some("Preview mode".into()),
                 required: None,
@@ -609,7 +609,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "deploy".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "make deploy".into(),
                 description: "Deploy".into(),
                 args: Some(args),
@@ -660,7 +660,7 @@ mod tests {
         let mut exec_tools = std::collections::HashMap::new();
         exec_tools.insert(
             "query".into(),
-            crate::config::schema::ExecutableToolConfig {
+            caboose_core::config::schema::ExecutableToolConfig {
                 path: ".caboose/tools/query.py".into(),
                 timeout: Some(30),
                 permission: None,
@@ -686,7 +686,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(
             "sql".into(),
-            crate::config::schema::CliToolArg {
+            caboose_core::config::schema::CliToolArg {
                 arg_type: "string".into(),
                 description: Some("SQL query".into()),
                 required: Some(true),
@@ -697,7 +697,7 @@ mod tests {
         let mut exec_tools = std::collections::HashMap::new();
         exec_tools.insert(
             "db".into(),
-            crate::config::schema::ExecutableToolConfig {
+            caboose_core::config::schema::ExecutableToolConfig {
                 path: "db.sh".into(),
                 timeout: None,
                 permission: None,
@@ -759,7 +759,7 @@ description = "Run project tests"
 command = "cargo clippy"
 description = "Run linter"
 "#;
-        let tools_config: crate::config::schema::ToolsConfig = toml::from_str(toml_str).unwrap();
+        let tools_config: caboose_core::config::schema::ToolsConfig = toml::from_str(toml_str).unwrap();
         let registry = ToolRegistry::new(
             tools_config.registry.as_ref(),
             None,

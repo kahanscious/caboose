@@ -1,4 +1,4 @@
-use crate::provider::ToolDefinition;
+use caboose_core::provider::ToolDefinition;
 use crate::scm::detection::ScmProvider;
 use serde_json::json;
 

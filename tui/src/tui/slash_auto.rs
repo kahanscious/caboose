@@ -4,7 +4,7 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
-use crate::provider::ModelInfo;
+use caboose_core::provider::ModelInfo;
 use crate::session::storage::SessionSearchResult;
 use crate::tui::command::{Command, CommandRegistry};
 
@@ -835,9 +835,9 @@ pub enum ProviderPickerEntry {
 pub fn build_provider_entries(
     filter: &str,
     collapsed: &std::collections::HashSet<String>,
-    discovered_locals: &[crate::provider::local::LocalServer],
+    discovered_locals: &[caboose_core::provider::local::LocalServer],
 ) -> Vec<ProviderPickerEntry> {
-    use crate::provider::catalog;
+    use caboose_core::provider::catalog;
 
     let needle = filter.to_lowercase();
     let filtered: Vec<&catalog::ProviderEntry> = catalog::CATALOG
@@ -906,11 +906,11 @@ fn build_provider_items<'a>(
     selected: usize,
     colors: &crate::tui::theme::Colors,
     width: u16,
-    discovered_locals: &[crate::provider::local::LocalServer],
+    discovered_locals: &[caboose_core::provider::local::LocalServer],
     collapsed: &std::collections::HashSet<String>,
 ) -> (Vec<ListItem<'a>>, Option<usize>) {
-    use crate::provider::catalog;
-    use crate::provider::local::LocalServerType;
+    use caboose_core::provider::catalog;
+    use caboose_core::provider::local::LocalServerType;
 
     let entries = build_provider_entries(filter, collapsed, discovered_locals);
 
@@ -1238,7 +1238,7 @@ pub fn render_slash_autocomplete(
     colors: &crate::tui::theme::Colors,
     above: bool,
     current_session_id: Option<&str>,
-    discovered_locals: &[crate::provider::local::LocalServer],
+    discovered_locals: &[caboose_core::provider::local::LocalServer],
 ) {
     let (items, selected_item_idx, title) = match &state.mode {
         DropdownMode::Commands => {

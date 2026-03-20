@@ -1,6 +1,6 @@
 //! Parallel scan execution with timeout and output capture.
 
-use crate::config::schema::ScanCommandConfig;
+use caboose_core::config::schema::ScanCommandConfig;
 use crate::suggest::config::DEFAULT_TIMEOUT_SECS;
 use crate::suggest::parsers;
 use crate::suggest::priority::Finding;

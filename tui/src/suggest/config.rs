@@ -1,6 +1,6 @@
 //! Auto-detection and config helpers for /suggest.
 
-use crate::config::schema::{ScanCommandConfig, SuggestConfig};
+use caboose_core::config::schema::{ScanCommandConfig, SuggestConfig};
 
 /// Default timeout for scan commands in seconds.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;

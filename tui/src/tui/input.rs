@@ -279,7 +279,7 @@ pub fn build_info_left<'a>(
     mode: crate::agent::permission::Mode,
     model: &str,
     provider: &str,
-    thinking_mode: crate::provider::ThinkingMode,
+    thinking_mode: caboose_core::provider::ThinkingMode,
     model_supports_thinking: bool,
     colors: &theme::Colors,
 ) -> (Color, Vec<Span<'a>>) {

@@ -3,6 +3,8 @@ use std::io::{IsTerminal, Read as _};
 use anyhow::Result;
 use clap::Parser;
 
+mod prefs;
+
 mod agent;
 mod agents;
 mod app;
@@ -10,14 +12,12 @@ mod attachment;
 mod checkpoint;
 mod circuits;
 mod clipboard;
-mod config;
 mod hooks;
 mod init;
 mod lsp;
 mod mcp;
 mod memory;
 mod migrate;
-mod provider;
 mod roundhouse;
 mod safety;
 mod scm;
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     }
 
     // Load config
-    let config = config::Config::load()?;
+    let config = caboose_core::config::Config::load()?;
 
     // Set working directory if specified
     if let Some(ref cwd) = cli.cwd {
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
 /// Run a single prompt through the agent loop without a TUI.
 /// Prints the final assistant response to stdout and exits.
 async fn run_non_interactive(
-    mut config: config::Config,
+    mut config: caboose_core::config::Config,
     prompt: String,
     model: Option<String>,
     provider_name: Option<String>,
@@ -179,7 +179,7 @@ async fn run_non_interactive(
         std::process::exit(1);
     }
 
-    let providers = provider::ProviderRegistry::new(&config);
+    let providers = caboose_core::provider::ProviderRegistry::new(&config);
     let provider = providers.get_provider(provider_name.as_deref(), model.as_deref())?;
     let provider_display_name = provider.name().to_string();
     let model_display_name = provider.model().to_string();

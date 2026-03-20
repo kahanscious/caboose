@@ -1,6 +1,6 @@
 //! Lifecycle hooks — fire shell commands at agent lifecycle events.
 
-use crate::config::schema::HookEntry;
+use caboose_core::config::schema::HookEntry;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::process::Command;

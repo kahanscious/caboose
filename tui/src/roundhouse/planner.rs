@@ -1,4 +1,4 @@
-use crate::provider::{Message, Provider, StreamEvent, ToolDefinition};
+use caboose_core::provider::{Message, Provider, StreamEvent, ToolDefinition};
 use futures::StreamExt;
 use serde_json::Value;
 use std::time::Duration;
@@ -455,7 +455,7 @@ pub fn synthesis_system_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ToolDefinition;
+    use caboose_core::provider::ToolDefinition;
 
     fn mock_tools() -> Vec<ToolDefinition> {
         vec![

@@ -172,7 +172,7 @@ pub fn render_error_message(content: &str, colors: &Colors) -> Vec<Line<'static>
 
 /// Render a structured provider error with category-specific styling.
 pub fn render_provider_error(
-    category: &crate::provider::error::ErrorCategory,
+    category: &caboose_core::provider::error::ErrorCategory,
     _provider: &str,
     message: &str,
     hint: Option<&str>,
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn render_provider_error_auth() {
         let lines = render_provider_error(
-            &crate::provider::error::ErrorCategory::Auth,
+            &caboose_core::provider::error::ErrorCategory::Auth,
             "anthropic",
             "Invalid API key provided",
             Some("Run /connect anthropic to update your key"),
@@ -928,7 +928,7 @@ mod tests {
     fn render_provider_error_network_uses_warning_color() {
         let c = colors();
         let lines = render_provider_error(
-            &crate::provider::error::ErrorCategory::Network,
+            &caboose_core::provider::error::ErrorCategory::Network,
             "openai",
             "Connection refused",
             Some("Check your internet connection"),
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn render_provider_error_no_hint() {
         let lines = render_provider_error(
-            &crate::provider::error::ErrorCategory::Unknown,
+            &caboose_core::provider::error::ErrorCategory::Unknown,
             "test",
             "Something broke",
             None,

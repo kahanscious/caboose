@@ -3,7 +3,7 @@
 use anyhow::Result;
 use rusqlite::params;
 
-use crate::config::Config;
+use caboose_core::config::Config;
 
 /// SQLite storage backend.
 pub struct Storage {

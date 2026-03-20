@@ -411,7 +411,7 @@ pub fn build_default_registry() -> CommandRegistry {
         available: |state| matches!(state.dialog_stack.base, super::dialog::Screen::Chat),
         execute: |state| {
             state.sidebar_visible = !state.sidebar_visible;
-            let mut prefs = crate::config::prefs::TuiPrefs::load();
+            let mut prefs = crate::prefs::TuiPrefs::load();
             prefs.sidebar_visible = state.sidebar_visible;
             prefs.save();
             Action::None

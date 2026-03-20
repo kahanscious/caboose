@@ -53,7 +53,7 @@ pub fn media_type_from_ext(path: &Path) -> Option<String> {
 /// Read an image file and create an Attachment.
 pub fn read_image_attachment(
     path: &Path,
-    config: &crate::config::schema::ImagesConfig,
+    config: &caboose_core::config::schema::ImagesConfig,
 ) -> Result<Attachment, String> {
     if !is_image_path(path) {
         return Err(format!("Not a supported image format: {}", path.display()));
@@ -140,7 +140,7 @@ pub fn attachment_from_rgba(
     rgba: Vec<u8>,
     width: usize,
     height: usize,
-    config: &crate::config::schema::ImagesConfig,
+    config: &caboose_core::config::schema::ImagesConfig,
 ) -> Result<Attachment, String> {
     let w: u32 = width
         .try_into()
@@ -216,7 +216,7 @@ pub fn attachment_from_rgba(
 pub fn compress_image(
     data: &[u8],
     media_type: &str,
-    config: &crate::config::schema::ImagesConfig,
+    config: &caboose_core::config::schema::ImagesConfig,
 ) -> Result<(Vec<u8>, String), String> {
     use image::ImageFormat;
 
@@ -443,7 +443,7 @@ pub fn extract_at_image_paths(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::schema::ImagesConfig;
+    use caboose_core::config::schema::ImagesConfig;
     use std::io::Write;
 
     fn default_images_config() -> ImagesConfig {

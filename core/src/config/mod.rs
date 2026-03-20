@@ -2,7 +2,6 @@
 
 pub mod auth;
 pub mod keys;
-pub mod prefs;
 pub mod schema;
 
 use std::collections::HashMap;
@@ -1098,20 +1097,6 @@ command = "echo started"
         assert_eq!(hooks.pre_tool_use.len(), 1);
         assert_eq!(hooks.session_start.len(), 1);
 
-        // ToolRegistry wiring
-        let tool_reg = crate::tools::ToolRegistry::new(
-            tools.registry.as_ref(),
-            None,
-            &crate::scm::detection::ScmProvider::Unknown,
-        );
-        let defs = tool_reg.definitions();
-        assert!(defs.iter().any(|d| d.name == "cli_test"));
-        assert!(defs.iter().any(|d| d.name == "cli_deploy"));
-
-        // Deploy should have typed args
-        let deploy_def = defs.iter().find(|d| d.name == "cli_deploy").unwrap();
-        let props = deploy_def.input_schema.get("properties").unwrap();
-        assert!(props.get("env").is_some());
     }
 
     #[test]

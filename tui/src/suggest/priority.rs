@@ -51,7 +51,7 @@ impl Default for PriorityWeights {
 
 impl PriorityWeights {
     /// Build from optional config, falling back to defaults.
-    pub fn from_config(config: Option<&crate::config::schema::PriorityConfig>) -> Self {
+    pub fn from_config(config: Option<&caboose_core::config::schema::PriorityConfig>) -> Self {
         let defaults = Self::default();
         match config {
             None => defaults,

@@ -5,7 +5,7 @@ pub mod storage;
 
 use anyhow::Result;
 
-use crate::config::Config;
+use caboose_core::config::Config;
 
 /// A conversation session.
 #[derive(Debug, Clone)]

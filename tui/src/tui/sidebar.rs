@@ -172,7 +172,7 @@ pub fn render(
     tokens_per_sec: Option<f64>,
     mcp_servers: &[(String, ServerStatus, usize, bool)],
     model_id: &str,
-    pricing: &crate::provider::pricing::PricingRegistry,
+    pricing: &caboose_core::provider::pricing::PricingRegistry,
     modified_files: &std::collections::HashMap<String, FileStats>,
     task_outline: Option<&TaskOutline>,
     tick: u64,

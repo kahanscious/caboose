@@ -36,11 +36,11 @@ pub async fn execute_tool(
     additional_secrets: &[String],
     mcp_manager: Option<&mut crate::mcp::McpManager>,
     lsp_manager: Option<&mut crate::lsp::LspManager>,
-    services: Option<&crate::config::schema::ServicesConfig>,
-    cli_tools: Option<&std::collections::HashMap<String, crate::config::schema::CliToolConfig>>,
+    services: Option<&caboose_core::config::schema::ServicesConfig>,
+    cli_tools: Option<&std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>>,
     deny_list: &[String],
     exec_tools: Option<
-        &std::collections::HashMap<String, crate::config::schema::ExecutableToolConfig>,
+        &std::collections::HashMap<String, caboose_core::config::schema::ExecutableToolConfig>,
     >,
 ) -> Result<ToolResult> {
     // MCP tool routing — namespaced names contain ':'
@@ -401,7 +401,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "hello".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo hello".into(),
                 description: "Say hello".into(),
                 args: None,
@@ -432,7 +432,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "greet".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo".into(),
                 description: "Echo args".into(),
                 args: None,
@@ -463,7 +463,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "danger".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "rm -rf /".into(),
                 description: "Dangerous".into(),
                 args: None,
@@ -514,7 +514,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(
             "name".into(),
-            crate::config::schema::CliToolArg {
+            caboose_core::config::schema::CliToolArg {
                 arg_type: "string".into(),
                 description: None,
                 required: Some(true),
@@ -525,7 +525,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "greet".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo hello $name".into(),
                 description: "Greet someone".into(),
                 args: Some(args),

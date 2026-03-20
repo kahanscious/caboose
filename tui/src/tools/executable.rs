@@ -1,5 +1,5 @@
 //! Executable tool discovery and execution — JSON stdin/stdout protocol.
-use crate::config::schema::{CliToolArg, ExecutableToolConfig};
+use caboose_core::config::schema::{CliToolArg, ExecutableToolConfig};
 use std::collections::HashMap;
 
 /// Discovered schema from running `path --schema`.

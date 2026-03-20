@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::{StreamLineKind, SubAgentEvent, SubAgentStreamLine};
 use crate::agent::{AgentEvent, AgentLoop, AgentState, permission::PermissionMode};
-use crate::config::Config;
+use caboose_core::config::Config;
 
 pub struct SubAgentInput {
     pub id: Uuid,
@@ -27,7 +27,7 @@ pub struct SubAgentInput {
 /// Run a subagent task headlessly. Returns (total_cost_usd, summary_text) or an error message.
 pub async fn run_subagent(
     input: &mut SubAgentInput,
-    provider: Arc<dyn crate::provider::Provider + Send + Sync>,
+    provider: Arc<dyn caboose_core::provider::Provider + Send + Sync>,
     config: Config,
     tx: tokio::sync::mpsc::UnboundedSender<SubAgentEvent>,
 ) -> Result<(f64, String), String> {

@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use super::conversation::{Content, ContentBlock, Conversation, Role, truncate_to_boundary};
-use crate::provider::{Message as ProviderMessage, StreamEvent};
+use caboose_core::provider::{Message as ProviderMessage, StreamEvent};
 
 /// The summarization prompt sent to the provider.
 const SUMMARIZATION_INSTRUCTIONS: &str = "\

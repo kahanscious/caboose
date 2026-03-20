@@ -77,12 +77,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &WorkspaceListState) {
                 };
                 let avail_marker = if *available { "●" } else { "✗" };
                 let mode_str = match cfg.mode {
-                    crate::config::schema::WorkspaceMode::Proactive => "proactive",
-                    crate::config::schema::WorkspaceMode::Explicit => "explicit ",
+                    caboose_core::config::schema::WorkspaceMode::Proactive => "proactive",
+                    caboose_core::config::schema::WorkspaceMode::Explicit => "explicit ",
                 };
                 let access_str = match cfg.access {
-                    crate::config::schema::WorkspaceAccess::ReadWrite => "rw",
-                    crate::config::schema::WorkspaceAccess::ReadOnly => "ro",
+                    caboose_core::config::schema::WorkspaceAccess::ReadWrite => "rw",
+                    caboose_core::config::schema::WorkspaceAccess::ReadOnly => "ro",
                 };
                 let display_path = truncate_path(&cfg.path, 12);
                 let line = Line::from(vec![
@@ -145,7 +145,7 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
 
     #[test]
     fn render_does_not_panic_with_empty_list() {
@@ -165,7 +165,7 @@ mod tests {
                     WorkspaceConfig {
                         path: "/home/alex/caboose-web".to_string(),
                         mode: WorkspaceMode::Proactive,
-                        access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                        access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
                     },
                     true,
                 ),
@@ -174,7 +174,7 @@ mod tests {
                     WorkspaceConfig {
                         path: "/home/alex/caboose-docs".to_string(),
                         mode: WorkspaceMode::Explicit,
-                        access: crate::config::schema::WorkspaceAccess::ReadOnly,
+                        access: caboose_core::config::schema::WorkspaceAccess::ReadOnly,
                     },
                     false,
                 ),

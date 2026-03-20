@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use crate::agent::conversation::ContentBlock;
 use crate::agent::permission::PermissionMode;
 use crate::agent::{AgentLoop, AgentState};
-use crate::config::Config;
-use crate::config::auth::AuthStore;
-use crate::provider::{Provider, ProviderRegistry};
+use caboose_core::config::Config;
+use caboose_core::config::auth::AuthStore;
+use caboose_core::provider::{Provider, ProviderRegistry};
 use crate::session::SessionManager;
 use crate::tools::ToolRegistry;
 use crate::tui::Terminal;
@@ -107,7 +107,7 @@ pub struct State {
     pub expanded_messages: std::collections::HashSet<usize>,
     /// Indices of assistant messages whose thinking blocks are expanded.
     pub expanded_thinking: std::collections::HashSet<usize>,
-    pub pricing: crate::provider::pricing::PricingRegistry,
+    pub pricing: caboose_core::provider::pricing::PricingRegistry,
     pub tool_renderers: crate::tui::tools::ToolRendererRegistry,
     /// Queue of user messages to send after current agent turn completes.
     /// Max 3 messages. Input is always open; Enter queues when agent is busy.
@@ -134,7 +134,7 @@ pub struct State {
     /// Whether the active model supports extended thinking/reasoning.
     pub model_supports_thinking: bool,
     /// Current thinking mode toggle state.
-    pub thinking_mode: crate::provider::ThinkingMode,
+    pub thinking_mode: caboose_core::provider::ThinkingMode,
     /// Index into the tips array shown on the home screen (randomized at startup).
     pub home_tip_index: usize,
     /// Frame counter for animations — incremented every render loop iteration.
@@ -279,10 +279,10 @@ pub struct State {
     /// In-session circuit manager.
     pub circuit_manager: crate::circuits::runner::CircuitManager,
     /// Local LLM servers discovered at startup (background probe).
-    pub discovered_locals: Vec<crate::provider::local::LocalServer>,
+    pub discovered_locals: Vec<caboose_core::provider::local::LocalServer>,
     /// Receiver for background local server discovery result.
     pub local_discovery_rx:
-        Option<tokio::sync::oneshot::Receiver<Vec<crate::provider::local::LocalServer>>>,
+        Option<tokio::sync::oneshot::Receiver<Vec<caboose_core::provider::local::LocalServer>>>,
     /// Detected SCM provider for the current working directory.
     pub scm_provider: crate::scm::detection::ScmProvider,
     /// Active SCM watchers (each backed by a circuit).
@@ -434,7 +434,7 @@ pub enum ChatMessage {
     },
     /// Structured provider error with category-specific rendering.
     ProviderError {
-        category: crate::provider::error::ErrorCategory,
+        category: caboose_core::provider::error::ErrorCategory,
         provider: String,
         message: String,
         hint: Option<String>,
@@ -579,7 +579,7 @@ impl App {
         let terminal = Terminal::new()?;
         let providers = ProviderRegistry::new(&config);
 
-        let prefs = crate::config::prefs::TuiPrefs::load();
+        let prefs = crate::prefs::TuiPrefs::load();
 
         // Apply saved theme variant
         crate::tui::theme::set_active_variant(prefs.theme);
@@ -847,17 +847,17 @@ impl App {
             let model_id = p.model();
 
             // If the static table doesn't know this model, fetch from provider API
-            if crate::provider::models_dev::context_window(model_id).is_none()
+            if caboose_core::provider::models_dev::context_window(model_id).is_none()
                 && let Ok(model_list) = p.list_models().await
             {
                 let cw_entries: Vec<(String, Option<u32>)> = model_list
                     .iter()
                     .map(|m| (m.id.clone(), m.context_window))
                     .collect();
-                crate::provider::models_dev::cache_from_model_list(&cw_entries);
+                caboose_core::provider::models_dev::cache_from_model_list(&cw_entries);
             }
 
-            agent.context_window = crate::provider::models_dev::context_window_or_default(model_id);
+            agent.context_window = caboose_core::provider::models_dev::context_window_or_default(model_id);
         }
 
         let active_provider_name = provider
@@ -920,7 +920,7 @@ impl App {
                 paste_like_mode_until: None,
                 expanded_messages: std::collections::HashSet::new(),
                 expanded_thinking: std::collections::HashSet::new(),
-                pricing: crate::provider::pricing::PricingRegistry::new(),
+                pricing: caboose_core::provider::pricing::PricingRegistry::new(),
                 tool_renderers: crate::tui::tools::ToolRendererRegistry::new(),
                 message_queue: std::collections::VecDeque::new(),
                 tool_exec_queue: std::collections::VecDeque::new(),
@@ -933,7 +933,7 @@ impl App {
                 model_supports_tools: true,
                 model_supports_vision: false,
                 model_supports_thinking: false,
-                thinking_mode: crate::provider::ThinkingMode::Off,
+                thinking_mode: caboose_core::provider::ThinkingMode::Off,
                 home_tip_index: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as usize % crate::tui::home::TIPS.len())
@@ -1022,7 +1022,7 @@ impl App {
         if app.state.active_provider_name == "openrouter"
             && let Some(api_key) = app.state.config.keys.get("openrouter")
         {
-            let or_provider = crate::provider::openrouter::OpenRouterProvider::new(
+            let or_provider = caboose_core::provider::openrouter::OpenRouterProvider::new(
                 api_key.to_string(),
                 app.state.active_model_name.clone(),
             );
@@ -1185,7 +1185,7 @@ impl App {
                             category: serde_json::from_value(
                                 json.get("category").cloned().unwrap_or_default(),
                             )
-                            .unwrap_or(crate::provider::error::ErrorCategory::Unknown),
+                            .unwrap_or(caboose_core::provider::error::ErrorCategory::Unknown),
                             provider: json
                                 .get("provider")
                                 .and_then(|v| v.as_str())
@@ -1529,9 +1529,9 @@ impl App {
         // Background local LLM discovery
         {
             let (tx, rx) =
-                tokio::sync::oneshot::channel::<Vec<crate::provider::local::LocalServer>>();
+                tokio::sync::oneshot::channel::<Vec<caboose_core::provider::local::LocalServer>>();
             tokio::spawn(async move {
-                let servers = crate::provider::local::discover_local_servers().await;
+                let servers = caboose_core::provider::local::discover_local_servers().await;
                 let _ = tx.send(servers);
             });
             self.state.local_discovery_rx = Some(rx);
@@ -5077,7 +5077,7 @@ impl App {
                     .unwrap_or((true, false, false));
                 // Build display name for roundhouse before clearing slash_auto
                 let display_for_roundhouse = selection.as_ref().map(|(provider, model_id)| {
-                    let display = crate::provider::catalog::by_id(provider)
+                    let display = caboose_core::provider::catalog::by_id(provider)
                         .map(|e| e.display_name.to_string())
                         .unwrap_or_else(|| provider.clone());
                     (provider.clone(), display, model_id.clone())
@@ -5129,10 +5129,10 @@ impl App {
                     if provider == "_local" {
                         // Open the local connect dialog for the chosen server type
                         let server_type = match model_id.as_str() {
-                            "ollama" => crate::provider::local::LocalServerType::Ollama,
-                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
-                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
-                            _ => crate::provider::local::LocalServerType::Custom,
+                            "ollama" => caboose_core::provider::local::LocalServerType::Ollama,
+                            "lmstudio" => caboose_core::provider::local::LocalServerType::LmStudio,
+                            "llamacpp" => caboose_core::provider::local::LocalServerType::LlamaCpp,
+                            _ => caboose_core::provider::local::LocalServerType::Custom,
                         };
                         let provider_name = match model_id.as_str() {
                             "ollama" => "Ollama",
@@ -5161,7 +5161,7 @@ impl App {
                         self.state.model_supports_thinking = supports_thinking;
                         // Reset thinking mode when switching to a model that doesn't support it
                         if !supports_thinking {
-                            self.state.thinking_mode = crate::provider::ThinkingMode::Off;
+                            self.state.thinking_mode = caboose_core::provider::ThinkingMode::Off;
                         }
                         self.select_model(&provider, &model_id);
                     }
@@ -5204,21 +5204,21 @@ impl App {
                             self.state.input.clear();
 
                             // Local providers use address+probe flow instead of API key
-                            if crate::provider::catalog::by_id(&provider_id)
+                            if caboose_core::provider::catalog::by_id(&provider_id)
                                 .map(|p| p.is_local())
                                 .unwrap_or(false)
                             {
                                 let entry =
-                                    crate::provider::catalog::by_id(&provider_id).unwrap();
+                                    caboose_core::provider::catalog::by_id(&provider_id).unwrap();
                                 let server_type = match provider_id.as_str() {
-                                    "ollama" => crate::provider::local::LocalServerType::Ollama,
+                                    "ollama" => caboose_core::provider::local::LocalServerType::Ollama,
                                     "lmstudio" => {
-                                        crate::provider::local::LocalServerType::LmStudio
+                                        caboose_core::provider::local::LocalServerType::LmStudio
                                     }
                                     "llamacpp" => {
-                                        crate::provider::local::LocalServerType::LlamaCpp
+                                        caboose_core::provider::local::LocalServerType::LlamaCpp
                                     }
-                                    _ => crate::provider::local::LocalServerType::Custom,
+                                    _ => caboose_core::provider::local::LocalServerType::Custom,
                                 };
                                 self.state.dialog_stack.push(
                                     DialogKind::LocalProviderConnect(
@@ -5308,10 +5308,10 @@ impl App {
                             if let Some(preset_info) = crate::mcp::find_preset(&name) {
                                 let mut config = preset_info.config;
                                 config.removed = true;
-                                crate::config::save_mcp_server_toggle(&name, &config);
+                                caboose_core::config::save_mcp_server_toggle(&name, &config);
                             }
                         } else {
-                            crate::config::remove_mcp_server(&name);
+                            caboose_core::config::remove_mcp_server(&name);
                         }
                         self.state.chat_messages.push(ChatMessage::System {
                             content: format!("MCP: Removed \"{name}\""),
@@ -5358,7 +5358,7 @@ impl App {
                                         .suggest
                                         .get_or_insert_with(Default::default);
                                     suggest_config.enabled = enabled;
-                                    crate::config::save_suggest_enabled(enabled);
+                                    caboose_core::config::save_suggest_enabled(enabled);
                                 }
                                 _ => {}
                             }
@@ -5380,7 +5380,7 @@ impl App {
                                         .copied()
                                         .unwrap_or_default();
                                     crate::tui::theme::set_active_variant(variant);
-                                    let mut prefs = crate::config::prefs::TuiPrefs::load();
+                                    let mut prefs = crate::prefs::TuiPrefs::load();
                                     prefs.theme = variant;
                                     prefs.save();
                                 }
@@ -5396,10 +5396,10 @@ impl App {
                                         .behavior
                                         .get_or_insert_with(Default::default)
                                         .max_session_cost = new_max;
-                                    crate::config::save_behavior_max_session_cost(new_max);
+                                    caboose_core::config::save_behavior_max_session_cost(new_max);
                                 }
                                 "reasoning.level" => {
-                                    let new_mode = crate::provider::ThinkingMode::ALL
+                                    let new_mode = caboose_core::provider::ThinkingMode::ALL
                                         .iter()
                                         .find(|m| m.label() == item.value)
                                         .copied()
@@ -5596,7 +5596,7 @@ impl App {
         false
     }
 
-    fn images_config(&self) -> crate::config::schema::ImagesConfig {
+    fn images_config(&self) -> caboose_core::config::schema::ImagesConfig {
         self.state.config.images.clone().unwrap_or_default()
     }
 
@@ -5652,7 +5652,7 @@ impl App {
                 self.state.active_model_name = p.model().to_string();
 
                 // If the static table doesn't know this model, fetch from provider API
-                if crate::provider::models_dev::context_window(&self.state.active_model_name)
+                if caboose_core::provider::models_dev::context_window(&self.state.active_model_name)
                     .is_none()
                     && let Ok(model_list) = p.list_models().await
                 {
@@ -5660,17 +5660,17 @@ impl App {
                         .iter()
                         .map(|m| (m.id.clone(), m.context_window))
                         .collect();
-                    crate::provider::models_dev::cache_from_model_list(&cw_entries);
+                    caboose_core::provider::models_dev::cache_from_model_list(&cw_entries);
                 }
 
                 // Update context window for compaction and sidebar display
                 self.state.agent.context_window =
-                    crate::provider::models_dev::context_window_or_default(
+                    caboose_core::provider::models_dev::context_window_or_default(
                         &self.state.active_model_name,
                     );
 
                 let cw_display =
-                    crate::provider::models_dev::context_window(&self.state.active_model_name)
+                    caboose_core::provider::models_dev::context_window(&self.state.active_model_name)
                         .map(|cw| format!(" ({}k context)", cw / 1000))
                         .unwrap_or_default();
                 self.state.chat_messages.push(ChatMessage::System {
@@ -5683,7 +5683,7 @@ impl App {
                 self.resolve_compaction_provider();
 
                 // Persist last-used provider so we reconnect on restart
-                let mut prefs = crate::config::prefs::TuiPrefs::load();
+                let mut prefs = crate::prefs::TuiPrefs::load();
                 prefs.last_provider = Some(provider_id.to_string());
                 prefs.last_model = None; // use provider's default
                 prefs.save();
@@ -6173,15 +6173,15 @@ impl App {
                         _ => return,
                     };
                     let server_type = match provider_id.as_str() {
-                        "ollama" => crate::provider::local::LocalServerType::Ollama,
-                        "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
-                        "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
-                        _ => crate::provider::local::LocalServerType::Custom,
+                        "ollama" => caboose_core::provider::local::LocalServerType::Ollama,
+                        "lmstudio" => caboose_core::provider::local::LocalServerType::LmStudio,
+                        "llamacpp" => caboose_core::provider::local::LocalServerType::LlamaCpp,
+                        _ => caboose_core::provider::local::LocalServerType::Custom,
                     };
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let addr = address;
                     tokio::spawn(async move {
-                        match crate::provider::local::probe_server(&addr, &server_type).await {
+                        match caboose_core::provider::local::probe_server(&addr, &server_type).await {
                             Some(models) => {
                                 let _ = tx.send(Ok(models));
                             }
@@ -6273,13 +6273,13 @@ impl App {
                     }
 
                     // Save local provider config
-                    let local_config = crate::config::schema::LocalProviderConfig {
+                    let local_config = caboose_core::config::schema::LocalProviderConfig {
                         provider_type: provider_id.clone(),
                         address: address.clone(),
                         model: Some(model_name.clone()),
                         display_name: Some(provider_name.clone()),
                     };
-                    crate::config::save_local_provider(&provider_id, &local_config);
+                    caboose_core::config::save_local_provider(&provider_id, &local_config);
 
                     // Update in-memory config so connect_provider can find it
                     self.state
@@ -6290,7 +6290,7 @@ impl App {
                     // Always update discovered_locals so this server's models are available
                     // in the picker for the rest of the session.
                     {
-                        use crate::provider::local::{LocalServer, LocalServerType};
+                        use caboose_core::provider::local::{LocalServer, LocalServerType};
                         let server_type = match provider_id.as_str() {
                             "ollama" => LocalServerType::Ollama,
                             "lmstudio" => LocalServerType::LmStudio,
@@ -6483,7 +6483,7 @@ impl App {
                 let edit_state =
                     if let Some(DialogKind::WorkspaceList(state)) = self.state.dialog_stack.top() {
                         state.workspaces.get(state.selected).map(|(name, cfg, _)| {
-                            use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+                            use caboose_core::config::schema::{WorkspaceAccess, WorkspaceMode};
                             let mode_selected = if cfg.mode == WorkspaceMode::Proactive {
                                 0
                             } else {
@@ -6523,7 +6523,7 @@ impl App {
                 };
 
                 if let Some(name) = name_to_remove {
-                    crate::config::remove_workspace(&name);
+                    caboose_core::config::remove_workspace(&name);
                     // Update in-memory config
                     self.state.config.workspaces.remove(&name);
                     if let Some(DialogKind::WorkspaceList(state)) =
@@ -6671,7 +6671,7 @@ impl App {
     }
 
     async fn handle_workspace_add_confirm(&mut self) {
-        use crate::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
+        use caboose_core::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
         use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
 
         let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
@@ -6834,7 +6834,7 @@ impl App {
                     };
 
                 let cfg = WorkspaceConfig { path, mode, access };
-                crate::config::save_workspace(&name, &cfg);
+                caboose_core::config::save_workspace(&name, &cfg);
                 self.state.config.workspaces.insert(name.clone(), cfg);
                 self.state.dialog_stack.pop();
                 self.refresh_workspace_list_state();
@@ -6902,7 +6902,7 @@ impl App {
         };
 
         // Create config
-        let server_config = crate::config::schema::McpServerConfig {
+        let server_config = caboose_core::config::schema::McpServerConfig {
             command: Some(command),
             url: None,
             args,
@@ -7246,7 +7246,7 @@ impl App {
         if let Some(ref provider) = self.provider {
             if active == "openrouter" {
                 if let Some(api_key) = self.state.config.keys.get("openrouter") {
-                    let or_provider = crate::provider::openrouter::OpenRouterProvider::new(
+                    let or_provider = caboose_core::provider::openrouter::OpenRouterProvider::new(
                         api_key.to_string(),
                         provider.model().to_string(),
                     );
@@ -7286,7 +7286,7 @@ impl App {
         if active != "openrouter"
             && let Some(api_key) = self.state.config.keys.get("openrouter")
         {
-            let or_provider = crate::provider::openrouter::OpenRouterProvider::new(
+            let or_provider = caboose_core::provider::openrouter::OpenRouterProvider::new(
                 api_key.to_string(),
                 "anthropic/claude-sonnet-4.6".to_string(),
             );
@@ -7312,7 +7312,7 @@ impl App {
             if let Some(ref model) = local_cfg.model {
                 models.push((
                     name.clone(),
-                    crate::provider::ModelInfo {
+                    caboose_core::provider::ModelInfo {
                         id: model.clone(),
                         name: model.clone(),
                         context_window: None,
@@ -7329,10 +7329,10 @@ impl App {
                 continue;
             }
             let provider_id = match server.server_type {
-                crate::provider::local::LocalServerType::Ollama => "ollama",
-                crate::provider::local::LocalServerType::LmStudio => "lmstudio",
-                crate::provider::local::LocalServerType::LlamaCpp => "llamacpp",
-                crate::provider::local::LocalServerType::Custom => "custom",
+                caboose_core::provider::local::LocalServerType::Ollama => "ollama",
+                caboose_core::provider::local::LocalServerType::LmStudio => "lmstudio",
+                caboose_core::provider::local::LocalServerType::LlamaCpp => "llamacpp",
+                caboose_core::provider::local::LocalServerType::Custom => "custom",
             };
             for model_id in &server.models {
                 // Skip if already present from configured local providers
@@ -7344,7 +7344,7 @@ impl App {
                 }
                 models.push((
                     provider_id.to_string(),
-                    crate::provider::ModelInfo {
+                    caboose_core::provider::ModelInfo {
                         id: model_id.clone(),
                         name: model_id.clone(),
                         context_window: None,
@@ -7360,7 +7360,7 @@ impl App {
             .iter()
             .map(|(_, m)| (m.id.clone(), m.context_window))
             .collect();
-        crate::provider::models_dev::cache_from_model_list(&cw_entries);
+        caboose_core::provider::models_dev::cache_from_model_list(&cw_entries);
 
         models.sort_by(|(pa, a), (pb, b)| pa.cmp(pb).then(a.id.cmp(&b.id)));
 
@@ -7377,7 +7377,7 @@ impl App {
                 0,
                 (
                     "_local".to_string(),
-                    crate::provider::ModelInfo {
+                    caboose_core::provider::ModelInfo {
                         id: id.to_string(),
                         name: name.to_string(),
                         context_window: None,
@@ -7390,8 +7390,8 @@ impl App {
         }
 
         // Build recent models from prefs
-        let prefs = crate::config::prefs::TuiPrefs::load();
-        let recent: Vec<(String, crate::provider::ModelInfo)> = prefs
+        let prefs = crate::prefs::TuiPrefs::load();
+        let recent: Vec<(String, caboose_core::provider::ModelInfo)> = prefs
             .recent_models
             .iter()
             .map(|rm| {
@@ -7402,7 +7402,7 @@ impl App {
                 let supports_thinking = found.map(|(_, m)| m.supports_thinking).unwrap_or(false);
                 (
                     rm.provider.clone(),
-                    crate::provider::ModelInfo {
+                    caboose_core::provider::ModelInfo {
                         id: rm.model_id.clone(),
                         name: rm.model_id.clone(),
                         context_window: None,
@@ -7524,7 +7524,7 @@ impl App {
             if is_enabled {
                 // Disable preset
                 self.state.mcp_manager.disable_server(&name).await;
-                crate::config::save_mcp_server_toggle(
+                caboose_core::config::save_mcp_server_toggle(
                     &name,
                     &self.state.mcp_manager.servers[&name].config,
                 );
@@ -7533,7 +7533,7 @@ impl App {
                 if let Some(server) = self.state.mcp_manager.servers.get_mut(&name) {
                     server.config.disabled = false;
                 }
-                crate::config::save_mcp_server_toggle(
+                caboose_core::config::save_mcp_server_toggle(
                     &name,
                     &self.state.mcp_manager.servers[&name].config,
                 );
@@ -7573,12 +7573,12 @@ impl App {
 
                 // Update context window for compaction and sidebar display
                 self.state.agent.context_window =
-                    crate::provider::models_dev::context_window_or_default(
+                    caboose_core::provider::models_dev::context_window_or_default(
                         &self.state.active_model_name,
                     );
 
                 let cw_display =
-                    crate::provider::models_dev::context_window(&self.state.active_model_name)
+                    caboose_core::provider::models_dev::context_window(&self.state.active_model_name)
                         .map(|cw| format!(" ({}k context)", cw / 1000))
                         .unwrap_or_default();
                 let switch_handoff = self.build_model_switch_handoff_context(
@@ -7616,7 +7616,7 @@ impl App {
                 }
 
                 // Persist last-used provider + model + recent history
-                let mut prefs = crate::config::prefs::TuiPrefs::load();
+                let mut prefs = crate::prefs::TuiPrefs::load();
                 prefs.last_provider = Some(provider_name.to_string());
                 prefs.last_model = Some(model_id.to_string());
                 prefs.push_recent_model(provider_name, model_id);
@@ -8103,7 +8103,7 @@ impl App {
     }
 
     /// Build tool definitions to send to the LLM, respecting model capability.
-    fn build_tool_defs(&self) -> Vec<crate::provider::ToolDefinition> {
+    fn build_tool_defs(&self) -> Vec<caboose_core::provider::ToolDefinition> {
         if !self.state.model_supports_tools {
             tracing::debug!("Skipping tools — model does not support tool calling");
             return Vec::new();
@@ -8725,8 +8725,8 @@ impl App {
         (
             uuid::Uuid,
             crate::sub_agent::executor::SubAgentInput,
-            std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
-            crate::config::Config,
+            std::sync::Arc<dyn caboose_core::provider::Provider + Send + Sync>,
+            caboose_core::config::Config,
             tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
             String,
             String,
@@ -9385,7 +9385,7 @@ impl App {
     /// and TickCompleted/Error by pushing messages to the chat.
     async fn poll_circuit_events(&mut self) {
         use crate::circuits::runner::CircuitEvent;
-        use crate::provider::{Message, StreamEvent};
+        use caboose_core::provider::{Message, StreamEvent};
         use futures::StreamExt;
 
         // Collect pending events without holding a borrow on circuit_manager
@@ -10242,7 +10242,7 @@ impl App {
                  User: {user_msg}\nAssistant: {asst_msg}"
             );
 
-            let messages = vec![crate::provider::Message {
+            let messages = vec![caboose_core::provider::Message {
                 role: "user".to_string(),
                 content: serde_json::Value::String(prompt),
             }];
@@ -10252,13 +10252,13 @@ impl App {
             let mut title = String::new();
             while let Some(event) = stream.next().await {
                 match event {
-                    Ok(crate::provider::StreamEvent::TextDelta(text)) => {
+                    Ok(caboose_core::provider::StreamEvent::TextDelta(text)) => {
                         title.push_str(&text);
                     }
-                    Ok(crate::provider::StreamEvent::Done { .. }) => break,
+                    Ok(caboose_core::provider::StreamEvent::Done { .. }) => break,
                     Ok(
-                        crate::provider::StreamEvent::Error(_)
-                        | crate::provider::StreamEvent::ProviderError { .. },
+                        caboose_core::provider::StreamEvent::Error(_)
+                        | caboose_core::provider::StreamEvent::ProviderError { .. },
                     ) => break,
                     _ => {}
                 }
@@ -10458,7 +10458,7 @@ impl App {
 
         // Persist to config file
         let project_config_exists = std::path::Path::new(".caboose/config.toml").exists();
-        crate::config::save_skills_disabled(&skills_config.disabled, project_config_exists);
+        caboose_core::config::save_skills_disabled(&skills_config.disabled, project_config_exists);
 
         // Reload skills to reflect change
         let disabled = self
@@ -10765,7 +10765,7 @@ impl App {
         };
 
         // No tools for critique phase
-        let tools: Vec<crate::provider::ToolDefinition> = Vec::new();
+        let tools: Vec<caboose_core::provider::ToolDefinition> = Vec::new();
 
         let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel();
         self.state.roundhouse_critique_rx = Some(update_rx);
@@ -11041,11 +11041,11 @@ impl App {
 
         // Build messages: system prompt as system message, then user asks to synthesize
         let messages = vec![
-            crate::provider::Message {
+            caboose_core::provider::Message {
                 role: "system".to_string(),
                 content: serde_json::json!(system),
             },
-            crate::provider::Message {
+            caboose_core::provider::Message {
                 role: "user".to_string(),
                 content: serde_json::json!(
                     "Synthesize the plans above into a single unified implementation plan."
@@ -11059,12 +11059,12 @@ impl App {
 
             while let Some(event_result) = stream.next().await {
                 match event_result {
-                    Ok(crate::provider::StreamEvent::TextDelta(delta)) => {
+                    Ok(caboose_core::provider::StreamEvent::TextDelta(delta)) => {
                         let _ = tx.send(delta);
                     }
-                    Ok(crate::provider::StreamEvent::Error(_))
-                    | Ok(crate::provider::StreamEvent::ProviderError { .. })
-                    | Ok(crate::provider::StreamEvent::Done { .. }) => {
+                    Ok(caboose_core::provider::StreamEvent::Error(_))
+                    | Ok(caboose_core::provider::StreamEvent::ProviderError { .. })
+                    | Ok(caboose_core::provider::StreamEvent::Done { .. }) => {
                         break;
                     }
                     _ => {}
@@ -11154,7 +11154,7 @@ impl App {
             content: "Generating CABOOSE.md...".to_string(),
         });
 
-        let messages = vec![crate::provider::Message {
+        let messages = vec![caboose_core::provider::Message {
             role: "user".to_string(),
             content: serde_json::json!(user_prompt),
         }];
@@ -11169,10 +11169,10 @@ impl App {
             let mut stream = stream;
             while let Some(event) = stream.next().await {
                 let init_event = match event {
-                    Ok(crate::provider::StreamEvent::TextDelta(text)) => {
+                    Ok(caboose_core::provider::StreamEvent::TextDelta(text)) => {
                         crate::init::handler::InitEvent::TextDelta(text)
                     }
-                    Ok(crate::provider::StreamEvent::Done {
+                    Ok(caboose_core::provider::StreamEvent::Done {
                         input_tokens,
                         output_tokens,
                         ..
@@ -11180,7 +11180,7 @@ impl App {
                         input_tokens: input_tokens.unwrap_or(0),
                         output_tokens: output_tokens.unwrap_or(0),
                     },
-                    Ok(crate::provider::StreamEvent::Error(e)) => {
+                    Ok(caboose_core::provider::StreamEvent::Error(e)) => {
                         crate::init::handler::InitEvent::Error(format!(
                             "Failed to generate CABOOSE.md: {e}"
                         ))
@@ -11873,7 +11873,7 @@ impl App {
                 label: "Reasoning Level".to_string(),
                 value: current,
                 kind: crate::tui::slash_auto::SettingsKind::Choice(
-                    crate::provider::ThinkingMode::ALL
+                    caboose_core::provider::ThinkingMode::ALL
                         .iter()
                         .map(|l| l.label().to_string())
                         .collect(),
@@ -12339,7 +12339,7 @@ impl App {
 
         // Send to provider (non-streaming, one-shot)
         if let Some(ref provider) = self.provider {
-            let messages = vec![crate::provider::Message {
+            let messages = vec![caboose_core::provider::Message {
                 role: "user".to_string(),
                 content: serde_json::json!(prompt),
             }];
@@ -12349,7 +12349,7 @@ impl App {
             let mut response = String::new();
             let mut stream = provider.stream(&messages, &[]);
             while let Some(event) = stream.next().await {
-                if let Ok(crate::provider::StreamEvent::TextDelta(text)) = event {
+                if let Ok(caboose_core::provider::StreamEvent::TextDelta(text)) = event {
                     response.push_str(&text);
                 }
             }
@@ -12595,8 +12595,8 @@ async fn run_spawn_agent_task(
     worktree_path: std::path::PathBuf,
     base_sha: String,
     mut input: crate::sub_agent::executor::SubAgentInput,
-    provider: std::sync::Arc<dyn crate::provider::Provider + Send + Sync>,
-    config: crate::config::Config,
+    provider: std::sync::Arc<dyn caboose_core::provider::Provider + Send + Sync>,
+    config: caboose_core::config::Config,
     tx: tokio::sync::mpsc::UnboundedSender<crate::sub_agent::SubAgentEvent>,
 ) -> crate::sub_agent::SpawnAgentResult {
     use crate::sub_agent::{SpawnAgentResult, SubAgentState};
@@ -13068,7 +13068,7 @@ fn is_ignored_dir(name: &str) -> bool {
 }
 
 fn build_workspace_list_state(
-    config: &crate::config::Config,
+    config: &caboose_core::config::Config,
 ) -> crate::tui::dialog::WorkspaceListState {
     use crate::tui::dialog::WorkspaceListState;
     let workspaces = config
@@ -13089,9 +13089,9 @@ fn build_workspace_list_state(
 /// Omits workspaces whose path no longer exists.
 /// Returns an empty string if no workspaces are configured or available.
 fn workspace_system_prompt_block(
-    workspaces: &std::collections::HashMap<String, crate::config::schema::WorkspaceConfig>,
+    workspaces: &std::collections::HashMap<String, caboose_core::config::schema::WorkspaceConfig>,
 ) -> String {
-    use crate::config::schema::{WorkspaceAccess, WorkspaceMode};
+    use caboose_core::config::schema::{WorkspaceAccess, WorkspaceMode};
 
     if workspaces.is_empty() {
         return String::new();
@@ -13434,7 +13434,7 @@ mod workspace_add_validation_tests {
 
 #[cfg(test)]
 mod workspace_list_handler_tests {
-    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
     use crate::tui::dialog::WorkspaceListState;
 
     fn make_state(n: usize) -> WorkspaceListState {
@@ -13446,7 +13446,7 @@ mod workspace_list_handler_tests {
                         WorkspaceConfig {
                             path: format!("/tmp/ws{i}"),
                             mode: WorkspaceMode::Proactive,
-                            access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                            access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
                         },
                         true,
                     )
@@ -13494,7 +13494,7 @@ mod execute_command_tests {
 
 #[cfg(test)]
 mod workspace_prompt_tests {
-    use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+    use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
     use std::collections::HashMap;
 
     fn build_workspace_block(workspaces: &HashMap<String, WorkspaceConfig>) -> String {
@@ -13517,7 +13517,7 @@ mod workspace_prompt_tests {
             WorkspaceConfig {
                 path: path_str.clone(),
                 mode: WorkspaceMode::Proactive,
-                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
             },
         );
         let block = build_workspace_block(&ws);
@@ -13536,7 +13536,7 @@ mod workspace_prompt_tests {
             WorkspaceConfig {
                 path: path_str.clone(),
                 mode: WorkspaceMode::Explicit,
-                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
             },
         );
         let block = build_workspace_block(&ws);
@@ -13552,7 +13552,7 @@ mod workspace_prompt_tests {
             WorkspaceConfig {
                 path: "/nonexistent/path/xyz123".to_string(),
                 mode: WorkspaceMode::Proactive,
-                access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
             },
         );
         let block = build_workspace_block(&ws);

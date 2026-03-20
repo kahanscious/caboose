@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use crate::provider::{self, Provider, ToolDefinition};
+use caboose_core::provider::{self, Provider, ToolDefinition};
 use cold_storage::ColdStore;
 use conversation::{Content, ContentBlock, Conversation, Message, Role};
 use permission::{PermissionMode, ToolDecision, check_permission};
@@ -40,7 +40,7 @@ pub enum AgentEvent {
     Error(String),
     /// Structured provider error with classification.
     ProviderError {
-        category: crate::provider::error::ErrorCategory,
+        category: caboose_core::provider::error::ErrorCategory,
         provider: String,
         message: String,
         hint: Option<String>,
@@ -499,12 +499,12 @@ impl AgentLoop {
     pub async fn execute_pending_tools(
         &mut self,
         mcp_manager: &mut crate::mcp::McpManager,
-        services: Option<&crate::config::schema::ServicesConfig>,
-        cli_tools: Option<&std::collections::HashMap<String, crate::config::schema::CliToolConfig>>,
+        services: Option<&caboose_core::config::schema::ServicesConfig>,
+        cli_tools: Option<&std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>>,
         deny_commands: &[String],
-        hooks: Option<&crate::config::schema::HooksConfig>,
+        hooks: Option<&caboose_core::config::schema::HooksConfig>,
         exec_tools: Option<
-            &std::collections::HashMap<String, crate::config::schema::ExecutableToolConfig>,
+            &std::collections::HashMap<String, caboose_core::config::schema::ExecutableToolConfig>,
         >,
     ) -> Vec<tools::ToolResult> {
         let mut results = Vec::new();
