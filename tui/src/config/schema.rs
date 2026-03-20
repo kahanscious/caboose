@@ -247,6 +247,25 @@ impl Default for BehaviorConfig {
     }
 }
 
+/// Custom per-model pricing override (USD per million tokens).
+///
+/// ```toml
+/// [pricing."claude-sonnet-4-6"]
+/// input_per_m = 3.0
+/// output_per_m = 15.0
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricingOverride {
+    /// Input cost per million tokens (USD).
+    pub input_per_m: f64,
+    /// Output cost per million tokens (USD).
+    pub output_per_m: f64,
+    /// Cache read cost per million tokens. Defaults to 10% of input.
+    pub cache_read_per_m: Option<f64>,
+    /// Cache creation cost per million tokens. Defaults to 125% of input.
+    pub cache_creation_per_m: Option<f64>,
+}
+
 /// LSP configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspConfig {

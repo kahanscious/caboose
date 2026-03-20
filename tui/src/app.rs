@@ -1028,7 +1028,9 @@ impl App {
             );
             if let Ok((models, pricing_entries)) = or_provider.list_models_with_pricing().await {
                 for (model_id, model_pricing) in &pricing_entries {
-                    app.state.pricing.insert(model_id.clone(), *model_pricing);
+                    app.state
+                        .pricing
+                        .insert_with_cross_map(model_id.clone(), *model_pricing);
                 }
                 // Set capabilities for the active model from the fetched list
                 if let Some(info) = models.iter().find(|m| m.id == app.state.active_model_name) {
@@ -1037,6 +1039,11 @@ impl App {
                     app.state.model_supports_thinking = info.supports_thinking;
                 }
             }
+        }
+
+        // Load user pricing overrides from config (highest priority — applied last)
+        if !app.state.config.pricing.is_empty() {
+            app.state.pricing.load_from_config(&app.state.config.pricing);
         }
 
         // For non-OpenRouter providers, look up capabilities from the provider's model list
@@ -7222,7 +7229,9 @@ impl App {
                     match or_provider.list_models_with_pricing().await {
                         Ok((model_list, pricing_entries)) => {
                             for (model_id, model_pricing) in pricing_entries {
-                                self.state.pricing.insert(model_id, model_pricing);
+                                self.state
+                                    .pricing
+                                    .insert_with_cross_map(model_id, model_pricing);
                             }
                             for m in model_list {
                                 models.push((active.clone(), m));
@@ -7260,7 +7269,9 @@ impl App {
             if let Ok((model_list, pricing_entries)) = or_provider.list_models_with_pricing().await
             {
                 for (model_id, model_pricing) in pricing_entries {
-                    self.state.pricing.insert(model_id, model_pricing);
+                    self.state
+                        .pricing
+                        .insert_with_cross_map(model_id, model_pricing);
                 }
                 for m in model_list {
                     if !models

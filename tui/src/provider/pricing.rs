@@ -195,9 +195,39 @@ impl PricingRegistry {
         Self { models }
     }
 
-    /// Insert or overwrite pricing for a model (used by OpenRouter dynamic fetch).
+    /// Insert or overwrite pricing for a model.
+    #[allow(dead_code)]
     pub fn insert(&mut self, model_id: String, pricing: ModelPricing) {
         self.models.insert(model_id, pricing);
+    }
+
+    /// Load user pricing overrides from config. These take highest priority.
+    pub fn load_from_config(
+        &mut self,
+        overrides: &std::collections::HashMap<String, crate::config::schema::PricingOverride>,
+    ) {
+        for (model_id, o) in overrides {
+            let pricing = ModelPricing {
+                input_per_m: o.input_per_m,
+                output_per_m: o.output_per_m,
+                cache_read_per_m: o.cache_read_per_m.unwrap_or(o.input_per_m * 0.1),
+                cache_creation_per_m: o.cache_creation_per_m.unwrap_or(o.input_per_m * 1.25),
+            };
+            self.models.insert(model_id.clone(), pricing);
+        }
+    }
+
+    /// Insert pricing with cross-provider mapping: if the model ID contains a
+    /// provider prefix (e.g. `anthropic/claude-sonnet-4-6`), also insert the
+    /// bare model ID (`claude-sonnet-4-6`) so direct-provider users get pricing.
+    /// Does NOT overwrite existing entries for the bare ID (static/user overrides win).
+    pub fn insert_with_cross_map(&mut self, model_id: String, pricing: ModelPricing) {
+        // Always insert the full ID
+        self.models.insert(model_id.clone(), pricing);
+        // If prefixed, also insert the bare model ID (if not already present)
+        if let Some((_, bare)) = model_id.split_once('/') {
+            self.models.entry(bare.to_string()).or_insert(pricing);
+        }
     }
 
     /// Look up pricing for a model. Returns `None` for unknown models.
@@ -334,6 +364,79 @@ mod tests {
         let p = ModelPricing::standard(10.0, 20.0);
         assert!((p.cache_read_per_m - 1.0).abs() < f64::EPSILON); // 10% of input
         assert!((p.cache_creation_per_m - 12.5).abs() < f64::EPSILON); // 125% of input
+    }
+
+    #[test]
+    fn insert_with_cross_map_creates_bare_id() {
+        let mut reg = PricingRegistry::new();
+        reg.insert_with_cross_map(
+            "anthropic/claude-test-model".into(),
+            ModelPricing::standard(5.0, 25.0),
+        );
+        // Full ID works
+        let p = reg.get("anthropic/claude-test-model").unwrap();
+        assert!((p.input_per_m - 5.0).abs() < f64::EPSILON);
+        // Bare ID also works
+        let p2 = reg.get("claude-test-model").unwrap();
+        assert!((p2.input_per_m - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn insert_with_cross_map_does_not_overwrite_existing_bare() {
+        let mut reg = PricingRegistry::new();
+        // Static entry for claude-sonnet-4-6 already exists at $3/$15
+        assert!(reg.get("claude-sonnet-4-6").is_some());
+        // Insert OpenRouter version — should NOT overwrite the bare entry
+        reg.insert_with_cross_map(
+            "anthropic/claude-sonnet-4-6".into(),
+            ModelPricing::standard(99.0, 99.0),
+        );
+        // Full prefixed ID gets the new price
+        let p = reg.get("anthropic/claude-sonnet-4-6").unwrap();
+        assert!((p.input_per_m - 99.0).abs() < f64::EPSILON);
+        // Bare ID keeps the original static price
+        let p2 = reg.get("claude-sonnet-4-6").unwrap();
+        assert!((p2.input_per_m - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn load_from_config_overrides_static() {
+        let mut reg = PricingRegistry::new();
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(
+            "claude-sonnet-4-6".to_string(),
+            crate::config::schema::PricingOverride {
+                input_per_m: 1.0,
+                output_per_m: 2.0,
+                cache_read_per_m: None,
+                cache_creation_per_m: None,
+            },
+        );
+        reg.load_from_config(&overrides);
+        let p = reg.get("claude-sonnet-4-6").unwrap();
+        assert!((p.input_per_m - 1.0).abs() < f64::EPSILON);
+        assert!((p.output_per_m - 2.0).abs() < f64::EPSILON);
+        // Cache rates default from input
+        assert!((p.cache_read_per_m - 0.1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn load_from_config_with_explicit_cache_rates() {
+        let mut reg = PricingRegistry::new();
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(
+            "custom-model".to_string(),
+            crate::config::schema::PricingOverride {
+                input_per_m: 10.0,
+                output_per_m: 20.0,
+                cache_read_per_m: Some(0.5),
+                cache_creation_per_m: Some(15.0),
+            },
+        );
+        reg.load_from_config(&overrides);
+        let p = reg.get("custom-model").unwrap();
+        assert!((p.cache_read_per_m - 0.5).abs() < f64::EPSILON);
+        assert!((p.cache_creation_per_m - 15.0).abs() < f64::EPSILON);
     }
 
     #[test]

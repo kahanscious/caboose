@@ -85,6 +85,9 @@ pub struct Config {
     /// Suggest command configuration
     #[serde(default)]
     pub suggest: Option<schema::SuggestConfig>,
+    /// Custom per-model pricing overrides (USD per million tokens)
+    #[serde(default)]
+    pub pricing: HashMap<String, schema::PricingOverride>,
 }
 
 impl Config {
