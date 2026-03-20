@@ -488,4 +488,35 @@ mod tests {
         let result = truncate_at_word_boundary(long, 10);
         assert_eq!(result.len(), 10);
     }
+
+    #[test]
+    fn content_preview_basic() {
+        assert_eq!(
+            extract_content_preview("hello world\nsecond line", 60),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn content_preview_empty() {
+        assert_eq!(extract_content_preview("", 60), None);
+        assert_eq!(extract_content_preview("   \n  \n", 60), None);
+    }
+
+    #[test]
+    fn content_preview_truncation() {
+        let long = "a".repeat(100);
+        let result = extract_content_preview(&long, 20).unwrap();
+        // 19 ASCII chars + "…" (3 bytes UTF-8) = 22 bytes, but 20 chars
+        assert!(result.chars().count() <= 20);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn content_preview_skips_blank_lines() {
+        assert_eq!(
+            extract_content_preview("\n\n  \nhello", 60),
+            Some("hello".to_string())
+        );
+    }
 }

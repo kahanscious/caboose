@@ -861,7 +861,8 @@ mod tests {
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_assistant_message_truncated(&content, &colors(), false, Color::Blue);
+        let (lines, _) =
+            render_assistant_message_truncated(&content, &colors(), false, Color::Blue);
         assert!(
             lines.len() < 140,
             "expected truncation, got {} lines",
@@ -880,7 +881,7 @@ mod tests {
     #[test]
     fn short_message_not_truncated() {
         let content = "Short message\nJust two lines";
-        let lines = render_assistant_message_truncated(content, &colors(), false, Color::Blue);
+        let (lines, _) = render_assistant_message_truncated(content, &colors(), false, Color::Blue);
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -894,7 +895,7 @@ mod tests {
             .map(|i| format!("Line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_assistant_message_truncated(&content, &colors(), true, Color::Blue);
+        let (lines, _) = render_assistant_message_truncated(&content, &colors(), true, Color::Blue);
         assert!(
             lines.len() > 140,
             "expanded should show all, got {} lines",
@@ -988,5 +989,40 @@ mod tests {
         let lines = render_thinking_block("", false, &colors(), 0, false);
         // Empty thinking should still show the header
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn code_block_ranges_single() {
+        let (_, ranges) = parse_markdown(
+            "text\n```rust\nlet x = 1;\n```\nmore",
+            &colors(),
+            Color::Blue,
+        );
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].2, 0); // block_index 0
+    }
+
+    #[test]
+    fn code_block_ranges_multiple() {
+        let (_, ranges) = parse_markdown(
+            "```\nblock1\n```\nmid\n```py\nblock2\n```",
+            &colors(),
+            Color::Blue,
+        );
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].2, 0);
+        assert_eq!(ranges[1].2, 1);
+    }
+
+    #[test]
+    fn code_block_ranges_unclosed() {
+        let (_, ranges) = parse_markdown("```\nunclosed\nstill going", &colors(), Color::Blue);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn code_block_ranges_none() {
+        let (_, ranges) = parse_markdown("no code blocks here", &colors(), Color::Blue);
+        assert!(ranges.is_empty());
     }
 }
