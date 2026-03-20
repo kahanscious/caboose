@@ -33,6 +33,8 @@ pub enum AgentEvent {
     TurnComplete {
         input_tokens: u32,
         output_tokens: u32,
+        cache_read_tokens: u32,
+        cache_creation_tokens: u32,
     },
     /// Stream error.
     Error(String),
@@ -89,6 +91,8 @@ pub struct AgentLoop {
     pub additional_secrets: Vec<String>,
     pub last_input_tokens: u32,
     pub last_output_tokens: u32,
+    pub last_cache_read_tokens: u32,
+    pub last_cache_creation_tokens: u32,
     /// Tokens-per-second for the last completed stream.
     pub last_tokens_per_sec: Option<f64>,
     /// When the first TextDelta arrived (for tok/s calculation, excludes TTFT).
@@ -141,6 +145,8 @@ impl AgentLoop {
             additional_secrets: Vec::new(),
             last_input_tokens: 0,
             last_output_tokens: 0,
+            last_cache_read_tokens: 0,
+            last_cache_creation_tokens: 0,
             last_tokens_per_sec: None,
             first_token_at: None,
             context_window: 200_000,
@@ -288,10 +294,13 @@ impl AgentLoop {
                     Ok(provider::StreamEvent::Done {
                         input_tokens,
                         output_tokens,
-                        ..
+                        cache_read_tokens,
+                        cache_creation_tokens,
                     }) => AgentEvent::TurnComplete {
                         input_tokens: input_tokens.unwrap_or(0),
                         output_tokens: output_tokens.unwrap_or(0),
+                        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+                        cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
                     },
                     Ok(provider::StreamEvent::Error(e)) => AgentEvent::Error(e),
                     Ok(provider::StreamEvent::ProviderError {
@@ -363,9 +372,13 @@ impl AgentLoop {
                 AgentEvent::TurnComplete {
                     input_tokens,
                     output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
                 } => {
                     self.last_input_tokens = *input_tokens;
                     self.last_output_tokens = *output_tokens;
+                    self.last_cache_read_tokens = *cache_read_tokens;
+                    self.last_cache_creation_tokens = *cache_creation_tokens;
                     // Calculate tokens-per-second from first token to completion (excludes TTFT)
                     if let Some(first) = self.first_token_at.take() {
                         let elapsed = first.elapsed().as_secs_f64();
@@ -876,6 +889,8 @@ impl AgentLoop {
         }
         self.last_input_tokens = 0;
         self.last_output_tokens = 0;
+        self.last_cache_read_tokens = 0;
+        self.last_cache_creation_tokens = 0;
 
         // Post-compaction: re-read recent files to restore working context
         let budget_chars = (self.context_window as usize) * 25 / 100; // 25% of context window in chars

@@ -68,6 +68,15 @@ impl Storage {
         // Migration: add pins column
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN pins TEXT", []);
 
+        // Migration: add cost/token tracking columns
+        for col in &[
+            "total_input_tokens INTEGER NOT NULL DEFAULT 0",
+            "total_output_tokens INTEGER NOT NULL DEFAULT 0",
+            "total_cost_usd REAL NOT NULL DEFAULT 0.0",
+        ] {
+            let _ = conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col}"), []);
+        }
+
         // Migrate: create FTS5 index for message search
         let fts_is_new = conn
             .execute_batch(
@@ -145,7 +154,9 @@ impl Storage {
     pub fn update_session(&self, session: &super::Session) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET title = ?1, model = ?2, provider = ?3,
-             turn_count = ?4, updated_at = ?5, pins = ?6 WHERE id = ?7",
+             turn_count = ?4, updated_at = ?5, pins = ?6,
+             total_input_tokens = ?7, total_output_tokens = ?8, total_cost_usd = ?9
+             WHERE id = ?10",
             params![
                 session.title,
                 session.model,
@@ -153,6 +164,9 @@ impl Storage {
                 session.turn_count,
                 session.updated_at.to_rfc3339(),
                 serde_json::to_string(&session.pins).unwrap_or_else(|_| "[]".to_string()),
+                session.total_input_tokens as i64,
+                session.total_output_tokens as i64,
+                session.total_cost_usd,
                 session.id,
             ],
         )?;
@@ -162,33 +176,12 @@ impl Storage {
     /// List recent sessions, most recently updated first.
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<super::Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins
+            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins, total_input_tokens, total_output_tokens, total_cost_usd
              FROM sessions ORDER BY updated_at DESC LIMIT ?1",
         )?;
 
         let rows = stmt.query_map(params![limit as i64], |row| {
-            let created_str: String = row.get(6)?;
-            let updated_str: String = row.get(7)?;
-            Ok(super::Session {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                model: row.get(2)?,
-                provider: row.get(3)?,
-                turn_count: row.get::<_, i32>(4)? as u32,
-                cwd: row.get(5)?,
-                created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
-                    .unwrap_or_default()
-                    .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
-                    .unwrap_or_default()
-                    .with_timezone(&chrono::Utc),
-                parent_session_id: row.get(8)?,
-                fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
-                pins: row
-                    .get::<_, Option<String>>(10)?
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
-            })
+            row_to_session(row)
         })?;
 
         let mut sessions = Vec::new();
@@ -241,33 +234,12 @@ impl Storage {
     /// Load a session by ID.
     pub fn get_session(&self, id: &str) -> Result<Option<super::Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins
+            "SELECT id, title, model, provider, turn_count, cwd, created_at, updated_at, parent_session_id, fork_message_count, pins, total_input_tokens, total_output_tokens, total_cost_usd
              FROM sessions WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map(params![id], |row| {
-            let created_str: String = row.get(6)?;
-            let updated_str: String = row.get(7)?;
-            Ok(super::Session {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                model: row.get(2)?,
-                provider: row.get(3)?,
-                turn_count: row.get::<_, i32>(4)? as u32,
-                cwd: row.get(5)?,
-                created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
-                    .unwrap_or_default()
-                    .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
-                    .unwrap_or_default()
-                    .with_timezone(&chrono::Utc),
-                parent_session_id: row.get(8)?,
-                fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
-                pins: row
-                    .get::<_, Option<String>>(10)?
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
-            })
+            row_to_session(row)
         })?;
 
         match rows.next() {
@@ -344,6 +316,7 @@ impl Storage {
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.title, s.model, s.provider, s.turn_count, s.cwd,
                     s.created_at, s.updated_at, s.parent_session_id, s.fork_message_count, s.pins,
+                    s.total_input_tokens, s.total_output_tokens, s.total_cost_usd,
                     snippet(messages_fts, 0, '', '', '...', 20) as snip
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
@@ -356,30 +329,10 @@ impl Storage {
         let results = match stmt {
             Ok(ref mut stmt) => {
                 let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
-                    let created_str: String = row.get(6)?;
-                    let updated_str: String = row.get(7)?;
+                    let session = row_to_session(row)?;
                     Ok(SessionSearchResult {
-                        session: super::Session {
-                            id: row.get(0)?,
-                            title: row.get(1)?,
-                            model: row.get(2)?,
-                            provider: row.get(3)?,
-                            turn_count: row.get::<_, i32>(4)? as u32,
-                            cwd: row.get(5)?,
-                            created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
-                                .unwrap_or_default()
-                                .with_timezone(&chrono::Utc),
-                            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
-                                .unwrap_or_default()
-                                .with_timezone(&chrono::Utc),
-                            parent_session_id: row.get(8)?,
-                            fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
-                            pins: row
-                                .get::<_, Option<String>>(10)?
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or_default(),
-                        },
-                        content_index: row.get::<_, String>(11).unwrap_or_default(),
+                        session,
+                        content_index: row.get::<_, String>(14).unwrap_or_default(),
                     })
                 })?;
 
@@ -418,6 +371,38 @@ impl Storage {
     }
 }
 
+/// Map a database row to a Session struct.
+/// Expected column order: id, title, model, provider, turn_count, cwd,
+/// created_at, updated_at, parent_session_id, fork_message_count, pins,
+/// total_input_tokens, total_output_tokens, total_cost_usd
+fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<super::Session> {
+    let created_str: String = row.get(6)?;
+    let updated_str: String = row.get(7)?;
+    Ok(super::Session {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        model: row.get(2)?,
+        provider: row.get(3)?,
+        turn_count: row.get::<_, i32>(4)? as u32,
+        cwd: row.get(5)?,
+        created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
+            .unwrap_or_default()
+            .with_timezone(&chrono::Utc),
+        updated_at: chrono::DateTime::parse_from_rfc3339(&updated_str)
+            .unwrap_or_default()
+            .with_timezone(&chrono::Utc),
+        parent_session_id: row.get(8)?,
+        fork_message_count: row.get::<_, Option<i32>>(9)?.map(|v| v as u32),
+        pins: row
+            .get::<_, Option<String>>(10)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
+        total_input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0) as u64,
+        total_output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0) as u64,
+        total_cost_usd: row.get::<_, Option<f64>>(13)?.unwrap_or(0.0),
+    })
+}
+
 /// A stored message row.
 #[derive(Debug, Clone)]
 pub struct StoredMessage {
@@ -452,7 +437,10 @@ mod tests {
                 updated_at TEXT NOT NULL,
                 parent_session_id TEXT,
                 fork_message_count INTEGER,
-                pins TEXT
+                pins TEXT,
+                total_input_tokens INTEGER NOT NULL DEFAULT 0,
+                total_output_tokens INTEGER NOT NULL DEFAULT 0,
+                total_cost_usd REAL NOT NULL DEFAULT 0.0
             );
             CREATE TABLE messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -492,6 +480,9 @@ mod tests {
             parent_session_id: None,
             fork_message_count: None,
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         }
     }
 
@@ -664,6 +655,9 @@ mod tests {
             parent_session_id: Some("parent-1".to_string()),
             fork_message_count: Some(5),
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         };
         storage.insert_session(&session).unwrap();
 

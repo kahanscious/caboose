@@ -117,6 +117,7 @@ pub async fn run_subagent(
                 AgentEvent::TurnComplete {
                     input_tokens,
                     output_tokens,
+                    ..
                 } => {
                     let turn_cost = (*input_tokens as f64 * input_price_per_token)
                         + (*output_tokens as f64 * output_price_per_token);

@@ -1290,6 +1290,9 @@ impl App {
                 parent_session_id: None,
                 fork_message_count: None,
                 pins: vec![],
+                total_input_tokens: self.state.session_input_tokens,
+                total_output_tokens: self.state.session_output_tokens,
+                total_cost_usd: self.state.session_cost,
             };
             if let Err(e) = self.state.sessions.update(&session) {
                 tracing::warn!("Failed to update session: {e}");
@@ -7552,10 +7555,12 @@ impl App {
             .state
             .session_output_tokens
             .saturating_add(self.state.agent.last_output_tokens as u64);
-        if let Some(cost) = self.state.pricing.estimate_cost(
+        if let Some(cost) = self.state.pricing.estimate_cost_with_cache(
             &self.state.active_model_name,
             self.state.agent.last_input_tokens,
             self.state.agent.last_output_tokens,
+            self.state.agent.last_cache_read_tokens,
+            self.state.agent.last_cache_creation_tokens,
         ) {
             self.state.session_cost += cost;
         }
@@ -11650,6 +11655,9 @@ impl App {
             parent_session_id: Some(parent_id.clone()),
             fork_message_count: Some(message_count),
             pins: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
         };
         if let Err(e) = self.state.sessions.update(&title_session) {
             tracing::warn!("Failed to set fork title: {e}");
@@ -11727,7 +11735,7 @@ impl App {
             self.handle_init_command();
             return true;
         }
-        if slash == "status" || slash == "usage" {
+        if slash == "status" || slash == "usage" || slash == "cost" {
             self.state.dialog_stack.push(DialogKind::Status);
             return true;
         }

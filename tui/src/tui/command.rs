@@ -283,6 +283,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "session.cost",
+        name: "Session Cost",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("cost"),
+        available: |_| true,
+        execute: |_state| Action::None, // Handled in handle_shared_slash (alias for /status)
+    });
+
+    registry.register(Command {
         id: "session.fork",
         name: "Fork Session",
         category: Category::Session,
