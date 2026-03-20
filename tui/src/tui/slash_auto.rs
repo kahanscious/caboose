@@ -34,8 +34,11 @@ pub enum DropdownMode {
         /// Provider ids that are currently collapsed (hidden).
         collapsed: std::collections::HashSet<String>,
     },
-    /// /connect — provider catalog.
-    Providers,
+    /// /connect — provider catalog with collapsible groups.
+    Providers {
+        /// Group names that are currently collapsed.
+        collapsed: std::collections::HashSet<String>,
+    },
     /// /mcp — MCP server list with "Add new" option.
     McpServers {
         /// (name, status_label, tool_count, is_connected, is_preset, is_enabled, description)
@@ -122,9 +125,13 @@ impl SlashAutoState {
     }
 
     pub fn with_providers() -> Self {
+        // Engines and Local collapsed by default
+        let mut collapsed = std::collections::HashSet::new();
+        collapsed.insert("engines".to_string());
+        collapsed.insert("local".to_string());
         Self {
             selected: 0,
-            mode: DropdownMode::Providers,
+            mode: DropdownMode::Providers { collapsed },
             filter: String::new(),
         }
     }
@@ -817,14 +824,19 @@ fn build_model_row<'a>(
     ]))
 }
 
-/// Build provider items for the dropdown.
-fn build_provider_items<'a>(
+/// Entry in the provider picker — either a group header or a provider.
+#[derive(Debug, Clone)]
+pub enum ProviderPickerEntry {
+    GroupHeader(String), // group id: "popular", "engines", "local"
+    Provider(String),    // provider catalog id
+}
+
+/// Build the flat list of provider picker entries respecting collapsed state.
+pub fn build_provider_entries(
     filter: &str,
-    selected: usize,
-    colors: &crate::tui::theme::Colors,
-    width: u16,
+    collapsed: &std::collections::HashSet<String>,
     discovered_locals: &[crate::provider::local::LocalServer],
-) -> (Vec<ListItem<'a>>, Option<usize>) {
+) -> Vec<ProviderPickerEntry> {
     use crate::provider::catalog;
 
     let needle = filter.to_lowercase();
@@ -837,17 +849,74 @@ fn build_provider_items<'a>(
         })
         .collect();
 
-    let mut items: Vec<ListItem> = Vec::new();
-    let mut list_selected: Option<usize> = None;
-    let mut sel_idx = 0usize;
+    let popular: Vec<_> = filtered
+        .iter()
+        .filter(|e| e.popular && !e.is_local())
+        .copied()
+        .collect();
+    let engines: Vec<_> = filtered
+        .iter()
+        .filter(|e| !e.popular && !e.is_local())
+        .copied()
+        .collect();
+    let local: Vec<_> = filtered
+        .iter()
+        .filter(|e| e.is_local())
+        .copied()
+        .collect();
 
-    let popular: Vec<_> = filtered.iter().filter(|e| e.popular).copied().collect();
-    let other: Vec<_> = filtered.iter().filter(|e| !e.popular).copied().collect();
+    // Also include discovered local servers not in catalog
+    let _ = discovered_locals; // used by rendering, not entry building
+
+    let mut entries = Vec::new();
+
+    if !popular.is_empty() {
+        entries.push(ProviderPickerEntry::GroupHeader("popular".to_string()));
+        if !collapsed.contains("popular") {
+            for entry in &popular {
+                entries.push(ProviderPickerEntry::Provider(entry.id.to_string()));
+            }
+        }
+    }
+
+    if !engines.is_empty() {
+        entries.push(ProviderPickerEntry::GroupHeader("engines".to_string()));
+        if !collapsed.contains("engines") {
+            for entry in &engines {
+                entries.push(ProviderPickerEntry::Provider(entry.id.to_string()));
+            }
+        }
+    }
+
+    if !local.is_empty() {
+        entries.push(ProviderPickerEntry::GroupHeader("local".to_string()));
+        if !collapsed.contains("local") {
+            for entry in &local {
+                entries.push(ProviderPickerEntry::Provider(entry.id.to_string()));
+            }
+        }
+    }
+
+    entries
+}
+
+/// Build provider items for the dropdown.
+fn build_provider_items<'a>(
+    filter: &str,
+    selected: usize,
+    colors: &crate::tui::theme::Colors,
+    width: u16,
+    discovered_locals: &[crate::provider::local::LocalServer],
+    collapsed: &std::collections::HashSet<String>,
+) -> (Vec<ListItem<'a>>, Option<usize>) {
+    use crate::provider::catalog;
+    use crate::provider::local::LocalServerType;
+
+    let entries = build_provider_entries(filter, collapsed, discovered_locals);
 
     // Helper: check if a catalog entry corresponds to a running local server.
-    let is_running = |entry: &catalog::ProviderEntry| -> bool {
-        use crate::provider::local::LocalServerType;
-        let server_type = match entry.id {
+    let is_running = |entry_id: &str| -> bool {
+        let server_type = match entry_id {
             "ollama" => Some(LocalServerType::Ollama),
             "lmstudio" => Some(LocalServerType::LmStudio),
             "llamacpp" => Some(LocalServerType::LlamaCpp),
@@ -860,85 +929,73 @@ fn build_provider_items<'a>(
         })
     };
 
-    if !popular.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            " Popular",
-            Style::default().fg(colors.text_dim).bold(),
-        ))));
-        for entry in &popular {
-            if sel_idx == selected {
-                list_selected = Some(items.len());
-            }
-            let label_left = format!("  {}", entry.display_name);
-            let label_right = if is_running(entry) {
-                format!("{} (running)", entry.description)
-            } else {
-                entry.description.to_string()
-            };
-            let avail = (width as usize).saturating_sub(6);
-            let pad = avail
-                .saturating_sub(label_left.len())
-                .saturating_sub(label_right.len())
-                .max(1);
-            let style = if sel_idx == selected {
-                Style::default().bg(colors.bg_hover).fg(colors.text)
-            } else {
-                Style::default().fg(colors.text)
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(label_left, style),
-                Span::styled(" ".repeat(pad), style),
-                Span::styled(
-                    label_right,
-                    if sel_idx == selected {
-                        style
-                    } else {
-                        Style::default().fg(colors.text_dim)
-                    },
-                ),
-            ])));
-            sel_idx += 1;
+    fn group_display_name(group_id: &str) -> &str {
+        match group_id {
+            "popular" => "Popular",
+            "engines" => "Engines",
+            "local" => "Local",
+            _ => group_id,
         }
     }
 
-    if !other.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            " Other",
-            Style::default().fg(colors.text_dim).bold(),
-        ))));
-        for entry in &other {
-            if sel_idx == selected {
-                list_selected = Some(items.len());
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut list_selected: Option<usize> = None;
+    let mut sel_idx = 0usize;
+
+    for entry in &entries {
+        match entry {
+            ProviderPickerEntry::GroupHeader(group_id) => {
+                let is_collapsed = collapsed.contains(group_id.as_str());
+                let icon = if is_collapsed { "▶" } else { "▼" };
+                let label = format!(" {} {}", icon, group_display_name(group_id));
+                if sel_idx == selected {
+                    list_selected = Some(items.len());
+                }
+                let style = if sel_idx == selected {
+                    Style::default().bg(colors.bg_hover).fg(colors.text).bold()
+                } else {
+                    Style::default().fg(colors.text_dim).bold()
+                };
+                items.push(ListItem::new(Line::from(Span::styled(label, style))));
+                sel_idx += 1;
             }
-            let label_left = format!("  {}", entry.display_name);
-            let label_right = if is_running(entry) {
-                format!("{} (running)", entry.description)
-            } else {
-                entry.description.to_string()
-            };
-            let avail = (width as usize).saturating_sub(6);
-            let pad = avail
-                .saturating_sub(label_left.len())
-                .saturating_sub(label_right.len())
-                .max(1);
-            let style = if sel_idx == selected {
-                Style::default().bg(colors.bg_hover).fg(colors.text)
-            } else {
-                Style::default().fg(colors.text)
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(label_left, style),
-                Span::styled(" ".repeat(pad), style),
-                Span::styled(
-                    label_right,
-                    if sel_idx == selected {
-                        style
-                    } else {
-                        Style::default().fg(colors.text_dim)
-                    },
-                ),
-            ])));
-            sel_idx += 1;
+            ProviderPickerEntry::Provider(id) => {
+                if sel_idx == selected {
+                    list_selected = Some(items.len());
+                }
+                let cat_entry = catalog::by_id(id);
+                let display_name = cat_entry.map(|e| e.display_name).unwrap_or(id.as_str());
+                let description = cat_entry.map(|e| e.description).unwrap_or("");
+                let label_left = format!("    {}", display_name);
+                let label_right = if is_running(id) {
+                    format!("{} (running)", description)
+                } else {
+                    description.to_string()
+                };
+                let avail = (width as usize).saturating_sub(6);
+                let pad = avail
+                    .saturating_sub(label_left.len())
+                    .saturating_sub(label_right.len())
+                    .max(1);
+                let style = if sel_idx == selected {
+                    Style::default().bg(colors.bg_hover).fg(colors.text)
+                } else {
+                    Style::default().fg(colors.text)
+                };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(label_left, style),
+                    Span::styled(" ".repeat(pad), style),
+                    Span::styled(
+                        label_right,
+                        if sel_idx == selected {
+                            style
+                        } else {
+                            Style::default().fg(colors.text_dim)
+                        },
+                    ),
+                ])));
+                sel_idx += 1;
+            }
         }
     }
 
@@ -1278,13 +1335,14 @@ pub fn render_slash_autocomplete(
             );
             (items, selected, Some(" /model "))
         }
-        DropdownMode::Providers => {
+        DropdownMode::Providers { collapsed } => {
             let (items, selected) = build_provider_items(
                 &state.filter,
                 state.selected,
                 colors,
                 anchor.width,
                 discovered_locals,
+                collapsed,
             );
             (items, selected, Some(" /connect "))
         }
@@ -1383,7 +1441,7 @@ pub fn render_slash_autocomplete(
         state.mode,
         DropdownMode::Models { .. }
             | DropdownMode::Sessions { .. }
-            | DropdownMode::Providers
+            | DropdownMode::Providers { .. }
             | DropdownMode::Skills
     );
 

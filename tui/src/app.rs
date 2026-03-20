@@ -5167,57 +5167,85 @@ impl App {
                     }
                 }
             }
-            DropdownMode::Providers => {
-                use crate::provider::catalog;
-                let needle = auto.filter.to_lowercase();
-                let filtered: Vec<&catalog::ProviderEntry> = catalog::CATALOG
-                    .iter()
-                    .filter(|e| {
-                        needle.is_empty()
-                            || e.display_name.to_lowercase().contains(&needle)
-                            || e.id.to_lowercase().contains(&needle)
-                    })
-                    .collect();
-                let selected_id = filtered.get(auto.selected).map(|e| e.id.to_string());
-                if let Some(provider_id) = selected_id {
-                    self.state.slash_auto = None;
-                    self.state.input.clear();
+            DropdownMode::Providers { .. } => {
+                use crate::tui::slash_auto::build_provider_entries;
+                let collapsed_snapshot = if let DropdownMode::Providers { ref collapsed } =
+                    auto.mode
+                {
+                    collapsed.clone()
+                } else {
+                    std::collections::HashSet::new()
+                };
+                let entries = build_provider_entries(
+                    &auto.filter,
+                    &collapsed_snapshot,
+                    &self.state.discovered_locals,
+                );
+                if let Some(entry) = entries.get(auto.selected) {
+                    match entry {
+                        crate::tui::slash_auto::ProviderPickerEntry::GroupHeader(group_id) => {
+                            // Toggle collapse
+                            let group_id = group_id.clone();
+                            if let Some(ref mut auto) = self.state.slash_auto
+                                && let DropdownMode::Providers {
+                                    ref mut collapsed, ..
+                                } = auto.mode
+                            {
+                                if collapsed.contains(&group_id) {
+                                    collapsed.remove(&group_id);
+                                } else {
+                                    collapsed.insert(group_id);
+                                }
+                            }
+                        }
+                        crate::tui::slash_auto::ProviderPickerEntry::Provider(provider_id) => {
+                            let provider_id = provider_id.clone();
+                            self.state.slash_auto = None;
+                            self.state.input.clear();
 
-                    // Local providers use address+probe flow instead of API key
-                    if crate::provider::catalog::by_id(&provider_id)
-                        .map(|p| p.is_local())
-                        .unwrap_or(false)
-                    {
-                        let entry = crate::provider::catalog::by_id(&provider_id).unwrap();
-                        let server_type = match provider_id.as_str() {
-                            "ollama" => crate::provider::local::LocalServerType::Ollama,
-                            "lmstudio" => crate::provider::local::LocalServerType::LmStudio,
-                            "llamacpp" => crate::provider::local::LocalServerType::LlamaCpp,
-                            _ => crate::provider::local::LocalServerType::Custom,
-                        };
-                        self.state
-                            .dialog_stack
-                            .push(DialogKind::LocalProviderConnect(
-                                crate::tui::dialog::LocalProviderConnectState {
-                                    provider_id: provider_id.clone(),
-                                    provider_name: entry.display_name.to_string(),
-                                    address: server_type.default_address().to_string(),
-                                    models: vec![],
-                                    selected_model: 0,
-                                    phase: crate::tui::dialog::LocalConnectPhase::Address,
-                                    error: None,
-                                    probe_rx: None,
-                                },
-                            ));
-                    } else {
-                        // Always show key input so user can add, update, or clear their key
-                        let has_existing = self.state.config.keys.get(&provider_id).is_some();
-                        self.state
-                            .dialog_stack
-                            .push(DialogKind::ApiKeyInput(KeyInputState::new(
-                                provider_id,
-                                has_existing,
-                            )));
+                            // Local providers use address+probe flow instead of API key
+                            if crate::provider::catalog::by_id(&provider_id)
+                                .map(|p| p.is_local())
+                                .unwrap_or(false)
+                            {
+                                let entry =
+                                    crate::provider::catalog::by_id(&provider_id).unwrap();
+                                let server_type = match provider_id.as_str() {
+                                    "ollama" => crate::provider::local::LocalServerType::Ollama,
+                                    "lmstudio" => {
+                                        crate::provider::local::LocalServerType::LmStudio
+                                    }
+                                    "llamacpp" => {
+                                        crate::provider::local::LocalServerType::LlamaCpp
+                                    }
+                                    _ => crate::provider::local::LocalServerType::Custom,
+                                };
+                                self.state.dialog_stack.push(
+                                    DialogKind::LocalProviderConnect(
+                                        crate::tui::dialog::LocalProviderConnectState {
+                                            provider_id: provider_id.clone(),
+                                            provider_name: entry.display_name.to_string(),
+                                            address: server_type
+                                                .default_address()
+                                                .to_string(),
+                                            models: vec![],
+                                            selected_model: 0,
+                                            phase:
+                                                crate::tui::dialog::LocalConnectPhase::Address,
+                                            error: None,
+                                            probe_rx: None,
+                                        },
+                                    ),
+                                );
+                            } else {
+                                // Always show key input so user can add, update, or clear their key
+                                let has_existing =
+                                    self.state.config.keys.get(&provider_id).is_some();
+                                self.state.dialog_stack.push(DialogKind::ApiKeyInput(
+                                    KeyInputState::new(provider_id, has_existing),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -5594,17 +5622,13 @@ impl App {
                 &auto.filter,
                 collapsed,
             ),
-            DropdownMode::Providers => {
-                use crate::provider::catalog;
-                let needle = auto.filter.to_lowercase();
-                catalog::CATALOG
-                    .iter()
-                    .filter(|e| {
-                        needle.is_empty()
-                            || e.display_name.to_lowercase().contains(&needle)
-                            || e.id.to_lowercase().contains(&needle)
-                    })
-                    .count()
+            DropdownMode::Providers { collapsed } => {
+                crate::tui::slash_auto::build_provider_entries(
+                    &auto.filter,
+                    collapsed,
+                    &self.state.discovered_locals,
+                )
+                .len()
             }
             DropdownMode::McpServers { servers } => {
                 servers.len() + 1 // +1 for "Add new server"
