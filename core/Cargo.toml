@@ -25,10 +25,6 @@ serde_yml = "0.0.12"
 # Config
 toml = "0.8"
 dirs = "6"
-
-# CLI
-clap = { version = "4", features = ["derive"] }
-
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 

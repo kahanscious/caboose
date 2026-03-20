@@ -321,7 +321,6 @@ dependencies = [
  "async-stream",
  "base64",
  "chrono",
- "clap",
  "dirs",
  "eventsource-stream",
  "flate2",
