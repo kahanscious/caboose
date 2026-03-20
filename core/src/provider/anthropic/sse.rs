@@ -26,6 +26,12 @@ pub struct SseAccumulator {
     stop_reason: Option<String>,
 }
 
+impl Default for SseAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseAccumulator {
     pub fn new() -> Self {
         Self {

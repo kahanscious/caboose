@@ -265,8 +265,12 @@ fn check_command_policy(
 
     match decision {
         caboose_core::safety::command_policy::Decision::Allow => ToolDecision::AutoExecute,
-        caboose_core::safety::command_policy::Decision::Deny(reason) => ToolDecision::Blocked(reason),
-        caboose_core::safety::command_policy::Decision::RequireApproval => ToolDecision::RequireApproval,
+        caboose_core::safety::command_policy::Decision::Deny(reason) => {
+            ToolDecision::Blocked(reason)
+        }
+        caboose_core::safety::command_policy::Decision::RequireApproval => {
+            ToolDecision::RequireApproval
+        }
     }
 }
 

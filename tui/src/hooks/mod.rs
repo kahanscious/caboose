@@ -3,7 +3,9 @@
 pub mod diagnostics;
 
 // Re-export lifecycle hooks from caboose-core.
-pub use caboose_core::hooks::lifecycle::{HookAction, fire_hooks, fire_hooks_for_tool, parse_context, parse_must_keep};
+pub use caboose_core::hooks::lifecycle::{
+    HookAction, fire_hooks, fire_hooks_for_tool, parse_context, parse_must_keep,
+};
 
 use anyhow::Result;
 use std::future::Future;

@@ -47,6 +47,12 @@ pub struct PricingRegistry {
     models: HashMap<String, ModelPricing>,
 }
 
+impl Default for PricingRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PricingRegistry {
     /// Create registry pre-populated with known model pricing.
     pub fn new() -> Self {

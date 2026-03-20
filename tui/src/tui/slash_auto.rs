@@ -4,9 +4,9 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
-use caboose_core::provider::ModelInfo;
 use crate::session::storage::SessionSearchResult;
 use crate::tui::command::{Command, CommandRegistry};
+use caboose_core::provider::ModelInfo;
 
 /// A single entry in the model picker list — either a collapsible group header or an actual model.
 #[derive(Clone)]
@@ -859,11 +859,7 @@ pub fn build_provider_entries(
         .filter(|e| !e.popular && !e.is_local())
         .copied()
         .collect();
-    let local: Vec<_> = filtered
-        .iter()
-        .filter(|e| e.is_local())
-        .copied()
-        .collect();
+    let local: Vec<_> = filtered.iter().filter(|e| e.is_local()).copied().collect();
 
     // Also include discovered local servers not in catalog
     let _ = discovered_locals; // used by rendering, not entry building

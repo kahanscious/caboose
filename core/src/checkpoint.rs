@@ -30,6 +30,12 @@ pub struct CheckpointManager {
     next_id: u32,
 }
 
+impl Default for CheckpointManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CheckpointManager {
     pub fn new() -> Self {
         Self {

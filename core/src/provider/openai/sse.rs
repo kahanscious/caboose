@@ -20,6 +20,12 @@ pub struct SseAccumulator {
     output_tokens: u32,
 }
 
+impl Default for SseAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseAccumulator {
     pub fn new() -> Self {
         Self {

@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use crate::agent::conversation::ContentBlock;
 use crate::agent::permission::PermissionMode;
 use crate::agent::{AgentLoop, AgentState};
-use caboose_core::config::Config;
-use caboose_core::config::auth::AuthStore;
-use caboose_core::provider::{Provider, ProviderRegistry};
 use crate::session::SessionManager;
 use crate::tools::ToolRegistry;
 use crate::tui::Terminal;
 use crate::tui::dialog::{DialogKind, DialogStack, Screen};
 use crate::tui::key_input::KeyInputState;
+use caboose_core::config::Config;
+use caboose_core::config::auth::AuthStore;
+use caboose_core::provider::{Provider, ProviderRegistry};
 
 /// Mouse text selection range (screen coordinates).
 pub struct TextSelection {
@@ -857,7 +857,8 @@ impl App {
                 caboose_core::provider::models_dev::cache_from_model_list(&cw_entries);
             }
 
-            agent.context_window = caboose_core::provider::models_dev::context_window_or_default(model_id);
+            agent.context_window =
+                caboose_core::provider::models_dev::context_window_or_default(model_id);
         }
 
         let active_provider_name = provider
@@ -1043,7 +1044,9 @@ impl App {
 
         // Load user pricing overrides from config (highest priority — applied last)
         if !app.state.config.pricing.is_empty() {
-            app.state.pricing.load_from_config(&app.state.config.pricing);
+            app.state
+                .pricing
+                .load_from_config(&app.state.config.pricing);
         }
 
         // For non-OpenRouter providers, look up capabilities from the provider's model list
@@ -5169,13 +5172,12 @@ impl App {
             }
             DropdownMode::Providers { .. } => {
                 use crate::tui::slash_auto::build_provider_entries;
-                let collapsed_snapshot = if let DropdownMode::Providers { ref collapsed } =
-                    auto.mode
-                {
-                    collapsed.clone()
-                } else {
-                    std::collections::HashSet::new()
-                };
+                let collapsed_snapshot =
+                    if let DropdownMode::Providers { ref collapsed } = auto.mode {
+                        collapsed.clone()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
                 let entries = build_provider_entries(
                     &auto.filter,
                     &collapsed_snapshot,
@@ -5211,7 +5213,9 @@ impl App {
                                 let entry =
                                     caboose_core::provider::catalog::by_id(&provider_id).unwrap();
                                 let server_type = match provider_id.as_str() {
-                                    "ollama" => caboose_core::provider::local::LocalServerType::Ollama,
+                                    "ollama" => {
+                                        caboose_core::provider::local::LocalServerType::Ollama
+                                    }
                                     "lmstudio" => {
                                         caboose_core::provider::local::LocalServerType::LmStudio
                                     }
@@ -5220,23 +5224,20 @@ impl App {
                                     }
                                     _ => caboose_core::provider::local::LocalServerType::Custom,
                                 };
-                                self.state.dialog_stack.push(
-                                    DialogKind::LocalProviderConnect(
+                                self.state
+                                    .dialog_stack
+                                    .push(DialogKind::LocalProviderConnect(
                                         crate::tui::dialog::LocalProviderConnectState {
                                             provider_id: provider_id.clone(),
                                             provider_name: entry.display_name.to_string(),
-                                            address: server_type
-                                                .default_address()
-                                                .to_string(),
+                                            address: server_type.default_address().to_string(),
                                             models: vec![],
                                             selected_model: 0,
-                                            phase:
-                                                crate::tui::dialog::LocalConnectPhase::Address,
+                                            phase: crate::tui::dialog::LocalConnectPhase::Address,
                                             error: None,
                                             probe_rx: None,
                                         },
-                                    ),
-                                );
+                                    ));
                             } else {
                                 // Always show key input so user can add, update, or clear their key
                                 let has_existing =
@@ -5475,30 +5476,33 @@ impl App {
                             if let Some(entries) = preview_entries
                                 && !entries.is_empty()
                             {
-                                    msg.push('\n');
-                                    for entry in &entries {
-                                        match &entry.action {
-                                            crate::checkpoint::PreviewAction::Restore { lines_added, lines_removed } => {
-                                                msg.push_str(&format!(
-                                                    "\n  Restore: {} (+{} -{})",
-                                                    entry.path.display(),
-                                                    lines_added,
-                                                    lines_removed,
-                                                ));
-                                            }
-                                            crate::checkpoint::PreviewAction::Delete => {
-                                                msg.push_str(&format!(
-                                                    "\n  Delete: {}",
-                                                    entry.path.display(),
-                                                ));
-                                            }
-                                            crate::checkpoint::PreviewAction::NoChange => {}
+                                msg.push('\n');
+                                for entry in &entries {
+                                    match &entry.action {
+                                        crate::checkpoint::PreviewAction::Restore {
+                                            lines_added,
+                                            lines_removed,
+                                        } => {
+                                            msg.push_str(&format!(
+                                                "\n  Restore: {} (+{} -{})",
+                                                entry.path.display(),
+                                                lines_added,
+                                                lines_removed,
+                                            ));
                                         }
+                                        crate::checkpoint::PreviewAction::Delete => {
+                                            msg.push_str(&format!(
+                                                "\n  Delete: {}",
+                                                entry.path.display(),
+                                            ));
+                                        }
+                                        crate::checkpoint::PreviewAction::NoChange => {}
                                     }
+                                }
                             }
-                            self.state.chat_messages.push(ChatMessage::System {
-                                content: msg,
-                            });
+                            self.state
+                                .chat_messages
+                                .push(ChatMessage::System { content: msg });
                         }
                         Err(e) => {
                             self.state.chat_messages.push(ChatMessage::System {
@@ -5669,10 +5673,11 @@ impl App {
                         &self.state.active_model_name,
                     );
 
-                let cw_display =
-                    caboose_core::provider::models_dev::context_window(&self.state.active_model_name)
-                        .map(|cw| format!(" ({}k context)", cw / 1000))
-                        .unwrap_or_default();
+                let cw_display = caboose_core::provider::models_dev::context_window(
+                    &self.state.active_model_name,
+                )
+                .map(|cw| format!(" ({}k context)", cw / 1000))
+                .unwrap_or_default();
                 self.state.chat_messages.push(ChatMessage::System {
                     content: format!(
                         "Connected to {}/{}{}",
@@ -6181,7 +6186,8 @@ impl App {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let addr = address;
                     tokio::spawn(async move {
-                        match caboose_core::provider::local::probe_server(&addr, &server_type).await {
+                        match caboose_core::provider::local::probe_server(&addr, &server_type).await
+                        {
                             Some(models) => {
                                 let _ = tx.send(Ok(models));
                             }
@@ -6671,8 +6677,8 @@ impl App {
     }
 
     async fn handle_workspace_add_confirm(&mut self) {
-        use caboose_core::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
         use crate::tui::dialog::{DialogKind, WorkspaceAddPhase};
+        use caboose_core::config::schema::{WorkspaceAccess, WorkspaceConfig, WorkspaceMode};
 
         let phase = if let Some(DialogKind::WorkspaceAdd(s)) = self.state.dialog_stack.top() {
             s.phase.clone()
@@ -7577,10 +7583,11 @@ impl App {
                         &self.state.active_model_name,
                     );
 
-                let cw_display =
-                    caboose_core::provider::models_dev::context_window(&self.state.active_model_name)
-                        .map(|cw| format!(" ({}k context)", cw / 1000))
-                        .unwrap_or_default();
+                let cw_display = caboose_core::provider::models_dev::context_window(
+                    &self.state.active_model_name,
+                )
+                .map(|cw| format!(" ({}k context)", cw / 1000))
+                .unwrap_or_default();
                 let switch_handoff = self.build_model_switch_handoff_context(
                     &old_provider_name,
                     &old_model_name,
@@ -12355,12 +12362,14 @@ impl App {
             }
 
             // Parse and append
-            if let Some(new_lines) = caboose_core::memory::extraction::parse_extraction_response(&response)
+            if let Some(new_lines) =
+                caboose_core::memory::extraction::parse_extraction_response(&response)
             {
                 let memory_path = self.state.memory.project_dir().join("MEMORY.md");
-                if let Err(e) =
-                    caboose_core::memory::extraction::append_to_memory_file(&memory_path, &new_lines)
-                {
+                if let Err(e) = caboose_core::memory::extraction::append_to_memory_file(
+                    &memory_path,
+                    &new_lines,
+                ) {
                     tracing::warn!("Failed to append memories: {e}");
                 }
             }
@@ -13434,8 +13443,8 @@ mod workspace_add_validation_tests {
 
 #[cfg(test)]
 mod workspace_list_handler_tests {
-    use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
     use crate::tui::dialog::WorkspaceListState;
+    use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
 
     fn make_state(n: usize) -> WorkspaceListState {
         WorkspaceListState {

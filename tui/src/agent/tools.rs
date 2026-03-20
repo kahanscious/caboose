@@ -21,7 +21,9 @@ pub async fn execute_tool(
     mcp_manager: Option<&mut crate::mcp::McpManager>,
     lsp_manager: Option<&mut crate::lsp::LspManager>,
     services: Option<&caboose_core::config::schema::ServicesConfig>,
-    cli_tools: Option<&std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>>,
+    cli_tools: Option<
+        &std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>,
+    >,
     deny_list: &[String],
     exec_tools: Option<
         &std::collections::HashMap<String, caboose_core::config::schema::ExecutableToolConfig>,
@@ -190,7 +192,8 @@ pub async fn execute_tool(
             };
 
             // Check deny list
-            let deny_decision = caboose_core::safety::command_policy::check(&full_command, &[], deny_list);
+            let deny_decision =
+                caboose_core::safety::command_policy::check(&full_command, &[], deny_list);
             if let caboose_core::safety::command_policy::Decision::Deny(reason) = deny_decision {
                 return Ok(ToolResult {
                     tool_use_id: String::new(),

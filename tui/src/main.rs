@@ -30,7 +30,6 @@ mod update;
 use caboose_core::attachment;
 use caboose_core::checkpoint;
 
-
 /// Caboose — a terminal-native AI coding agent
 #[derive(Parser, Debug)]
 #[command(name = "caboose", version, about)]

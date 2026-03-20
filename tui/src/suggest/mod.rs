@@ -10,7 +10,9 @@ use priority::{Finding, PriorityWeights};
 
 /// Run the full suggest pipeline: detect scans, run them, parse, digest.
 /// Returns the formatted digest + priority prompt ready to inject into conversation.
-pub async fn run_suggest(suggest_config: Option<&caboose_core::config::schema::SuggestConfig>) -> String {
+pub async fn run_suggest(
+    suggest_config: Option<&caboose_core::config::schema::SuggestConfig>,
+) -> String {
     // 1. Resolve scan commands
     let scans = config::resolve_scans(suggest_config);
 

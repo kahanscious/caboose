@@ -500,7 +500,9 @@ impl AgentLoop {
         &mut self,
         mcp_manager: &mut crate::mcp::McpManager,
         services: Option<&caboose_core::config::schema::ServicesConfig>,
-        cli_tools: Option<&std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>>,
+        cli_tools: Option<
+            &std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>,
+        >,
         deny_commands: &[String],
         hooks: Option<&caboose_core::config::schema::HooksConfig>,
         exec_tools: Option<
