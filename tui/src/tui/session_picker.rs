@@ -120,6 +120,8 @@ pub struct FilteredSession {
     pub session: crate::session::Session,
     /// If the match came from content (not title/metadata), a snippet around the match.
     pub matched_snippet: Option<String>,
+    /// First line of conversation content for preview display.
+    pub content_preview: Option<String>,
 }
 
 /// Extract a snippet centered on the first occurrence of `query` in `content`.
@@ -159,6 +161,18 @@ pub fn extract_snippet(content: &str, query: &str, max_len: usize) -> Option<Str
     Some(snippet)
 }
 
+/// Extract the first non-empty line from content_index for preview display.
+pub fn extract_content_preview(content_index: &str, max_len: usize) -> Option<String> {
+    let line = content_index.lines().find(|l| !l.trim().is_empty())?;
+    let trimmed = line.trim();
+    if trimmed.len() <= max_len {
+        Some(trimmed.to_string())
+    } else {
+        let boundary = trimmed.floor_char_boundary(max_len.saturating_sub(1));
+        Some(format!("{}…", &trimmed[..boundary]))
+    }
+}
+
 /// Filter session search results against a query string.
 /// Matches (in priority order): title, ID prefix, provider, model, content.
 /// Only content matches get a `matched_snippet`.
@@ -169,6 +183,7 @@ pub fn filter_search_results(results: &[SessionSearchResult], query: &str) -> Ve
             .map(|r| FilteredSession {
                 session: r.session.clone(),
                 matched_snippet: None,
+                content_preview: extract_content_preview(&r.content_index, 60),
             })
             .collect();
     }
@@ -215,6 +230,7 @@ pub fn filter_search_results(results: &[SessionSearchResult], query: &str) -> Ve
             filtered.push(FilteredSession {
                 session: r.session.clone(),
                 matched_snippet,
+                content_preview: extract_content_preview(&r.content_index, 60),
             });
         }
     }
