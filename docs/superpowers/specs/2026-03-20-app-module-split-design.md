@@ -205,9 +205,10 @@ Tests move with their associated functions:
 - `task_text_parse_tests` → `helpers.rs`
 - `model_switch_handoff_tests` → `helpers.rs`
 - `task_outline_tests` → `types.rs`
-- `circuit_args_tests` → `helpers.rs`
-- `workspace_list_tests` → `helpers.rs`
-- `workspace_system_prompt_tests` → `helpers.rs`
+- `circuit_parse_tests` → `helpers.rs`
+- `workspace_list_handler_tests` → `helpers.rs`
+- `workspace_prompt_tests` → `helpers.rs`
+- `execute_command_tests` → `helpers.rs` (tests `sub_agent::pipeline::extract_tasks`)
 - `new_session_confirm_tests` → `helpers.rs`
 - `workspace_add_validation_tests` → `dialogs.rs`
 - `execute_command_tests` → lives in `app.rs` but tests `sub_agent::pipeline::extract_tasks`; move to `sub_agent/pipeline.rs` in core or keep in `helpers.rs`
