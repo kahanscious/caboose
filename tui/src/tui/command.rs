@@ -499,6 +499,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "session.checkpoint",
+        name: "Save Checkpoint",
+        category: Category::Session,
+        keybind: None,
+        slash: Some("checkpoint"),
+        available: |_| true,
+        execute: |_state| Action::None, // Handled in app.rs — needs arg parsing
+    });
+
+    registry.register(Command {
         id: "settings.open",
         name: "Settings",
         category: Category::Navigation,

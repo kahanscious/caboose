@@ -118,6 +118,9 @@ pub struct AgentLoop {
     pub primary_root: std::path::PathBuf,
     /// Paths of registered secondary workspaces — used for read path restriction.
     pub workspace_paths: Vec<String>,
+    /// Optional dedicated provider for compaction (resolved from `compaction_model` config).
+    /// When `None`, the active provider is used for compaction.
+    pub compaction_provider: Option<Box<dyn Provider>>,
     event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
     /// Consecutive failure count per shell command — used as a circuit breaker
     /// to stop the agent from looping on unfixable errors.
@@ -160,6 +163,7 @@ impl AgentLoop {
             primary_root: std::fs::canonicalize(std::env::current_dir().unwrap_or_default())
                 .unwrap_or_default(),
             workspace_paths: Vec::new(),
+            compaction_provider: None,
             event_rx: None,
             command_fail_counts: std::collections::HashMap::new(),
         }
@@ -214,8 +218,6 @@ impl AgentLoop {
         });
 
         // Check if compaction is needed before streaming
-        // NOTE: compaction_model override deferred to post-launch.
-        // Currently always uses the active provider for compaction.
         if compaction::needs_compaction(
             self.last_input_tokens,
             self.context_window,
@@ -725,7 +727,6 @@ impl AgentLoop {
 
     /// Continue the agent loop after tool execution — start a new stream.
     pub fn continue_after_tools(&mut self, provider: &dyn Provider, tool_defs: &[ToolDefinition]) {
-        // NOTE: compaction_model override deferred to post-launch.
         if compaction::needs_compaction(
             self.last_input_tokens,
             self.context_window,
@@ -827,10 +828,11 @@ impl AgentLoop {
     /// 1. Mechanical pruning — remove cold-stored stubs, wasted turns, truncate outputs
     /// 2. LLM summarization — structured prompt for a handoff summary
     ///
-    /// NOTE: compaction_model override is deferred to post-launch. Currently always
-    /// uses the active (caller-provided) provider. When wired, accept an optional
-    /// compaction provider and use it instead.
-    pub fn compact(&mut self, provider: &dyn Provider, must_keep: Option<&str>) {
+    /// Compact the conversation by summarizing older messages via LLM.
+    ///
+    /// Uses the dedicated `compaction_provider` if configured, otherwise falls
+    /// back to the supplied `fallback_provider` (the active provider).
+    pub fn compact(&mut self, fallback_provider: &dyn Provider, must_keep: Option<&str>) {
         self.state = AgentState::Compacting;
         self.streaming_text.clear();
         self.streaming_thinking.clear();
@@ -865,6 +867,11 @@ impl AgentLoop {
         let (tx, rx) = mpsc::unbounded_channel();
         self.event_rx = Some(rx);
 
+        let provider: &dyn Provider = self
+            .compaction_provider
+            .as_ref()
+            .map(|p| p.as_ref())
+            .unwrap_or(fallback_provider);
         let stream = provider.stream(&messages, &[]); // no tools for compaction
 
         tokio::spawn(async move {

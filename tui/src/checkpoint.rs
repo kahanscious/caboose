@@ -18,6 +18,7 @@ pub enum FileSnapshot {
 pub struct Checkpoint {
     pub id: u32,
     pub prompt_preview: String,
+    pub name: Option<String>,
     pub timestamp: Instant,
     pub files: HashMap<PathBuf, FileSnapshot>,
 }
@@ -45,8 +46,43 @@ impl CheckpointManager {
         self.checkpoints.push(Checkpoint {
             id,
             prompt_preview: prompt_preview.chars().take(80).collect(),
+            name: None,
             timestamp: Instant::now(),
             files: HashMap::new(),
+        });
+        id
+    }
+
+    /// Create a user-named checkpoint that snapshots all files modified across
+    /// the entire session (union of all file paths from every checkpoint).
+    pub fn create_named(&mut self, name: &str) -> u32 {
+        // Collect all file paths that have been modified in the session.
+        let all_paths: Vec<PathBuf> = self
+            .checkpoints
+            .iter()
+            .flat_map(|cp| cp.files.keys().cloned())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let mut files = HashMap::new();
+        for path in &all_paths {
+            let snapshot = match std::fs::read(path) {
+                Ok(bytes) => FileSnapshot::Existed(bytes),
+                Err(_) => FileSnapshot::DidNotExist,
+            };
+            files.insert(path.clone(), snapshot);
+        }
+
+        self.checkpoints.push(Checkpoint {
+            id,
+            prompt_preview: name.chars().take(80).collect(),
+            name: Some(name.to_string()),
+            timestamp: Instant::now(),
+            files,
         });
         id
     }
@@ -120,6 +156,92 @@ impl CheckpointManager {
             errors,
         })
     }
+
+    /// Preview what a rewind to the given checkpoint would change, without
+    /// actually modifying any files.
+    pub fn preview(&self, checkpoint_id: u32) -> Result<Vec<PreviewEntry>, String> {
+        let idx = self
+            .checkpoints
+            .iter()
+            .position(|c| c.id == checkpoint_id)
+            .ok_or_else(|| format!("Checkpoint {checkpoint_id} not found"))?;
+
+        // De-duplicate: first snapshot for a path wins (earliest checkpoint).
+        let mut seen = std::collections::HashSet::new();
+        let mut entries = Vec::new();
+
+        for checkpoint in &self.checkpoints[idx..] {
+            for (path, snapshot) in &checkpoint.files {
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                let action = match snapshot {
+                    FileSnapshot::Existed(bytes) => {
+                        let current = std::fs::read(path).unwrap_or_default();
+                        if current == *bytes {
+                            PreviewAction::NoChange
+                        } else {
+                            let old_lines = String::from_utf8_lossy(bytes);
+                            let new_lines = String::from_utf8_lossy(&current);
+                            let old: Vec<&str> = old_lines.lines().collect();
+                            let cur: Vec<&str> = new_lines.lines().collect();
+                            let mut added = 0usize;
+                            let mut removed = 0usize;
+                            // Simple line-count diff: lines in current but not in snapshot = removed on rewind,
+                            // lines in snapshot but not in current = added on rewind.
+                            let max_len = old.len().max(cur.len());
+                            for i in 0..max_len {
+                                let o = old.get(i).copied();
+                                let c = cur.get(i).copied();
+                                if o != c {
+                                    if o.is_some() {
+                                        added += 1;
+                                    }
+                                    if c.is_some() {
+                                        removed += 1;
+                                    }
+                                }
+                            }
+                            PreviewAction::Restore {
+                                lines_added: added,
+                                lines_removed: removed,
+                            }
+                        }
+                    }
+                    FileSnapshot::DidNotExist => {
+                        if path.exists() {
+                            PreviewAction::Delete
+                        } else {
+                            PreviewAction::NoChange
+                        }
+                    }
+                };
+                if !matches!(action, PreviewAction::NoChange) {
+                    entries.push(PreviewEntry {
+                        path: path.clone(),
+                        action,
+                    });
+                }
+            }
+        }
+        Ok(entries)
+    }
+}
+
+/// An entry describing what would change if a rewind were performed.
+pub struct PreviewEntry {
+    pub path: PathBuf,
+    pub action: PreviewAction,
+}
+
+/// The action that would be taken on a file during rewind.
+pub enum PreviewAction {
+    Restore {
+        lines_added: usize,
+        lines_removed: usize,
+    },
+    Delete,
+    NoChange,
 }
 
 /// Result of a rewind operation.
@@ -289,5 +411,75 @@ mod tests {
         let long = "x".repeat(200);
         mgr.create(&long);
         assert_eq!(mgr.checkpoints[0].prompt_preview.len(), 80);
+    }
+
+    #[test]
+    fn create_named_sets_name_and_snapshots_all_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("a.txt");
+        let file_b = dir.path().join("b.txt");
+        std::fs::write(&file_a, "aaa").unwrap();
+
+        let mut mgr = CheckpointManager::new();
+
+        // Turn 1 modifies file_a
+        mgr.create("turn 1");
+        mgr.ensure_snapshotted(&file_a);
+        std::fs::write(&file_a, "aaa-modified").unwrap();
+
+        // Turn 2 creates file_b
+        mgr.create("turn 2");
+        mgr.ensure_snapshotted(&file_b);
+        std::fs::write(&file_b, "bbb").unwrap();
+
+        // Named checkpoint should snapshot both files
+        let id = mgr.create_named("my save");
+        let cp = mgr.checkpoints.last().unwrap();
+        assert_eq!(cp.id, id);
+        assert_eq!(cp.name.as_deref(), Some("my save"));
+        assert_eq!(cp.prompt_preview, "my save");
+        assert!(cp.files.contains_key(&file_a));
+        assert!(cp.files.contains_key(&file_b));
+    }
+
+    #[test]
+    fn preview_returns_restore_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exist.txt");
+        let created = dir.path().join("new.txt");
+        std::fs::write(&existing, "line1\nline2\n").unwrap();
+
+        let mut mgr = CheckpointManager::new();
+        mgr.create("turn 1");
+        mgr.ensure_snapshotted(&existing);
+        mgr.ensure_snapshotted(&created);
+
+        // Modify existing file & create the new one
+        std::fs::write(&existing, "line1\nchanged\nextra\n").unwrap();
+        std::fs::write(&created, "brand new").unwrap();
+
+        let entries = mgr.preview(1).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let restore = entries.iter().find(|e| e.path == existing).unwrap();
+        assert!(matches!(restore.action, PreviewAction::Restore { .. }));
+
+        let delete = entries.iter().find(|e| e.path == created).unwrap();
+        assert!(matches!(delete.action, PreviewAction::Delete));
+    }
+
+    #[test]
+    fn preview_filters_no_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("stable.txt");
+        std::fs::write(&file, "unchanged").unwrap();
+
+        let mut mgr = CheckpointManager::new();
+        mgr.create("turn 1");
+        mgr.ensure_snapshotted(&file);
+        // File not modified — preview should return empty
+
+        let entries = mgr.preview(1).unwrap();
+        assert!(entries.is_empty());
     }
 }

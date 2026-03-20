@@ -1015,6 +1015,9 @@ impl App {
             provider,
         };
 
+        // Resolve dedicated compaction provider (if configured)
+        app.resolve_compaction_provider();
+
         // Fetch OpenRouter pricing at startup so sidebar shows costs immediately
         if app.state.active_provider_name == "openrouter"
             && let Some(api_key) = app.state.config.keys.get("openrouter")
@@ -1410,6 +1413,7 @@ impl App {
                 self.state.active_provider_name = p.name().to_string();
                 self.state.active_model_name = p.model().to_string();
                 self.provider = Some(p);
+                self.resolve_compaction_provider();
                 true
             }
             Err(_) => {
@@ -1420,6 +1424,38 @@ impl App {
                 });
                 false
             }
+        }
+    }
+
+    /// Resolve the `compaction_model` config to a dedicated compaction provider.
+    /// Uses the active provider name with a model override. Falls back silently on error.
+    fn resolve_compaction_provider(&mut self) {
+        let model = self
+            .state
+            .config
+            .behavior
+            .as_ref()
+            .and_then(|b| b.compaction_model.clone());
+        if let Some(model) = model {
+            match self
+                .state
+                .providers
+                .get_provider(Some(&self.state.active_provider_name), Some(&model))
+            {
+                Ok(p) => {
+                    tracing::info!(compaction_model = %model, "Resolved compaction provider");
+                    self.state.agent.compaction_provider = Some(p);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        compaction_model = %model,
+                        "Failed to resolve compaction_model, using active provider: {e}"
+                    );
+                    self.state.agent.compaction_provider = None;
+                }
+            }
+        } else {
+            self.state.agent.compaction_provider = None;
         }
     }
 
@@ -4254,20 +4290,6 @@ impl App {
                                 self.state.input.set(&message);
                                 return;
                             }
-                            // NOTE: compaction_model override deferred to post-launch.
-                            // When wired, resolve compaction_model to a Provider via ProviderRegistry.
-                            if let Some(ref model) = self
-                                .state
-                                .config
-                                .behavior
-                                .as_ref()
-                                .and_then(|b| b.compaction_model.clone())
-                            {
-                                tracing::info!(
-                                    compaction_model = %model,
-                                    "compaction_model configured but not yet wired — using active provider"
-                                );
-                            }
                             // Fire PreCompact hooks and collect must_keep context
                             let must_keep_context = if let Some(ref hooks_config) =
                                 self.state.config.hooks
@@ -5406,14 +5428,41 @@ impl App {
                 if let Some((id, preview, _, _)) = items.get(auto.selected) {
                     let checkpoint_id = *id;
                     let preview = preview.clone();
+                    // Collect preview before rewinding
+                    let preview_entries = self.state.checkpoints.preview(checkpoint_id).ok();
                     self.state.slash_auto = None;
                     self.state.input.clear();
                     match self.state.checkpoints.rewind(checkpoint_id) {
                         Ok(summary) => {
                             // Recompute modified_files from baselines (files are now restored on disk)
                             self.recompute_modified_files();
+                            let mut msg = format!("Rewound to before \"{preview}\". {summary}");
+                            if let Some(entries) = preview_entries
+                                && !entries.is_empty()
+                            {
+                                    msg.push('\n');
+                                    for entry in &entries {
+                                        match &entry.action {
+                                            crate::checkpoint::PreviewAction::Restore { lines_added, lines_removed } => {
+                                                msg.push_str(&format!(
+                                                    "\n  Restore: {} (+{} -{})",
+                                                    entry.path.display(),
+                                                    lines_added,
+                                                    lines_removed,
+                                                ));
+                                            }
+                                            crate::checkpoint::PreviewAction::Delete => {
+                                                msg.push_str(&format!(
+                                                    "\n  Delete: {}",
+                                                    entry.path.display(),
+                                                ));
+                                            }
+                                            crate::checkpoint::PreviewAction::NoChange => {}
+                                        }
+                                    }
+                            }
                             self.state.chat_messages.push(ChatMessage::System {
-                                content: format!("Rewound to before \"{preview}\". {summary}"),
+                                content: msg,
                             });
                         }
                         Err(e) => {
@@ -5600,6 +5649,7 @@ impl App {
                     ),
                 });
                 self.provider = Some(p);
+                self.resolve_compaction_provider();
 
                 // Persist last-used provider so we reconnect on restart
                 let mut prefs = crate::config::prefs::TuiPrefs::load();
@@ -7484,6 +7534,7 @@ impl App {
                 // Sync thinking mode to the new provider
                 new_provider.set_thinking_mode(self.state.thinking_mode);
                 self.provider = Some(new_provider);
+                self.resolve_compaction_provider();
 
                 // Update context window for compaction and sidebar display
                 self.state.agent.context_window =
@@ -11335,7 +11386,8 @@ impl App {
                 } else {
                     format!("{}m ago", elapsed.as_secs() / 60)
                 };
-                (cp.id, cp.prompt_preview.clone(), age, cp.files.len())
+                let label = cp.name.as_deref().unwrap_or(&cp.prompt_preview).to_string();
+                (cp.id, label, age, cp.files.len())
             })
             .collect();
         if items.is_empty() {
@@ -11801,6 +11853,26 @@ impl App {
         }
         if slash == "settings" {
             self.open_settings_picker();
+            return true;
+        }
+        if let Some(name) = slash.strip_prefix("checkpoint ") {
+            let name = name.trim();
+            if name.is_empty() {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /checkpoint <name>".into(),
+                });
+            } else {
+                let id = self.state.checkpoints.create_named(name);
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Checkpoint \"{name}\" saved (id {id})."),
+                });
+            }
+            return true;
+        }
+        if slash == "checkpoint" {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Usage: /checkpoint <name>".into(),
+            });
             return true;
         }
         if slash == "rewind" {
