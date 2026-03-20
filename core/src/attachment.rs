@@ -593,11 +593,26 @@ mod tests {
 
     #[test]
     fn media_type_from_ext_maps_correctly() {
-        assert_eq!(media_type_from_ext(Path::new("a.png")), Some("image/png".to_string()));
-        assert_eq!(media_type_from_ext(Path::new("a.jpg")), Some("image/jpeg".to_string()));
-        assert_eq!(media_type_from_ext(Path::new("a.jpeg")), Some("image/jpeg".to_string()));
-        assert_eq!(media_type_from_ext(Path::new("a.webp")), Some("image/webp".to_string()));
-        assert_eq!(media_type_from_ext(Path::new("a.gif")), Some("image/gif".to_string()));
+        assert_eq!(
+            media_type_from_ext(Path::new("a.png")),
+            Some("image/png".to_string())
+        );
+        assert_eq!(
+            media_type_from_ext(Path::new("a.jpg")),
+            Some("image/jpeg".to_string())
+        );
+        assert_eq!(
+            media_type_from_ext(Path::new("a.jpeg")),
+            Some("image/jpeg".to_string())
+        );
+        assert_eq!(
+            media_type_from_ext(Path::new("a.webp")),
+            Some("image/webp".to_string())
+        );
+        assert_eq!(
+            media_type_from_ext(Path::new("a.gif")),
+            Some("image/gif".to_string())
+        );
         assert_eq!(media_type_from_ext(Path::new("a.txt")), None);
     }
 
@@ -612,7 +627,10 @@ mod tests {
 
     #[test]
     fn read_image_attachment_nonexistent() {
-        let result = read_image_attachment(Path::new("/nonexistent/photo.png"), &default_images_config());
+        let result = read_image_attachment(
+            Path::new("/nonexistent/photo.png"),
+            &default_images_config(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cannot read"));
     }
@@ -629,7 +647,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let img_path = dir.path().join("test.png");
         let mut f = std::fs::File::create(&img_path).unwrap();
-        f.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+        f.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+            .unwrap();
         drop(f);
 
         let att = read_image_attachment(&img_path, &default_images_config()).unwrap();
@@ -642,10 +661,7 @@ mod tests {
     #[test]
     fn attachment_from_rgba_produces_valid_png() {
         let rgba = vec![
-            255, 0, 0, 255,
-            0, 255, 0, 255,
-            0, 0, 255, 255,
-            255, 255, 0, 255,
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
         ];
         let att = attachment_from_rgba(rgba, 2, 2, &default_images_config()).unwrap();
         assert_eq!(att.media_type, "image/png");
@@ -767,10 +783,19 @@ mod tests {
     #[test]
     fn unescape_shell_path_works() {
         assert_eq!(unescape_shell_path("Screen\\ shot.png"), "Screen shot.png");
-        assert_eq!(unescape_shell_path("no\\ spaces\\ here.png"), "no spaces here.png");
+        assert_eq!(
+            unescape_shell_path("no\\ spaces\\ here.png"),
+            "no spaces here.png"
+        );
         assert_eq!(unescape_shell_path("noescape.png"), "noescape.png");
-        assert_eq!(unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"), "/path/to/Screen shot (1).png");
-        assert_eq!(unescape_shell_path("C:\\Users\\test\\photo.png"), "C:\\Users\\test\\photo.png");
+        assert_eq!(
+            unescape_shell_path("/path/to/Screen\\ shot\\ \\(1\\).png"),
+            "/path/to/Screen shot (1).png"
+        );
+        assert_eq!(
+            unescape_shell_path("C:\\Users\\test\\photo.png"),
+            "C:\\Users\\test\\photo.png"
+        );
     }
 
     #[test]
@@ -807,7 +832,10 @@ mod tests {
         let img = dir.path().join("Screen shot 2026.png");
         std::fs::write(&img, &[0x89]).unwrap();
 
-        let msg = format!("{}/Screen\\ shot\\ 2026.png\ndescribe this", dir.path().display());
+        let msg = format!(
+            "{}/Screen\\ shot\\ 2026.png\ndescribe this",
+            dir.path().display()
+        );
         let (paths, remainder) = extract_bare_image_paths(&msg);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], img);

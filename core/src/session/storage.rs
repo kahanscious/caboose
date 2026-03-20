@@ -180,9 +180,7 @@ impl Storage {
              FROM sessions ORDER BY updated_at DESC LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            row_to_session(row)
-        })?;
+        let rows = stmt.query_map(params![limit as i64], row_to_session)?;
 
         let mut sessions = Vec::new();
         for row in rows {
@@ -238,9 +236,7 @@ impl Storage {
              FROM sessions WHERE id = ?1",
         )?;
 
-        let mut rows = stmt.query_map(params![id], |row| {
-            row_to_session(row)
-        })?;
+        let mut rows = stmt.query_map(params![id], row_to_session)?;
 
         match rows.next() {
             Some(row) => Ok(Some(row?)),

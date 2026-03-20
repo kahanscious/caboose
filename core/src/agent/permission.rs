@@ -277,8 +277,15 @@ mod tests {
     #[test]
     fn plan_mode_allows_reads() {
         let decision = check_permission(
-            &PermissionMode::Plan, "read_file", &serde_json::Value::Null,
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "read_file",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -286,8 +293,15 @@ mod tests {
     #[test]
     fn plan_mode_blocks_writes() {
         let decision = check_permission(
-            &PermissionMode::Plan, "write_file", &serde_json::Value::Null,
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "write_file",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -295,8 +309,15 @@ mod tests {
     #[test]
     fn plan_mode_blocks_commands() {
         let decision = check_permission(
-            &PermissionMode::Plan, "run_command", &serde_json::json!({"command": "ls"}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "run_command",
+            &serde_json::json!({"command": "ls"}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -304,8 +325,15 @@ mod tests {
     #[test]
     fn default_mode_approves_writes() {
         let decision = check_permission(
-            &PermissionMode::Default, "write_file", &serde_json::Value::Null,
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "write_file",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -313,8 +341,15 @@ mod tests {
     #[test]
     fn default_mode_auto_reads() {
         let decision = check_permission(
-            &PermissionMode::Default, "glob", &serde_json::Value::Null,
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "glob",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -322,8 +357,15 @@ mod tests {
     #[test]
     fn auto_edit_mode_auto_writes() {
         let decision = check_permission(
-            &PermissionMode::AutoEdit, "edit_file", &serde_json::Value::Null,
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::AutoEdit,
+            "edit_file",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -331,8 +373,15 @@ mod tests {
     #[test]
     fn chug_mode_auto_everything() {
         let decision = check_permission(
-            &PermissionMode::Chug, "run_command", &serde_json::json!({"command": "rm -rf /"}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Chug,
+            "run_command",
+            &serde_json::json!({"command": "rm -rf /"}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -340,8 +389,15 @@ mod tests {
     #[test]
     fn command_allow_list_overrides() {
         let decision = check_permission(
-            &PermissionMode::Default, "run_command", &serde_json::json!({"command": "cargo test"}),
-            &["cargo".to_string()], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "run_command",
+            &serde_json::json!({"command": "cargo test"}),
+            &["cargo".to_string()],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -349,8 +405,15 @@ mod tests {
     #[test]
     fn command_deny_list_blocks() {
         let decision = check_permission(
-            &PermissionMode::AutoEdit, "run_command", &serde_json::json!({"command": "rm -rf /"}),
-            &[], &["rm".to_string()], &Default::default(), None, None, &[],
+            &PermissionMode::AutoEdit,
+            "run_command",
+            &serde_json::json!({"command": "rm -rf /"}),
+            &[],
+            &["rm".to_string()],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -360,8 +423,15 @@ mod tests {
         let mut session_allows = std::collections::HashSet::new();
         session_allows.insert("write_file".to_string());
         let decision = check_permission(
-            &PermissionMode::Default, "write_file", &serde_json::Value::Null,
-            &[], &[], &session_allows, None, None, &[],
+            &PermissionMode::Default,
+            "write_file",
+            &serde_json::Value::Null,
+            &[],
+            &[],
+            &session_allows,
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -369,8 +439,15 @@ mod tests {
     #[test]
     fn mcp_tools_require_approval_in_default_mode() {
         let decision = check_permission(
-            &PermissionMode::Default, "github:create_issue", &serde_json::json!({"title": "test"}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "github:create_issue",
+            &serde_json::json!({"title": "test"}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -391,10 +468,22 @@ mod tests {
 
     #[test]
     fn mode_from_permission_mode_mapping() {
-        assert_eq!(Mode::from_permission_mode(&PermissionMode::Plan), Mode::Plan);
-        assert_eq!(Mode::from_permission_mode(&PermissionMode::Default), Mode::Create);
-        assert_eq!(Mode::from_permission_mode(&PermissionMode::AutoEdit), Mode::Create);
-        assert_eq!(Mode::from_permission_mode(&PermissionMode::Chug), Mode::Chug);
+        assert_eq!(
+            Mode::from_permission_mode(&PermissionMode::Plan),
+            Mode::Plan
+        );
+        assert_eq!(
+            Mode::from_permission_mode(&PermissionMode::Default),
+            Mode::Create
+        );
+        assert_eq!(
+            Mode::from_permission_mode(&PermissionMode::AutoEdit),
+            Mode::Create
+        );
+        assert_eq!(
+            Mode::from_permission_mode(&PermissionMode::Chug),
+            Mode::Chug
+        );
     }
 
     #[test]
@@ -407,8 +496,15 @@ mod tests {
     #[test]
     fn todo_read_auto_executes_in_all_modes() {
         let result = check_permission(
-            &PermissionMode::Plan, "todo_read", &serde_json::json!({}),
-            &[], &[], &HashSet::new(), None, None, &[],
+            &PermissionMode::Plan,
+            "todo_read",
+            &serde_json::json!({}),
+            &[],
+            &[],
+            &HashSet::new(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(result, ToolDecision::AutoExecute);
     }
@@ -416,8 +512,15 @@ mod tests {
     #[test]
     fn todo_write_auto_executes_in_plan_mode() {
         let decision = check_permission(
-            &PermissionMode::Plan, "todo_write", &serde_json::json!({"todos": []}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "todo_write",
+            &serde_json::json!({"todos": []}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::AutoExecute);
     }
@@ -425,8 +528,15 @@ mod tests {
     #[test]
     fn web_search_auto_executes_in_default_mode() {
         let result = check_permission(
-            &PermissionMode::Default, "web_search", &serde_json::json!({"query": "test"}),
-            &[], &[], &HashSet::new(), None, None, &[],
+            &PermissionMode::Default,
+            "web_search",
+            &serde_json::json!({"query": "test"}),
+            &[],
+            &[],
+            &HashSet::new(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(result, ToolDecision::AutoExecute));
     }
@@ -434,8 +544,15 @@ mod tests {
     #[test]
     fn cli_tool_blocked_in_plan_mode() {
         let decision = check_permission(
-            &PermissionMode::Plan, "cli_test", &serde_json::json!({}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "cli_test",
+            &serde_json::json!({}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -443,8 +560,15 @@ mod tests {
     #[test]
     fn cli_tool_requires_approval_in_default_mode() {
         let decision = check_permission(
-            &PermissionMode::Default, "cli_test", &serde_json::json!({}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "cli_test",
+            &serde_json::json!({}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }
@@ -452,8 +576,15 @@ mod tests {
     #[test]
     fn exec_tool_blocked_in_plan_mode() {
         let decision = check_permission(
-            &PermissionMode::Plan, "exec_my_tool", &serde_json::json!({}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Plan,
+            "exec_my_tool",
+            &serde_json::json!({}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert!(matches!(decision, ToolDecision::Blocked(_)));
     }
@@ -461,8 +592,15 @@ mod tests {
     #[test]
     fn exec_tool_requires_approval_in_default_mode() {
         let decision = check_permission(
-            &PermissionMode::Default, "exec_my_tool", &serde_json::json!({}),
-            &[], &[], &Default::default(), None, None, &[],
+            &PermissionMode::Default,
+            "exec_my_tool",
+            &serde_json::json!({}),
+            &[],
+            &[],
+            &Default::default(),
+            None,
+            None,
+            &[],
         );
         assert_eq!(decision, ToolDecision::RequireApproval);
     }

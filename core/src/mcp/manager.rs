@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::tools::ToolResult;
 use crate::config::schema::{McpConfig, McpServerConfig};
 use crate::provider::ToolDefinition;
+use crate::tools::ToolResult;
 
 /// A validated MCP tool call ready to execute on a background task.
 /// Contains a cloned `Peer` so it can be sent across threads.

@@ -531,9 +531,7 @@ impl ProviderRegistry {
                     .keys
                     .get("ai21")
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No API key for ai21. Set AI21_API_KEY or add to config."
-                        )
+                        anyhow::anyhow!("No API key for ai21. Set AI21_API_KEY or add to config.")
                     })?
                     .to_string();
                 let model = model.unwrap_or("jamba-1.5-large").to_string();
@@ -573,9 +571,7 @@ impl ProviderRegistry {
                     .keys
                     .get("yi")
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No API key for yi. Set YI_API_KEY or add to config."
-                        )
+                        anyhow::anyhow!("No API key for yi. Set YI_API_KEY or add to config.")
                     })?
                     .to_string();
                 let model = model.unwrap_or("yi-large").to_string();
@@ -594,9 +590,7 @@ impl ProviderRegistry {
                     .keys
                     .get("zhipu")
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No API key for zhipu. Set ZHIPU_API_KEY or add to config."
-                        )
+                        anyhow::anyhow!("No API key for zhipu. Set ZHIPU_API_KEY or add to config.")
                     })?
                     .to_string();
                 let model = model.unwrap_or("glm-4-plus").to_string();
@@ -680,9 +674,7 @@ impl ProviderRegistry {
                     .keys
                     .get("reka")
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No API key for reka. Set REKA_API_KEY or add to config."
-                        )
+                        anyhow::anyhow!("No API key for reka. Set REKA_API_KEY or add to config.")
                     })?
                     .to_string();
                 let model = model.unwrap_or("reka-core").to_string();
@@ -1288,9 +1280,7 @@ mod tests {
     fn zhipu_provider_respects_model_override() {
         let config = config_with_key("zhipu", "zhipu-test");
         let registry = ProviderRegistry::new(&config);
-        let provider = registry
-            .get_provider(Some("zhipu"), Some("glm-4"))
-            .unwrap();
+        let provider = registry.get_provider(Some("zhipu"), Some("glm-4")).unwrap();
         assert_eq!(provider.model(), "glm-4");
     }
 
@@ -1379,7 +1369,10 @@ mod tests {
         let config = config_with_key("huggingface", "hf-test");
         let registry = ProviderRegistry::new(&config);
         let provider = registry
-            .get_provider(Some("huggingface"), Some("mistralai/Mistral-7B-Instruct-v0.3"))
+            .get_provider(
+                Some("huggingface"),
+                Some("mistralai/Mistral-7B-Instruct-v0.3"),
+            )
             .unwrap();
         assert_eq!(provider.model(), "mistralai/Mistral-7B-Instruct-v0.3");
     }

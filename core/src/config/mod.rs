@@ -1096,7 +1096,6 @@ command = "echo started"
         let hooks = config.hooks.as_ref().unwrap();
         assert_eq!(hooks.pre_tool_use.len(), 1);
         assert_eq!(hooks.session_start.len(), 1);
-
     }
 
     #[test]

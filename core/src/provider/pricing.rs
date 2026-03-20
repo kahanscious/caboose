@@ -83,18 +83,9 @@ impl PricingRegistry {
         models.insert("o4-mini".into(), ModelPricing::standard(1.1, 4.4));
 
         // Gemini
-        models.insert(
-            "gemini-2.0-flash".into(),
-            ModelPricing::standard(0.1, 0.4),
-        );
-        models.insert(
-            "gemini-2.5-pro".into(),
-            ModelPricing::standard(1.25, 10.0),
-        );
-        models.insert(
-            "gemini-2.5-flash".into(),
-            ModelPricing::standard(0.15, 0.6),
-        );
+        models.insert("gemini-2.0-flash".into(), ModelPricing::standard(0.1, 0.4));
+        models.insert("gemini-2.5-pro".into(), ModelPricing::standard(1.25, 10.0));
+        models.insert("gemini-2.5-flash".into(), ModelPricing::standard(0.15, 0.6));
 
         // DeepSeek
         models.insert("deepseek-chat".into(), ModelPricing::standard(0.27, 1.1));
@@ -157,10 +148,7 @@ impl PricingRegistry {
         models.insert("jamba-1.5-mini".into(), ModelPricing::standard(0.2, 0.4));
 
         // Moonshot AI (Kimi)
-        models.insert(
-            "moonshot-v1-128k".into(),
-            ModelPricing::standard(2.0, 5.0),
-        );
+        models.insert("moonshot-v1-128k".into(), ModelPricing::standard(2.0, 5.0));
         models.insert("moonshot-v1-32k".into(), ModelPricing::standard(1.0, 2.5));
         models.insert("moonshot-v1-8k".into(), ModelPricing::standard(0.5, 1.25));
 
@@ -179,10 +167,7 @@ impl PricingRegistry {
         );
 
         // Inflection AI
-        models.insert(
-            "inflection-3-pi".into(),
-            ModelPricing::standard(2.5, 10.0),
-        );
+        models.insert("inflection-3-pi".into(), ModelPricing::standard(2.5, 10.0));
         models.insert(
             "inflection-3-productivity".into(),
             ModelPricing::standard(2.5, 10.0),
@@ -361,7 +346,7 @@ mod tests {
         let expected = (40_000.0 * 3.0 / 1_000_000.0)   // regular input
             + (50_000.0 * 0.3 / 1_000_000.0)             // cache read
             + (10_000.0 * 3.75 / 1_000_000.0)            // cache creation
-            + (20_000.0 * 15.0 / 1_000_000.0);           // output
+            + (20_000.0 * 15.0 / 1_000_000.0); // output
         assert!((cost - expected).abs() < 0.0001);
     }
 
