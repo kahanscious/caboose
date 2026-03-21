@@ -5,6 +5,21 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-20
+
+### Changed
+
+- **Workspace architecture** — split the monolithic `tui/` crate into a Cargo workspace: `core/` (`caboose-core`, platform-agnostic domain logic) and `tui/` (terminal frontend). All domain modules — agent, provider, tools, config, session, memory, MCP, skills, roundhouse, safety, and more — now live in `caboose-core`. The TUI crate imports core and adds terminal-specific layers (ratatui rendering, LSP, embedded PTY, clipboard, self-updater).
+- **`app.rs` module split** — broke the 13,600-line `app.rs` monolith into 15 focused modules under `app/`: `mod.rs` (event loop), `types.rs`, `state.rs`, `key_dispatch.rs`, `tool_handlers.rs`, `pickers.rs`, `dialogs.rs`, `provider_mgmt.rs`, `slash_commands.rs`, `handoff.rs`, `roundhouse.rs`, `session_mgmt.rs`, `skills.rs`, `input.rs`, `helpers.rs`.
+- **Stale code cleanup** — deleted 30+ duplicate files that existed in both crates after the core extraction. TUI modules now re-export from `caboose-core` instead of carrying copies.
+- **Dependency cleanup** — removed 12 duplicate deps from `tui/Cargo.toml` and 7 phantom deps from `core/Cargo.toml` that were declared but never used.
+
+### Fixed
+
+- **Fast typing no longer triggers paste detection** — tightened the rapid-input gap threshold from 180ms to 50ms. Previously, typing 12+ characters at ~80 WPM and pressing Enter would insert a newline instead of sending. Bracketed paste (enabled by default) handles real pastes; the key-by-key fallback now only triggers at inhuman input speeds.
+
+---
+
 ## [0.6.4] - 2026-03-20
 
 ### Added
