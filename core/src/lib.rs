@@ -6,6 +6,7 @@ pub mod attachment;
 pub mod checkpoint;
 pub mod circuits;
 pub mod config;
+pub mod events;
 pub mod hooks;
 pub mod init;
 pub mod mcp;
