@@ -1400,6 +1400,35 @@ impl App {
                 }
             }
 
+            // Poll core events (background agent lifecycle)
+            if let Some(ref mut rx) = self.state.core_event_rx {
+                while let Ok(event) = rx.try_recv() {
+                    use caboose_core::events::CoreEvent;
+                    match event {
+                        CoreEvent::BackgroundAgentStarted {
+                            id, prompt_summary, ..
+                        } => {
+                            tracing::info!("Background agent started: {id} — {prompt_summary}");
+                        }
+                        CoreEvent::BackgroundAgentComplete {
+                            id: _, tokens_used, ..
+                        } => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "Background agent completed ({tokens_used} tokens)."
+                                ),
+                            });
+                        }
+                        CoreEvent::BackgroundAgentFailed { id: _, reason, .. } => {
+                            self.state.chat_messages.push(ChatMessage::Error {
+                                content: format!("Background agent failed: {reason}"),
+                            });
+                        }
+                        _ => {} // Ignore other CoreEvent variants
+                    }
+                }
+            }
+
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
 
