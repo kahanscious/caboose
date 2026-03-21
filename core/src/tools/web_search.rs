@@ -1,12 +1,62 @@
 //! Web search tool — search the web via external search providers.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 
+use crate::config::schema::ServiceConfig;
 use crate::tools::ToolResult;
+use crate::tools::search::{SearchBackend, format_results};
+use crate::tools::search_searxng::SearxngBackend;
+use crate::tools::search_tavily::TavilyBackend;
+
+/// Enum dispatch to avoid the `Box<dyn SearchBackend>` object-safety issue
+/// (the trait uses RPITIT / `impl Future` in return position).
+enum Backend {
+    Searxng(SearxngBackend),
+    Tavily(TavilyBackend),
+}
+
+impl Backend {
+    async fn search(&self, query: &str, max_results: usize) -> Result<Vec<crate::tools::search::SearchResult>> {
+        match self {
+            Backend::Searxng(b) => b.search(query, max_results).await,
+            Backend::Tavily(b) => b.search(query, max_results).await,
+        }
+    }
+}
+
+/// Build a backend from a `ServiceConfig`.
+fn build_backend(config: &ServiceConfig) -> Result<Backend> {
+    match config.provider.as_str() {
+        "searxng" => {
+            let base_url = config
+                .base_url
+                .as_deref()
+                .ok_or_else(|| anyhow!("searxng backend requires base_url in [services.web_search]"))?;
+            let user_agent = config
+                .user_agent
+                .as_deref()
+                .unwrap_or("Caboose/1.0 (SearchService)");
+            let backend = SearxngBackend::new(base_url, user_agent)?;
+            Ok(Backend::Searxng(backend))
+        }
+        "tavily" => {
+            let key_env = config
+                .api_key_env
+                .as_deref()
+                .unwrap_or("TAVILY_API_KEY");
+            let api_key = std::env::var(key_env).unwrap_or_default();
+            let base_url = config.base_url.as_deref();
+            Ok(Backend::Tavily(TavilyBackend::new(&api_key, base_url)))
+        }
+        other => Err(anyhow!(
+            "Unsupported web search provider: '{other}'. Supported: searxng, tavily"
+        )),
+    }
+}
 
 /// Execute a web search.
-pub async fn execute(input: &Value, provider: &str, api_key: &str) -> Result<ToolResult> {
+pub async fn execute(input: &Value, service_config: Option<&ServiceConfig>) -> Result<ToolResult> {
     let query = match input["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q.trim(),
         _ => {
@@ -23,47 +73,21 @@ pub async fn execute(input: &Value, provider: &str, api_key: &str) -> Result<Too
         }
     };
 
-    match provider {
-        "tavily" => execute_tavily(query, api_key).await,
-        _ => Ok(ToolResult {
-            tool_use_id: String::new(),
-            output: format!(
-                "Unsupported web search provider: '{provider}'. Currently supported: tavily"
-            ),
-            is_error: true,
-            tool_name: None,
-            file_path: None,
-            files_modified: vec![],
-            lines_added: 0,
-            lines_removed: 0,
-        }),
-    }
-}
-
-async fn execute_tavily(query: &str, api_key: &str) -> Result<ToolResult> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-    let body = serde_json::json!({
-        "query": query,
-        "search_depth": "basic",
-        "max_results": 5,
-        "include_answer": true,
-    });
-
-    let response = match client
-        .post("https://api.tavily.com/search")
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
+    let config = match service_config {
+        Some(c) => c,
+        None => {
             return Ok(ToolResult {
                 tool_use_id: String::new(),
-                output: format!("Web search request failed: {e}"),
+                output: "Web search is not configured. Add a [services.web_search] section to \
+                         your config.toml:\n\n\
+                         [services.web_search]\n\
+                         provider = \"tavily\"\n\
+                         api_key_env = \"TAVILY_API_KEY\"\n\n\
+                         Or for a self-hosted SearXNG instance:\n\n\
+                         [services.web_search]\n\
+                         provider = \"searxng\"\n\
+                         base_url = \"https://your-searxng-instance.example.com\""
+                    .to_string(),
                 is_error: true,
                 tool_name: None,
                 file_path: None,
@@ -74,87 +98,85 @@ async fn execute_tavily(query: &str, api_key: &str) -> Result<ToolResult> {
         }
     };
 
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let backend = match build_backend(config) {
+        Ok(b) => b,
+        Err(e) => {
+            return Ok(ToolResult {
+                tool_use_id: String::new(),
+                output: format!("Failed to build search backend: {e}"),
+                is_error: true,
+                tool_name: None,
+                file_path: None,
+                files_modified: vec![],
+                lines_added: 0,
+                lines_removed: 0,
+            });
+        }
+    };
 
-    if !status.is_success() {
-        return Ok(ToolResult {
+    let max_results = config.max_results.unwrap_or(5);
+
+    match backend.search(query, max_results).await {
+        Ok(results) => {
+            let output = format_results(&results, query);
+            Ok(ToolResult {
+                tool_use_id: String::new(),
+                output,
+                is_error: false,
+                tool_name: None,
+                file_path: None,
+                files_modified: vec![],
+                lines_added: 0,
+                lines_removed: 0,
+            })
+        }
+        Err(e) => Ok(ToolResult {
             tool_use_id: String::new(),
-            output: format!("Tavily API error ({status}): {text}"),
+            output: format!("Web search failed: {e}"),
             is_error: true,
             tool_name: None,
             file_path: None,
             files_modified: vec![],
             lines_added: 0,
             lines_removed: 0,
-        });
+        }),
     }
-
-    let json: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    let mut output = String::new();
-
-    if let Some(answer) = json["answer"].as_str() {
-        output.push_str(&format!("**Answer:** {answer}\n\n---\n\n"));
-    }
-
-    if let Some(results) = json["results"].as_array() {
-        if results.is_empty() {
-            output.push_str(&format!("No results found for: {query}"));
-        } else {
-            for (i, r) in results.iter().enumerate() {
-                let title = r["title"].as_str().unwrap_or("Untitled");
-                let url = r["url"].as_str().unwrap_or("");
-                let content = r["content"].as_str().unwrap_or("");
-                output.push_str(&format!(
-                    "{}. **{}**\n   {}\n   {}\n\n",
-                    i + 1,
-                    title,
-                    url,
-                    content
-                ));
-            }
-        }
-    } else {
-        output.push_str(&format!("No results found for: {query}"));
-    }
-
-    Ok(ToolResult {
-        tool_use_id: String::new(),
-        output,
-        is_error: false,
-        tool_name: None,
-        file_path: None,
-        files_modified: vec![],
-        lines_added: 0,
-        lines_removed: 0,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn missing_query_returns_error() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt
-            .block_on(execute(&serde_json::json!({}), "tavily", "fake-key"))
-            .unwrap();
+    #[tokio::test]
+    async fn missing_query_returns_error() {
+        let result = execute(&serde_json::json!({}), None).await.unwrap();
         assert!(result.is_error);
         assert!(result.output.contains("query"));
     }
 
-    #[test]
-    fn unsupported_provider_returns_error() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt
-            .block_on(execute(
-                &serde_json::json!({"query": "test"}),
-                "unknown_provider",
-                "fake-key",
-            ))
+    #[tokio::test]
+    async fn no_backend_configured_returns_setup_instructions() {
+        let result = execute(&serde_json::json!({"query": "rust"}), None)
+            .await
             .unwrap();
         assert!(result.is_error);
-        assert!(result.output.contains("Unsupported"));
+        assert!(result.output.contains("[services.web_search]"));
+    }
+
+    #[tokio::test]
+    async fn unsupported_provider_returns_error() {
+        let config = ServiceConfig {
+            provider: "unknown_provider".into(),
+            api_key_env: None,
+            enabled: true,
+            base_url: None,
+            user_agent: None,
+            max_results: None,
+        };
+        let result = execute(&serde_json::json!({"query": "test"}), Some(&config))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.output.contains("Unsupported") || result.output.contains("Failed to build"));
     }
 }

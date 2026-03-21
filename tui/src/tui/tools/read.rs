@@ -38,11 +38,37 @@ pub fn render(tool: &ToolMessage, colors: &Colors, tick: u64) -> Vec<Line<'stati
         "Read"
     };
 
+    // Show line range (e.g. "lines 165–364") when offset/limit are present,
+    // otherwise just show total line count.
+    let range_info = if tool.name == "read_file" {
+        let offset = tool.args.get("offset").and_then(|v| v.as_u64());
+        let limit = tool.args.get("limit").and_then(|v| v.as_u64());
+        match (offset, limit) {
+            (Some(off), Some(lim)) => {
+                let start = off + 1; // offset is 0-based, display as 1-based
+                let end = off + lim.min(line_count as u64);
+                format!("lines {start}–{end}")
+            }
+            (Some(off), None) => {
+                let start = off + 1;
+                let end = off + line_count as u64;
+                format!("lines {start}–{end}")
+            }
+            (None, Some(lim)) => {
+                let end = lim.min(line_count as u64);
+                format!("lines 1–{end}")
+            }
+            (None, None) => format!("{line_count} lines"),
+        }
+    } else {
+        format!("{line_count} lines")
+    };
+
     lines.push(Line::from(vec![
         icon,
         Span::styled(label, Style::default().fg(colors.text)),
         Span::styled(
-            format!("  {path} ({line_count} lines)"),
+            format!("  {path} ({range_info})"),
             Style::default()
                 .fg(colors.text_dim)
                 .add_modifier(Modifier::DIM),

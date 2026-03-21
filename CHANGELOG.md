@@ -5,6 +5,21 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-03-21
+
+### Added
+
+- **`caboose-server` crate** — embedded Axum WebSocket server for mobile and web clients. JSON envelope protocol over WebSocket with bidirectional event/command bridge. Configurable via `[server]` in config.
+- **Device pairing auth** — pair mobile devices with one-time codes. Argon2-hashed tokens, device naming, max device limits, and revocation via `/pair`, `/devices`, `/unpair` commands.
+- **Background agent manager** — `BackgroundAgentManager` with per-agent and global token budget enforcement. `/bg` command stubs for spawning, listing, and managing background agents.
+- **Pluggable search backends** — `SearchBackend` trait with two implementations: `SearxngBackend` (self-hosted via [tender-highball](https://github.com/kahanscious/tender-highball)) and `TavilyBackend` (paid API). Configure in `[services.web_search]`.
+- **CoreEvent/CoreCommand event bus** — typed event broadcasting (24 event variants) and command channel (21 command variants) for cross-frontend communication between TUI, server, and future mobile app.
+- **`/context` command** — displays model, provider, context window, session tokens, conversation stats, tool counts, MCP servers, skills, memory status, and permission mode.
+- **`read_file` line range display** — tool output now shows "lines 165–364" instead of "202 lines" when offset/limit are present.
+- **`ServerSchemaConfig` and `BackgroundAgentSchemaConfig`** — new config sections `[server]` and `[background_agents]` with merge support.
+
+---
+
 ## [0.7.0] - 2026-03-20
 
 ### Changed

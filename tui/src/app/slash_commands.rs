@@ -594,6 +594,31 @@ impl App {
             self.handle_unpin_command(slash);
             return true;
         }
+        // /context — show what's loaded in the current context
+        if slash == "context" {
+            self.handle_context_command();
+            return true;
+        }
+        // /bg — background agent commands
+        if slash == "bg" || slash.starts_with("bg ") {
+            self.handle_bg_command(slash);
+            return true;
+        }
+        // /pair — generate device pairing code
+        if slash == "pair" {
+            self.handle_pair_command();
+            return true;
+        }
+        // /devices — list paired devices
+        if slash == "devices" {
+            self.handle_devices_command();
+            return true;
+        }
+        // /unpair — revoke a paired device
+        if slash == "unpair" || slash.starts_with("unpair ") {
+            self.handle_unpair_command(slash);
+            return true;
+        }
         // /new — confirm if session has real content, then extract memories and clear
         if slash == "new" {
             if needs_new_session_confirm(&self.state.chat_messages) {
@@ -773,5 +798,215 @@ impl App {
                 content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
             });
         }
+    }
+
+    // ---- Context command ----
+
+    fn handle_context_command(&mut self) {
+        let mut content = String::new();
+
+        // Model info
+        content.push_str(&format!(
+            "**Model:** {}\n**Provider:** {}\n",
+            self.state.active_model_name, self.state.active_provider_name,
+        ));
+
+        // Context window
+        let cw = self.state.agent.context_window;
+        content.push_str(&format!("**Context window:** {cw} tokens\n\n"));
+
+        // Token usage
+        content.push_str(&format!(
+            "**Session tokens:** {} in / {} out\n",
+            self.state.session_input_tokens, self.state.session_output_tokens,
+        ));
+        if self.state.session_cost > 0.0 {
+            content.push_str(&format!(
+                "**Session cost:** ${:.4}\n",
+                self.state.session_cost
+            ));
+        }
+        content.push('\n');
+
+        // Conversation
+        let conv_len = self.state.agent.conversation.messages.len();
+        let turns = self.state.agent.turn_count;
+        content.push_str(&format!(
+            "**Conversation:** {conv_len} messages, {turns} turns\n"
+        ));
+        content.push_str(&format!(
+            "**Chat messages:** {} (displayed)\n\n",
+            self.state.chat_messages.len()
+        ));
+
+        // Tools
+        let builtin_tools = self.state.tools.definitions().len();
+        let mcp_tools = self.state.mcp_manager.tool_definitions().len();
+        content.push_str(&format!("**Tools:** {builtin_tools} built-in"));
+        if mcp_tools > 0 {
+            content.push_str(&format!(", {mcp_tools} MCP"));
+        }
+        content.push('\n');
+
+        // MCP servers
+        let servers: Vec<_> = self
+            .state
+            .mcp_manager
+            .servers
+            .iter()
+            .map(|(name, s)| format!("  - {} ({})", name, s.status.label()))
+            .collect();
+        if !servers.is_empty() {
+            content.push_str(&format!("**MCP servers:** {}\n", servers.len()));
+            for s in &servers {
+                content.push_str(s);
+                content.push('\n');
+            }
+        }
+        content.push('\n');
+
+        // Skills
+        content.push_str(&format!("**Skills:** {}\n", self.state.skills.len()));
+
+        // Agent definitions
+        if !self.state.agent_definitions.is_empty() {
+            content.push_str(&format!(
+                "**Custom agents:** {}\n",
+                self.state.agent_definitions.len()
+            ));
+        }
+
+        // Memory
+        let mem_ctx = self.state.memory.load_context();
+        let has_project = mem_ctx.project.is_some();
+        let has_global = mem_ctx.global.is_some();
+        if has_project || has_global {
+            content.push_str("**Memory:** ");
+            let mut parts = Vec::new();
+            if has_project {
+                parts.push("project");
+            }
+            if has_global {
+                parts.push("global");
+            }
+            content.push_str(&parts.join(", "));
+            content.push_str(" loaded\n");
+        }
+
+        // Pins
+        if !self.state.pins.is_empty() {
+            content.push_str(&format!("**Pins:** {}\n", self.state.pins.len()));
+        }
+
+        // Server
+        if let Some(ref handle) = self.state.server_handle {
+            content.push_str(&format!(
+                "\n**Server:** listening on {}\n",
+                handle.local_addr
+            ));
+        }
+
+        // Permission mode
+        content.push_str(&format!(
+            "\n**Permission mode:** {}\n",
+            self.state.mode.label()
+        ));
+
+        self.state
+            .chat_messages
+            .push(ChatMessage::System { content });
+    }
+
+    // ---- Background agent commands ----
+
+    fn handle_bg_command(&mut self, slash: &str) {
+        let args = slash.strip_prefix("bg").unwrap_or("").trim();
+        if args.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /bg <prompt> — spawn a background agent\n\
+                         /bg list — show running agents\n\
+                         /bg kill <id> — stop an agent\n\
+                         (background agent spawning not yet wired)"
+                    .to_string(),
+            });
+            return;
+        }
+        match args
+            .split_once(' ')
+            .map(|(cmd, rest)| (cmd, rest.trim()))
+            .unwrap_or((args, ""))
+        {
+            ("list", _) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No background agents running. (spawning not yet wired)".to_string(),
+                });
+            }
+            ("kill", id) if !id.is_empty() => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Background agent kill not yet implemented (id: {id})."),
+                });
+            }
+            ("attach", id) if !id.is_empty() => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Background agent attach not yet implemented (id: {id})."),
+                });
+            }
+            ("detach", _) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Background agent detach not yet implemented.".to_string(),
+                });
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Would spawn background agent: \"{args}\" (not yet wired)."),
+                });
+            }
+        }
+    }
+
+    fn handle_pair_command(&mut self) {
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to use pairing."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Device pairing not yet wired to TUI.".to_string(),
+        });
+    }
+
+    fn handle_devices_command(&mut self) {
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to manage devices."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Device listing not yet wired to TUI.".to_string(),
+        });
+    }
+
+    fn handle_unpair_command(&mut self, slash: &str) {
+        let device_id = slash.strip_prefix("unpair").unwrap_or("").trim();
+        if device_id.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /unpair <device_id>".to_string(),
+            });
+            return;
+        }
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to manage devices."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("Device unpair not yet wired (id: {device_id})."),
+        });
     }
 }

@@ -98,6 +98,10 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Session pins** — `/pin` adds runtime rules; `/pin --save` writes them to `CABOOSE.md` so they persist permanently
 - **Hover-to-copy** — mouse over any assistant message or code block to copy with `y` or a click
 - **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
+- **Embedded server** — WebSocket server for mobile and web clients, with device pairing auth and bidirectional event bridge
+- **Background agents** — `/bg` spawns background agents with per-agent and global token budget enforcement
+- **Web search backends** — pluggable `SearchBackend` trait with SearXNG (self-hosted) and Tavily (paid API) implementations
+- **`/context`** — shows model, tokens, tools, MCP servers, skills, memory, and permission mode at a glance
 
 ## Built-in Skills
 
@@ -128,7 +132,7 @@ Caboose is a Cargo workspace: `core/` contains platform-agnostic domain logic (`
 
 ```bash
 cargo build --workspace       # build both crates
-cargo test --workspace        # run all tests (~1200)
+cargo test --workspace        # run all tests (~1256)
 cargo clippy --workspace      # lint
 cargo build --release -p caboose  # optimized release binary
 ```

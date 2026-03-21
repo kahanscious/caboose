@@ -258,6 +258,12 @@ pub struct State {
     pub title_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Set to true when user manually sets title via /title — prevents LLM overwrite.
     pub title_manually_set: bool,
+    /// Embedded WebSocket server handle (when server is enabled).
+    pub server_handle: Option<caboose_server::ServerHandle>,
+    /// Background agent manager for /bg commands (wired in follow-up).
+    #[allow(dead_code)]
+    pub background_manager:
+        Option<std::sync::Arc<caboose_core::background::BackgroundAgentManager>>,
 }
 
 impl State {
@@ -771,6 +777,8 @@ impl App {
                 pins_expanded: false,
                 title_rx: None,
                 title_manually_set: false,
+                server_handle: None,
+                background_manager: None,
             },
             terminal,
             provider,

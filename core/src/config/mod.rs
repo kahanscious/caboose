@@ -87,6 +87,12 @@ pub struct Config {
     /// Custom per-model pricing overrides (USD per million tokens)
     #[serde(default)]
     pub pricing: HashMap<String, schema::PricingOverride>,
+    /// Embedded WebSocket server configuration
+    #[serde(default)]
+    pub server: Option<schema::ServerSchemaConfig>,
+    /// Background agent configuration
+    #[serde(default)]
+    pub background_agents: Option<schema::BackgroundAgentSchemaConfig>,
 }
 
 impl Config {
@@ -229,6 +235,12 @@ impl Config {
             self.workspaces.insert(name, ws);
         }
         self.keys.merge(other.keys);
+        if other.server.is_some() {
+            self.server = other.server;
+        }
+        if other.background_agents.is_some() {
+            self.background_agents = other.background_agents;
+        }
         for (name, other_cfg) in other.providers {
             let entry = self.providers.entry(name).or_default();
             if other_cfg.model.is_some() {
