@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod agents;
+pub mod background;
 pub mod attachment;
 pub mod checkpoint;
 pub mod circuits;
