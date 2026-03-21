@@ -264,6 +264,9 @@ pub struct State {
     #[allow(dead_code)]
     pub background_manager:
         Option<std::sync::Arc<caboose_core::background::BackgroundAgentManager>>,
+    /// Receiver for core events (background agent lifecycle, etc.).
+    #[allow(dead_code)]
+    pub core_event_rx: Option<tokio::sync::broadcast::Receiver<caboose_core::events::CoreEvent>>,
 }
 
 impl State {
@@ -643,6 +646,23 @@ impl App {
         let (sub_agent_tx, sub_agent_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
 
+        // Create core event bus
+        let (core_handle, _cmd_rx) = caboose_core::events::CoreHandle::new();
+        let core_event_rx = core_handle.subscribe();
+
+        // Initialize background agent manager from config
+        let bg_config = {
+            let schema = config.background_agents.as_ref();
+            caboose_core::background::BackgroundAgentConfig {
+                per_agent_budget: schema.and_then(|s| s.per_agent_budget).unwrap_or(100_000),
+                global_budget: schema.and_then(|s| s.global_budget).unwrap_or(500_000),
+                max_agents: schema.and_then(|s| s.max_agents).unwrap_or(5),
+            }
+        };
+        let background_manager = std::sync::Arc::new(
+            caboose_core::background::BackgroundAgentManager::new(bg_config, core_handle),
+        );
+
         let mut app = Self {
             state: State {
                 config,
@@ -778,7 +798,8 @@ impl App {
                 title_rx: None,
                 title_manually_set: false,
                 server_handle: None,
-                background_manager: None,
+                background_manager: Some(background_manager),
+                core_event_rx: Some(core_event_rx),
             },
             terminal,
             provider,
