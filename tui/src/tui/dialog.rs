@@ -246,7 +246,7 @@ impl WorkspaceAddState {
 #[derive(Debug, Clone)]
 pub struct WorkspaceListState {
     /// (name, config, is_available) — is_available checked at open time.
-    pub workspaces: Vec<(String, crate::config::schema::WorkspaceConfig, bool)>,
+    pub workspaces: Vec<(String, caboose_core::config::schema::WorkspaceConfig, bool)>,
     pub selected: usize,
 }
 
@@ -531,7 +531,7 @@ mod workspace_dialog_tests {
 
     #[test]
     fn workspace_list_state_with_entries_clamps() {
-        use crate::config::schema::{WorkspaceConfig, WorkspaceMode};
+        use caboose_core::config::schema::{WorkspaceConfig, WorkspaceMode};
         let mut state = WorkspaceListState {
             workspaces: vec![
                 (
@@ -539,7 +539,7 @@ mod workspace_dialog_tests {
                     WorkspaceConfig {
                         path: "/tmp/a".to_string(),
                         mode: WorkspaceMode::Proactive,
-                        access: crate::config::schema::WorkspaceAccess::ReadWrite,
+                        access: caboose_core::config::schema::WorkspaceAccess::ReadWrite,
                     },
                     true,
                 ),
@@ -548,7 +548,7 @@ mod workspace_dialog_tests {
                     WorkspaceConfig {
                         path: "/tmp/b".to_string(),
                         mode: WorkspaceMode::Explicit,
-                        access: crate::config::schema::WorkspaceAccess::ReadOnly,
+                        access: caboose_core::config::schema::WorkspaceAccess::ReadOnly,
                     },
                     false,
                 ),

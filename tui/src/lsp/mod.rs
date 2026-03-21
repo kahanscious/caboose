@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use lsp_types::Diagnostic;
 
-use crate::config::schema::LspConfig;
+use caboose_core::config::schema::LspConfig;
 use client::LspClient;
 
 /// Convert a file:// URI back to a filesystem path.
@@ -330,7 +330,7 @@ fn preload_files(language: &str, workspace_root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::schema::LspServerConfig;
+    use caboose_core::config::schema::LspServerConfig;
 
     #[test]
     fn broken_servers_tracked() {

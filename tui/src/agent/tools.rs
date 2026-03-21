@@ -3,24 +3,8 @@
 use anyhow::Result;
 use serde_json::Value;
 
-/// Result of executing a tool.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct ToolResult {
-    pub tool_use_id: String,
-    pub output: String,
-    pub is_error: bool,
-    /// Which tool produced this result (e.g. "read_file", "write_file").
-    pub tool_name: Option<String>,
-    /// The file path the tool operated on, if applicable.
-    pub file_path: Option<String>,
-    /// Files this tool modified on disk (used by post-tool hooks).
-    pub files_modified: Vec<std::path::PathBuf>,
-    /// Lines added by this tool invocation.
-    pub lines_added: usize,
-    /// Lines removed by this tool invocation.
-    pub lines_removed: usize,
-}
+// Re-export ToolResult from caboose-core.
+pub use caboose_core::tools::ToolResult;
 
 /// Parse and dispatch a tool call to the appropriate tool handler.
 ///
@@ -36,11 +20,13 @@ pub async fn execute_tool(
     additional_secrets: &[String],
     mcp_manager: Option<&mut crate::mcp::McpManager>,
     lsp_manager: Option<&mut crate::lsp::LspManager>,
-    services: Option<&crate::config::schema::ServicesConfig>,
-    cli_tools: Option<&std::collections::HashMap<String, crate::config::schema::CliToolConfig>>,
+    services: Option<&caboose_core::config::schema::ServicesConfig>,
+    cli_tools: Option<
+        &std::collections::HashMap<String, caboose_core::config::schema::CliToolConfig>,
+    >,
     deny_list: &[String],
     exec_tools: Option<
-        &std::collections::HashMap<String, crate::config::schema::ExecutableToolConfig>,
+        &std::collections::HashMap<String, caboose_core::config::schema::ExecutableToolConfig>,
     >,
 ) -> Result<ToolResult> {
     // MCP tool routing — namespaced names contain ':'
@@ -206,8 +192,9 @@ pub async fn execute_tool(
             };
 
             // Check deny list
-            let deny_decision = crate::safety::command_policy::check(&full_command, &[], deny_list);
-            if let crate::safety::command_policy::Decision::Deny(reason) = deny_decision {
+            let deny_decision =
+                caboose_core::safety::command_policy::check(&full_command, &[], deny_list);
+            if let caboose_core::safety::command_policy::Decision::Deny(reason) = deny_decision {
                 return Ok(ToolResult {
                     tool_use_id: String::new(),
                     output: format!("CLI tool blocked by deny list: {reason}"),
@@ -240,8 +227,8 @@ pub async fn execute_tool(
 
             // Check deny list against the executable path
             let deny_decision =
-                crate::safety::command_policy::check(&exec_config.path, &[], deny_list);
-            if let crate::safety::command_policy::Decision::Deny(reason) = deny_decision {
+                caboose_core::safety::command_policy::check(&exec_config.path, &[], deny_list);
+            if let caboose_core::safety::command_policy::Decision::Deny(reason) = deny_decision {
                 return Ok(ToolResult {
                     tool_use_id: String::new(),
                     output: format!("Executable tool blocked by deny list: {reason}"),
@@ -401,7 +388,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "hello".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo hello".into(),
                 description: "Say hello".into(),
                 args: None,
@@ -432,7 +419,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "greet".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo".into(),
                 description: "Echo args".into(),
                 args: None,
@@ -463,7 +450,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "danger".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "rm -rf /".into(),
                 description: "Dangerous".into(),
                 args: None,
@@ -514,7 +501,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(
             "name".into(),
-            crate::config::schema::CliToolArg {
+            caboose_core::config::schema::CliToolArg {
                 arg_type: "string".into(),
                 description: None,
                 required: Some(true),
@@ -525,7 +512,7 @@ mod tests {
         let mut cli_tools = std::collections::HashMap::new();
         cli_tools.insert(
             "greet".into(),
-            crate::config::schema::CliToolConfig {
+            caboose_core::config::schema::CliToolConfig {
                 command: "echo hello $name".into(),
                 description: "Greet someone".into(),
                 args: Some(args),

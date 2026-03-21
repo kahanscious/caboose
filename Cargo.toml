@@ -1,0 +1,14 @@
+[workspace]
+members = ["core", "tui"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

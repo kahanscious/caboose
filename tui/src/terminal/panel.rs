@@ -9,7 +9,7 @@ use std::sync::mpsc;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::safety::env_filter;
+use caboose_core::safety::env_filter;
 
 /// Default scrollback buffer size in lines.
 const SCROLLBACK_LINES: usize = 1000;

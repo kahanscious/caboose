@@ -1,5 +1,5 @@
-use crate::config::schema::McpServerConfig;
 use crate::migrate::agent_import::{render_caboose_agent_markdown, unique_agent_path};
+use caboose_core::config::schema::McpServerConfig;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -73,7 +73,7 @@ pub fn apply_migration(items: &[crate::tui::dialog::MigrationItem]) -> Migration
         match &item.kind {
             MigrationItemKind::McpServer { name, config } => {
                 if let Some((caboose_name, server_config)) = convert_mcp_server(name, config) {
-                    crate::config::save_mcp_server_toggle(&caboose_name, &server_config);
+                    caboose_core::config::save_mcp_server_toggle(&caboose_name, &server_config);
                     result.mcp_servers_added.push(caboose_name);
                 }
             }

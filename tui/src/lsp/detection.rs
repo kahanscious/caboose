@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::config::schema::LspServerConfig;
+use caboose_core::config::schema::LspServerConfig;
 
 struct LangRule {
     language: &'static str,

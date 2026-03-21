@@ -124,11 +124,13 @@ Full docs, configuration reference, and guides at **[docs.trycaboose.dev](https:
 
 ## Development
 
+Caboose is a Cargo workspace: `core/` contains platform-agnostic domain logic (`caboose-core`), `tui/` contains the terminal frontend.
+
 ```bash
-cd tui
-cargo build              # debug build
-cargo test               # run all tests
-cargo clippy             # lint
+cargo build --workspace       # build both crates
+cargo test --workspace        # run all tests (~1200)
+cargo clippy --workspace      # lint
+cargo build --release -p caboose  # optimized release binary
 ```
 
 ## Acknowledgments

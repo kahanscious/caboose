@@ -261,12 +261,16 @@ fn check_command_policy(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let decision = crate::safety::command_policy::check(command, allow_list, deny_list);
+    let decision = caboose_core::safety::command_policy::check(command, allow_list, deny_list);
 
     match decision {
-        crate::safety::command_policy::Decision::Allow => ToolDecision::AutoExecute,
-        crate::safety::command_policy::Decision::Deny(reason) => ToolDecision::Blocked(reason),
-        crate::safety::command_policy::Decision::RequireApproval => ToolDecision::RequireApproval,
+        caboose_core::safety::command_policy::Decision::Allow => ToolDecision::AutoExecute,
+        caboose_core::safety::command_policy::Decision::Deny(reason) => {
+            ToolDecision::Blocked(reason)
+        }
+        caboose_core::safety::command_policy::Decision::RequireApproval => {
+            ToolDecision::RequireApproval
+        }
     }
 }
 

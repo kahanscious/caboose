@@ -1,8 +1,4 @@
-pub mod agent_import;
-pub mod claude_code;
-pub mod codex;
-pub mod converter;
-pub mod detection;
-pub mod open_code;
+pub use caboose_core::migrate::*;
 
-pub use detection::SourcePlatform;
+// converter has TUI-specific apply_migration() that depends on tui::dialog
+pub mod converter;

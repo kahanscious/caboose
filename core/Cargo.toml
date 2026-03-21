@@ -1,0 +1,54 @@
+[package]
+name = "caboose-core"
+version = "0.7.0"
+edition = "2024"
+description = "Platform-agnostic domain logic for the Caboose AI coding agent"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# HTTP + streaming
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest-eventsource = "0.6"
+eventsource-stream = "0.2"
+futures = "0.3"
+async-stream = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+
+# Config
+toml = "0.8"
+dirs = "6"
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Logging / errors
+tracing = "0.1"
+anyhow = "1"
+thiserror = "2"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+glob = "0.3"
+regex = "1"
+flate2 = "1"
+
+# Image encoding
+png = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+
+# MCP
+rmcp = { version = "0.16", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+
+# LSP
+lsp-types = "0.97"
+
+[dev-dependencies]
+tempfile = "3"
