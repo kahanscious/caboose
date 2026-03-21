@@ -7,6 +7,7 @@ pub mod grep;
 pub mod names;
 pub mod patch;
 pub mod read;
+pub mod search;
 pub mod shell;
 pub mod web_search;
 pub mod write;
