@@ -599,6 +599,11 @@ impl App {
             self.handle_context_command();
             return true;
         }
+        // /search-setup — manage SearXNG web search
+        if slash == "search-setup" || slash.starts_with("search-setup ") {
+            self.handle_search_setup(slash).await;
+            return true;
+        }
         // /bg — background agent commands
         if slash == "bg" || slash.starts_with("bg ") {
             self.handle_bg_command(slash).await;
@@ -1114,5 +1119,111 @@ impl App {
         self.state.chat_messages.push(ChatMessage::System {
             content: format!("Device unpair not yet wired (id: {device_id})."),
         });
+    }
+
+    async fn handle_search_setup(&mut self, slash: &str) {
+        let sub = slash.strip_prefix("search-setup").unwrap_or("").trim();
+
+        match sub {
+            "stop" => {
+                let dir = caboose_core::search_setup::search_dir();
+                match caboose_core::search_setup::compose_down(&dir) {
+                    Ok(msg) => self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Search stopped. {msg}"),
+                    }),
+                    Err(e) => self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to stop search: {e}"),
+                    }),
+                }
+            }
+            "status" => {
+                if caboose_core::search_setup::is_running() {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "SearXNG is running on localhost:8080.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "SearXNG is not running.".to_string(),
+                    });
+                }
+            }
+            "" => {
+                self.run_search_setup().await;
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Usage: /search-setup | /search-setup stop | /search-setup status"
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    async fn run_search_setup(&mut self) {
+        if !caboose_core::search_setup::docker_available() {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Docker is required for web search. Install it from docker.com"
+                    .to_string(),
+            });
+            return;
+        }
+
+        if caboose_core::search_setup::is_running() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Web search is already running on localhost:8080.".to_string(),
+            });
+            return;
+        }
+
+        let dir = match caboose_core::search_setup::write_files() {
+            Ok(d) => d,
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to write search config: {e}"),
+                });
+                return;
+            }
+        };
+
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Starting SearXNG...".to_string(),
+        });
+
+        if let Err(e) = caboose_core::search_setup::compose_up(&dir) {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: format!("Failed to start SearXNG: {e}"),
+            });
+            return;
+        }
+
+        if caboose_core::search_setup::wait_healthy().await {
+            match caboose_core::search_setup::auto_configure() {
+                Ok(true) => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Web search enabled. SearXNG running on localhost:8080."
+                            .to_string(),
+                    });
+                }
+                Ok(false) => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "SearXNG running on localhost:8080. Config already present."
+                            .to_string(),
+                    });
+                }
+                Err(e) => {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!(
+                            "SearXNG running but config write failed: {e}. \
+                             Add [services.web_search] manually."
+                        ),
+                    });
+                }
+            }
+        } else {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "SearXNG failed to start within 30s. Check: docker compose -f ~/.config/caboose/search/docker-compose.yml logs"
+                    .to_string(),
+            });
+        }
     }
 }
