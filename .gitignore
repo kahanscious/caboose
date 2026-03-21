@@ -1,4 +1,5 @@
 # Rust build artifacts
+target/
 tui/target/
 tui/target-*/
 dist/
