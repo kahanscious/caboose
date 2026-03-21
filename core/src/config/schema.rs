@@ -396,6 +396,15 @@ pub struct ServiceConfig {
     /// Enable/disable this service (default: true).
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Base URL for self-hosted backends (e.g. SearXNG instance URL).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Custom User-Agent header for backends that require it.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Maximum number of results to return.
+    #[serde(default)]
+    pub max_results: Option<usize>,
 }
 
 /// Configuration for a registered secondary workspace.
@@ -1127,5 +1136,39 @@ command = ".caboose/hooks/preserve-context.sh"
         assert_eq!(p.test_failure, Some(1));
         assert_eq!(p.lint_error, Some(3));
         assert_eq!(p.lint_warning, None);
+    }
+
+    #[test]
+    fn service_config_with_searxng_fields() {
+        let toml_str = r#"
+            [web_search]
+            provider = "searxng"
+            base_url = "https://search.example.com"
+            user_agent = "TestAgent/1.0"
+            max_results = 10
+        "#;
+        let config: std::collections::HashMap<String, ServiceConfig> =
+            toml::from_str(toml_str).unwrap();
+        let svc = &config["web_search"];
+        assert_eq!(svc.provider, "searxng");
+        assert_eq!(svc.base_url.as_deref(), Some("https://search.example.com"));
+        assert_eq!(svc.user_agent.as_deref(), Some("TestAgent/1.0"));
+        assert_eq!(svc.max_results, Some(10));
+    }
+
+    #[test]
+    fn service_config_tavily_unchanged() {
+        let toml_str = r#"
+            [web_search]
+            provider = "tavily"
+            api_key_env = "TAVILY_API_KEY"
+        "#;
+        let config: std::collections::HashMap<String, ServiceConfig> =
+            toml::from_str(toml_str).unwrap();
+        let svc = &config["web_search"];
+        assert_eq!(svc.provider, "tavily");
+        assert_eq!(svc.api_key_env.as_deref(), Some("TAVILY_API_KEY"));
+        assert!(svc.base_url.is_none());
+        assert!(svc.max_results.is_none());
     }
 }
