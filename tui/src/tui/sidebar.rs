@@ -179,6 +179,7 @@ pub fn render(
     roundhouse_session: Option<&crate::roundhouse::RoundhouseSession>,
     active_watchers: &[crate::scm::watcher::Watcher],
     sub_agents: &[SubAgent],
+    background_agents: &[caboose_core::background::BackgroundAgentInfo],
     files_modified_collapsed: bool,
     files_modified_header_row: &std::cell::Cell<Option<u16>>,
 ) -> Option<u16> {
@@ -606,6 +607,46 @@ pub fn render(
             render_agents_section(&mut lines, sub_agents, inner.width, &colors, tick)
         {
             dismiss_row = Some(inner.y + offset as u16);
+        }
+    }
+
+    // --- Background agents section ---
+    if !background_agents.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Background Agents",
+            Style::default().fg(colors.text_secondary).bold(),
+        )));
+        for agent in background_agents {
+            let (status_icon, status_color) = match &agent.status {
+                caboose_core::background::BackgroundAgentStatus::Running => {
+                    ("\u{25b6}", colors.info)
+                }
+                caboose_core::background::BackgroundAgentStatus::Completed => {
+                    ("\u{2713}", colors.success)
+                }
+                caboose_core::background::BackgroundAgentStatus::Killed => {
+                    ("\u{2717}", colors.error)
+                }
+                caboose_core::background::BackgroundAgentStatus::BudgetExceeded => {
+                    ("$", colors.warning)
+                }
+                caboose_core::background::BackgroundAgentStatus::Error(_) => {
+                    ("\u{2717}", colors.error)
+                }
+            };
+            let summary = if agent.prompt_summary.len() > 25 {
+                format!("{}...", &agent.prompt_summary[..22])
+            } else {
+                agent.prompt_summary.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {status_icon} "),
+                    Style::default().fg(status_color),
+                ),
+                Span::styled(summary, Style::default().fg(colors.text_dim)),
+            ]));
         }
     }
 
