@@ -13,7 +13,6 @@ pub use caboose_core::tools::names;
 pub use caboose_core::tools::patch;
 pub use caboose_core::tools::read;
 pub use caboose_core::tools::shell;
-pub use caboose_core::tools::web_search;
 pub use caboose_core::tools::write;
 
 // Re-export ToolRegistry and generate_skill_tool_def from core.

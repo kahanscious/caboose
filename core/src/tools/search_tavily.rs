@@ -63,14 +63,14 @@ impl SearchBackend for TavilyBackend {
         let mut results: Vec<SearchResult> = Vec::new();
 
         // If an AI answer is present, include it as the first result.
-        if let Some(answer) = json["answer"].as_str() {
-            if !answer.is_empty() {
-                results.push(SearchResult {
-                    title: "AI Answer".to_string(),
-                    url: String::new(),
-                    snippet: answer.to_string(),
-                });
-            }
+        if let Some(answer) = json["answer"].as_str()
+            && !answer.is_empty()
+        {
+            results.push(SearchResult {
+                title: "AI Answer".to_string(),
+                url: String::new(),
+                snippet: answer.to_string(),
+            });
         }
 
         if let Some(arr) = json["results"].as_array() {
@@ -78,7 +78,11 @@ impl SearchBackend for TavilyBackend {
                 let title = r["title"].as_str().unwrap_or("Untitled").to_string();
                 let url = r["url"].as_str().unwrap_or("").to_string();
                 let snippet = r["content"].as_str().unwrap_or("").to_string();
-                results.push(SearchResult { title, url, snippet });
+                results.push(SearchResult {
+                    title,
+                    url,
+                    snippet,
+                });
             }
         }
 
@@ -122,7 +126,10 @@ mod tests {
             .await;
 
         let backend = TavilyBackend::new("test-key", Some(&server.uri()));
-        let results = backend.search("rust programming language", 5).await.unwrap();
+        let results = backend
+            .search("rust programming language", 5)
+            .await
+            .unwrap();
 
         // Expect 2 results: AI Answer first, then the one result entry.
         assert_eq!(results.len(), 2);
@@ -137,6 +144,9 @@ mod tests {
         let first = &results[1];
         assert_eq!(first.title, "The Rust Programming Language");
         assert_eq!(first.url, "https://www.rust-lang.org");
-        assert_eq!(first.snippet, "Rust empowers everyone to build reliable software.");
+        assert_eq!(
+            first.snippet,
+            "Rust empowers everyone to build reliable software."
+        );
     }
 }

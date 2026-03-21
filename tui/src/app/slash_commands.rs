@@ -594,6 +594,26 @@ impl App {
             self.handle_unpin_command(slash);
             return true;
         }
+        // /bg — background agent commands
+        if slash == "bg" || slash.starts_with("bg ") {
+            self.handle_bg_command(slash);
+            return true;
+        }
+        // /pair — generate device pairing code
+        if slash == "pair" {
+            self.handle_pair_command();
+            return true;
+        }
+        // /devices — list paired devices
+        if slash == "devices" {
+            self.handle_devices_command();
+            return true;
+        }
+        // /unpair — revoke a paired device
+        if slash == "unpair" || slash.starts_with("unpair ") {
+            self.handle_unpair_command(slash);
+            return true;
+        }
         // /new — confirm if session has real content, then extract memories and clear
         if slash == "new" {
             if needs_new_session_confirm(&self.state.chat_messages) {
@@ -773,5 +793,98 @@ impl App {
                 content: format!("Watching PR/MR #{pr_number} — updates every 3 minutes."),
             });
         }
+    }
+
+    // ---- Background agent commands ----
+
+    fn handle_bg_command(&mut self, slash: &str) {
+        let args = slash.strip_prefix("bg").unwrap_or("").trim();
+        if args.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /bg <prompt> — spawn a background agent\n\
+                         /bg list — show running agents\n\
+                         /bg kill <id> — stop an agent\n\
+                         (background agent spawning not yet wired)"
+                    .to_string(),
+            });
+            return;
+        }
+        match args
+            .split_once(' ')
+            .map(|(cmd, rest)| (cmd, rest.trim()))
+            .unwrap_or((args, ""))
+        {
+            ("list", _) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No background agents running. (spawning not yet wired)".to_string(),
+                });
+            }
+            ("kill", id) if !id.is_empty() => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Background agent kill not yet implemented (id: {id})."),
+                });
+            }
+            ("attach", id) if !id.is_empty() => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Background agent attach not yet implemented (id: {id})."),
+                });
+            }
+            ("detach", _) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Background agent detach not yet implemented.".to_string(),
+                });
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Would spawn background agent: \"{args}\" (not yet wired)."),
+                });
+            }
+        }
+    }
+
+    fn handle_pair_command(&mut self) {
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to use pairing."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Device pairing not yet wired to TUI.".to_string(),
+        });
+    }
+
+    fn handle_devices_command(&mut self) {
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to manage devices."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Device listing not yet wired to TUI.".to_string(),
+        });
+    }
+
+    fn handle_unpair_command(&mut self, slash: &str) {
+        let device_id = slash.strip_prefix("unpair").unwrap_or("").trim();
+        if device_id.is_empty() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Usage: /unpair <device_id>".to_string(),
+            });
+            return;
+        }
+        if self.state.server_handle.is_none() {
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Server not running. Enable [server] in config to manage devices."
+                    .to_string(),
+            });
+            return;
+        }
+        self.state.chat_messages.push(ChatMessage::System {
+            content: format!("Device unpair not yet wired (id: {device_id})."),
+        });
     }
 }

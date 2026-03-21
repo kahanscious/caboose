@@ -701,6 +701,46 @@ pub fn build_default_registry() -> CommandRegistry {
         },
     });
 
+    registry.register(Command {
+        id: "bg.run",
+        name: "Background Agent",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("bg"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "server.pair",
+        name: "Pair Device",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("pair"),
+        available: |state| state.server_handle.is_some(),
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "server.devices",
+        name: "Paired Devices",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("devices"),
+        available: |state| state.server_handle.is_some(),
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
+        id: "server.unpair",
+        name: "Unpair Device",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("unpair"),
+        available: |state| state.server_handle.is_some(),
+        execute: |_state| Action::None,
+    });
+
     registry
 }
 

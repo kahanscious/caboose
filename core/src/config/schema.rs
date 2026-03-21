@@ -523,6 +523,28 @@ pub struct PriorityConfig {
     pub recent_churn: Option<u8>,
 }
 
+/// Embedded WebSocket server configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerSchemaConfig {
+    /// Whether the embedded server is enabled (default: false).
+    pub enabled: Option<bool>,
+    /// Port to listen on (default: 9090).
+    pub port: Option<u16>,
+    /// Bind address (default: "127.0.0.1").
+    pub bind: Option<String>,
+}
+
+/// Background agent configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BackgroundAgentSchemaConfig {
+    /// Maximum number of concurrent background agents (default: 3).
+    pub max_agents: Option<usize>,
+    /// Per-agent token budget (default: 100_000).
+    pub per_agent_budget: Option<u64>,
+    /// Global token budget across all background agents (default: 500_000).
+    pub global_budget: Option<u64>,
+}
+
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
