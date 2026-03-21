@@ -1,6 +1,7 @@
 //! Caboose WebSocket server — wraps caboose-core for mobile/web clients.
 
 pub mod auth;
+pub mod bridge;
 pub mod state;
 pub mod ws;
 
@@ -8,6 +9,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use anyhow::Result;
 use axum::Router;
+use axum::extract::{State, WebSocketUpgrade};
+use axum::response::IntoResponse;
+use axum::routing::get;
 use tokio::sync::oneshot;
 use caboose_core::config::Config;
 use caboose_core::events::CoreHandle;
@@ -35,7 +39,10 @@ impl ServerHandle {
 
 pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Result<ServerHandle> {
     let state = AppState::new(core_handle, config.config);
-    let app = Router::new().with_state(state.clone());
+
+    let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", config.bind, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -55,6 +62,15 @@ pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Resu
         local_addr,
         shutdown_tx: Some(shutdown_tx),
         state,
+    })
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| {
+        ws::session::handle_session(socket, state, "anonymous".into())
     })
 }
 
