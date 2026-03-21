@@ -98,38 +98,10 @@ pub async fn execute_tool(
             }
         }
         "web_search" => {
-            let (provider, api_key_env) = services
+            let service_config = services
                 .and_then(|s| s.services.get("web_search"))
-                .filter(|sc| sc.enabled)
-                .map(|sc| {
-                    (
-                        sc.provider.as_str(),
-                        sc.api_key_env.as_deref().unwrap_or("TAVILY_API_KEY"),
-                    )
-                })
-                .unwrap_or(("tavily", "TAVILY_API_KEY"));
-
-            match std::env::var(api_key_env) {
-                Ok(key) if !key.is_empty() => {
-                    crate::tools::web_search::execute(input, provider, &key).await?
-                }
-                _ => ToolResult {
-                    tool_use_id: String::new(),
-                    output: format!(
-                        "Web search requires an API key. Set the {api_key_env} environment variable, \
-                         or configure [services.web_search] in config.toml:\n\n\
-                         [services.web_search]\n\
-                         provider = \"tavily\"\n\
-                         api_key_env = \"TAVILY_API_KEY\""
-                    ),
-                    is_error: true,
-                    tool_name: None,
-                    file_path: None,
-                    files_modified: vec![],
-                    lines_added: 0,
-                    lines_removed: 0,
-                },
-            }
+                .filter(|sc| sc.enabled);
+            caboose_core::tools::web_search::execute(input, service_config).await?
         }
         name if name.starts_with("cli_") => {
             let tool_key = &name[4..];
@@ -363,9 +335,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn web_search_without_config_checks_env() {
-        // SAFETY: This test is single-threaded and no other thread reads this env var.
-        unsafe { std::env::remove_var("TAVILY_API_KEY") };
+    async fn web_search_without_config_returns_setup_instructions() {
         let result = execute_tool(
             "web_search",
             &serde_json::json!({"query": "test"}),
@@ -380,7 +350,7 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_error);
-        assert!(result.output.contains("TAVILY_API_KEY") || result.output.contains("api key"));
+        assert!(result.output.contains("[services.web_search]"));
     }
 
     #[tokio::test]
