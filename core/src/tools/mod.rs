@@ -9,6 +9,7 @@ pub mod patch;
 pub mod read;
 pub mod search;
 pub mod search_searxng;
+pub mod search_tavily;
 pub mod shell;
 pub mod web_search;
 pub mod write;
