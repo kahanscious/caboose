@@ -266,6 +266,10 @@ pub struct State {
         Option<std::sync::Arc<caboose_core::background::BackgroundAgentManager>>,
     /// Cached background agent list for sidebar rendering (updated on CoreEvent).
     pub background_agents_cache: Vec<caboose_core::background::BackgroundAgentInfo>,
+    /// Sequential counter for simple background agent IDs (0, 1, 2...).
+    pub bg_agent_counter: u32,
+    /// Receiver for background search setup result.
+    pub search_setup_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Receiver for core events (background agent lifecycle, etc.).
     #[allow(dead_code)]
     pub core_event_rx: Option<tokio::sync::broadcast::Receiver<caboose_core::events::CoreEvent>>,
@@ -809,6 +813,8 @@ impl App {
                 server_handle: None,
                 background_manager: Some(background_manager),
                 background_agents_cache: Vec::new(),
+                bg_agent_counter: 0,
+                search_setup_rx: None,
                 core_event_rx: Some(core_event_rx),
             },
             terminal,

@@ -241,6 +241,28 @@ impl App {
                 }
             }
 
+            // Poll search setup background task
+            if let Some(ref mut rx) = self.state.search_setup_rx {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        if msg.starts_with("ERROR:") {
+                            self.state.chat_messages.push(ChatMessage::Error {
+                                content: msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string(),
+                            });
+                        } else {
+                            self.state
+                                .chat_messages
+                                .push(ChatMessage::System { content: msg });
+                        }
+                        self.state.search_setup_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.state.search_setup_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
             // Check for LLM-generated title
             if let Some(rx) = &mut self.state.title_rx {
                 match rx.try_recv() {

@@ -825,6 +825,7 @@ impl App {
     // ---- Context command ----
 
     fn handle_context_command(&mut self) {
+        self.state.dialog_stack.base = Screen::Chat;
         let mut content = String::new();
 
         // Model info
@@ -942,6 +943,7 @@ impl App {
     // ---- Background agent commands ----
 
     async fn handle_bg_command(&mut self, slash: &str) {
+        self.state.dialog_stack.base = Screen::Chat;
         let args = slash.strip_prefix("bg").unwrap_or("").trim();
         if args.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
@@ -984,8 +986,8 @@ impl App {
                                 }
                             };
                             content.push_str(&format!(
-                                "- **{}** — {} ({} tokens)\n",
-                                agent.prompt_summary, status, agent.tokens_used
+                                "- `{}` **{}** — {} ({} tokens)\n",
+                                agent.id, agent.prompt_summary, status, agent.tokens_used
                             ));
                         }
                         self.state
@@ -1036,7 +1038,8 @@ impl App {
                         return;
                     }
 
-                    let agent_id = uuid::Uuid::new_v4().to_string();
+                    let agent_id = self.state.bg_agent_counter.to_string();
+                    self.state.bg_agent_counter += 1;
                     let session_id = uuid::Uuid::new_v4().to_string();
                     let parent_session_id =
                         self.state.current_session_id.clone().unwrap_or_default();
@@ -1093,6 +1096,7 @@ impl App {
     }
 
     fn handle_pair_command(&mut self) {
+        self.state.dialog_stack.base = Screen::Chat;
         if self.state.server_handle.is_none() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Server not running. Enable [server] in config to use pairing."
@@ -1106,6 +1110,7 @@ impl App {
     }
 
     fn handle_devices_command(&mut self) {
+        self.state.dialog_stack.base = Screen::Chat;
         if self.state.server_handle.is_none() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Server not running. Enable [server] in config to manage devices."
@@ -1119,6 +1124,7 @@ impl App {
     }
 
     fn handle_unpair_command(&mut self, slash: &str) {
+        self.state.dialog_stack.base = Screen::Chat;
         let device_id = slash.strip_prefix("unpair").unwrap_or("").trim();
         if device_id.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
@@ -1139,6 +1145,7 @@ impl App {
     }
 
     async fn handle_search_setup(&mut self, slash: &str) {
+        self.state.dialog_stack.base = Screen::Chat;
         let sub = slash.strip_prefix("search-setup").unwrap_or("").trim();
 
         match sub {
@@ -1203,44 +1210,42 @@ impl App {
         };
 
         self.state.chat_messages.push(ChatMessage::System {
-            content: "Starting SearXNG...".to_string(),
+            content: "Starting SearXNG... (pulling images and starting containers, this may take a moment)"
+                .to_string(),
         });
 
-        if let Err(e) = caboose_core::search_setup::compose_up(&dir) {
-            self.state.chat_messages.push(ChatMessage::Error {
-                content: format!("Failed to start SearXNG: {e}"),
-            });
-            return;
-        }
+        // Run compose up + health check on a background task so the UI stays responsive
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        self.state.search_setup_rx = Some(rx);
 
-        if caboose_core::search_setup::wait_healthy().await {
-            match caboose_core::search_setup::auto_configure() {
-                Ok(true) => {
-                    self.state.chat_messages.push(ChatMessage::System {
-                        content: "Web search enabled. SearXNG running on localhost:8080."
-                            .to_string(),
-                    });
-                }
-                Ok(false) => {
-                    self.state.chat_messages.push(ChatMessage::System {
-                        content: "SearXNG running on localhost:8080. Config already present."
-                            .to_string(),
-                    });
-                }
-                Err(e) => {
-                    self.state.chat_messages.push(ChatMessage::System {
-                        content: format!(
-                            "SearXNG running but config write failed: {e}. \
-                             Add [services.web_search] manually."
-                        ),
-                    });
-                }
+        tokio::spawn(async move {
+            // Start containers (blocking subprocess)
+            if let Err(e) = caboose_core::search_setup::compose_up(&dir) {
+                let _ = tx.send(format!("ERROR: Failed to start SearXNG: {e}"));
+                return;
             }
-        } else {
-            self.state.chat_messages.push(ChatMessage::Error {
-                content: "SearXNG failed to start within 30s. Check: docker compose -f ~/.config/caboose/search/docker-compose.yml logs"
-                    .to_string(),
-            });
-        }
+
+            // Wait for health
+            if caboose_core::search_setup::wait_healthy().await {
+                match caboose_core::search_setup::auto_configure() {
+                    Ok(true) => {
+                        let _ = tx.send(
+                            "Web search enabled. SearXNG running on localhost:8080.".to_string(),
+                        );
+                    }
+                    Ok(false) => {
+                        let _ = tx.send(
+                            "SearXNG running on localhost:8080. Config already present."
+                                .to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("SearXNG running but config write failed: {e}. Add [services.web_search] manually."));
+                    }
+                }
+            } else {
+                let _ = tx.send("ERROR: SearXNG failed to start within 30s. Check: docker compose -f ~/.config/caboose/search/docker-compose.yml logs".to_string());
+            }
+        });
     }
 }

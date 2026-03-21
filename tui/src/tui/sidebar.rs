@@ -635,8 +635,9 @@ pub fn render(
                     ("\u{2717}", colors.error)
                 }
             };
-            let summary = if agent.prompt_summary.len() > 25 {
-                format!("{}...", &agent.prompt_summary[..22])
+            let short_id = &agent.id;
+            let summary = if agent.prompt_summary.len() > 20 {
+                format!("{}...", &agent.prompt_summary[..17])
             } else {
                 agent.prompt_summary.clone()
             };
@@ -644,6 +645,10 @@ pub fn render(
                 Span::styled(
                     format!("  {status_icon} "),
                     Style::default().fg(status_color),
+                ),
+                Span::styled(
+                    format!("{short_id} "),
+                    Style::default().fg(colors.text_muted),
                 ),
                 Span::styled(summary, Style::default().fg(colors.text_dim)),
             ]));
