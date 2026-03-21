@@ -1,5 +1,6 @@
 //! Caboose WebSocket server — wraps caboose-core for mobile/web clients.
 
+pub mod auth;
 pub mod state;
 pub mod ws;
 
