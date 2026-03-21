@@ -1037,8 +1037,34 @@ impl App {
                         content: format!("Background agent started: \"{prompt_summary}\""),
                     });
 
-                    // TODO: Task 4 will add actual AgentLoop spawning here
-                    let _ = model_override; // suppress unused warning until Task 4
+                    let model = model_override
+                        .as_deref()
+                        .unwrap_or(&self.state.active_model_name);
+                    if let Ok(provider) = self
+                        .state
+                        .providers
+                        .get_provider(Some(self.state.active_provider_name.as_str()), Some(model))
+                    {
+                        let tool_defs: Vec<caboose_core::provider::ToolDefinition> = self
+                            .state
+                            .tools
+                            .definitions()
+                            .iter()
+                            .filter(|t| t.name != "spawn_agent" && t.name != "spawn_background")
+                            .cloned()
+                            .collect();
+                        let mgr_task = mgr.clone();
+                        let mgr_handle = mgr.clone();
+                        let aid = agent_id.clone();
+                        let p = prompt.clone();
+
+                        let handle = tokio::spawn(async move {
+                            super::run_background_agent(aid, p, provider, tool_defs, mgr_task)
+                                .await;
+                        });
+
+                        mgr_handle.store_handle(&agent_id, handle);
+                    }
                 }
             }
         }

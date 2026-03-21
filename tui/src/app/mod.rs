@@ -2398,3 +2398,161 @@ impl App {
         });
     }
 }
+
+/// Run a background agent to completion. Streams from the provider, executes
+/// tool calls, feeds results back, and tracks token usage via the manager.
+/// Designed to be spawned onto a tokio task — no TUI interaction.
+pub async fn run_background_agent(
+    agent_id: String,
+    prompt: String,
+    provider: Box<dyn caboose_core::provider::Provider>,
+    tool_defs: Vec<caboose_core::provider::ToolDefinition>,
+    manager: std::sync::Arc<caboose_core::background::BackgroundAgentManager>,
+) {
+    use caboose_core::provider::{self, StreamEvent};
+    use futures::StreamExt;
+
+    const MAX_TURNS: u32 = 20;
+    const SYSTEM_PROMPT: &str = "You are a background task agent. Complete the given task using the available tools. \
+         Be concise and efficient. Do not ask questions — make reasonable decisions and proceed.";
+
+    // Build the conversation as provider messages.
+    let mut messages: Vec<provider::Message> = vec![
+        provider::Message {
+            role: "system".to_string(),
+            content: serde_json::json!(SYSTEM_PROMPT),
+        },
+        provider::Message {
+            role: "user".to_string(),
+            content: serde_json::json!(prompt),
+        },
+    ];
+
+    let mut turn_count: u32 = 0;
+
+    loop {
+        turn_count += 1;
+        if turn_count > MAX_TURNS {
+            manager
+                .mark_failed(&agent_id, "max turns exceeded (20)")
+                .await;
+            return;
+        }
+
+        // Stream from provider.
+        let mut stream = provider.stream(&messages, &tool_defs);
+        let mut text_output = String::new();
+        let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, arguments)
+        let mut input_tokens: u32 = 0;
+        let mut output_tokens: u32 = 0;
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(StreamEvent::TextDelta(text)) => {
+                    text_output.push_str(&text);
+                }
+                Ok(StreamEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => {
+                    tool_calls.push((id, name, arguments));
+                }
+                Ok(StreamEvent::Done {
+                    input_tokens: it,
+                    output_tokens: ot,
+                    ..
+                }) => {
+                    input_tokens = it.unwrap_or(0);
+                    output_tokens = ot.unwrap_or(0);
+                    break;
+                }
+                Ok(StreamEvent::Error(e)) => {
+                    manager.mark_failed(&agent_id, &e).await;
+                    return;
+                }
+                Ok(StreamEvent::ProviderError { message, .. }) => {
+                    manager.mark_failed(&agent_id, &message).await;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Track token usage.
+        let total_tokens = (input_tokens + output_tokens) as u64;
+        let budget_exceeded = manager
+            .update_tokens(&agent_id, total_tokens, turn_count)
+            .await;
+        if budget_exceeded {
+            manager
+                .mark_failed(&agent_id, "token budget exceeded")
+                .await;
+            return;
+        }
+
+        // If no tool calls, the agent is done.
+        if tool_calls.is_empty() {
+            manager.mark_complete(&agent_id).await;
+            return;
+        }
+
+        // Build assistant message with text + tool use blocks.
+        let mut assistant_blocks: Vec<serde_json::Value> = Vec::new();
+        if !text_output.is_empty() {
+            assistant_blocks.push(serde_json::json!({"type": "text", "text": text_output}));
+        }
+        for (id, name, arguments) in &tool_calls {
+            let input_val: serde_json::Value =
+                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+            assistant_blocks.push(serde_json::json!({
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": input_val,
+            }));
+        }
+        messages.push(provider::Message {
+            role: "assistant".to_string(),
+            content: serde_json::Value::Array(assistant_blocks),
+        });
+
+        // Execute each tool call and collect results.
+        let mut result_blocks: Vec<serde_json::Value> = Vec::new();
+        for (id, name, arguments) in &tool_calls {
+            let input_val: serde_json::Value =
+                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+
+            let tool_result = crate::agent::tools::execute_tool(
+                name,
+                &input_val,
+                &[],  // additional_secrets
+                None, // mcp_manager
+                None, // lsp_manager
+                None, // services
+                None, // cli_tools
+                &[],  // deny_list
+                None, // exec_tools
+            )
+            .await;
+
+            let (output, is_error) = match tool_result {
+                Ok(result) => (result.output, result.is_error),
+                Err(e) => (format!("Tool execution error: {e}"), true),
+            };
+
+            result_blocks.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": id,
+                "content": output,
+                "is_error": is_error,
+            }));
+        }
+
+        // Add tool results as a user message.
+        messages.push(provider::Message {
+            role: "user".to_string(),
+            content: serde_json::Value::Array(result_blocks),
+        });
+    }
+}
