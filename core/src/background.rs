@@ -54,7 +54,7 @@ pub struct BackgroundAgentConfig {
     /// Global token budget across all running agents (default: 500_000).
     pub global_budget: u64,
     /// Maximum number of concurrently running agents (default: 5).
-    pub max_concurrent: usize,
+    pub max_agents: usize,
 }
 
 impl Default for BackgroundAgentConfig {
@@ -62,7 +62,7 @@ impl Default for BackgroundAgentConfig {
         Self {
             per_agent_budget: 100_000,
             global_budget: 500_000,
-            max_concurrent: 5,
+            max_agents: 5,
         }
     }
 }
@@ -117,10 +117,10 @@ impl BackgroundAgentManager {
     /// Returns `Ok(())` if within limits, or `Err(reason)` if not.
     pub async fn can_spawn(&self) -> Result<(), String> {
         let running = self.running_count().await;
-        if running >= self.config.max_concurrent {
+        if running >= self.config.max_agents {
             return Err(format!(
                 "max concurrent agents reached ({}/{})",
-                running, self.config.max_concurrent
+                running, self.config.max_agents
             ));
         }
         let total = self.total_tokens_used().await;
@@ -305,13 +305,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 2. can_spawn_rejects_at_max_concurrent
+    // 2. can_spawn_rejects_at_max_agents
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn can_spawn_rejects_at_max_concurrent() {
+    async fn can_spawn_rejects_at_max_agents() {
         let config = BackgroundAgentConfig {
-            max_concurrent: 1,
+            max_agents: 1,
             ..Default::default()
         };
         let manager = make_manager(config);
@@ -321,7 +321,7 @@ mod tests {
             .await;
 
         let result = manager.can_spawn().await;
-        assert!(result.is_err(), "should be rejected at max_concurrent=1");
+        assert!(result.is_err(), "should be rejected at max_agents=1");
         assert!(
             result.unwrap_err().contains("max concurrent"),
             "error should mention max concurrent"
