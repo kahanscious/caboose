@@ -175,6 +175,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn searxng_e2e_with_web_search_tool() {
+        use crate::config::schema::ServiceConfig;
+
+        let mock_server = MockServer::start().await;
+        let body = serde_json::json!({
+            "query": "rust memory safety",
+            "number_of_results": 2,
+            "results": [
+                {
+                    "title": "Memory Safety - The Rust Programming Language",
+                    "url": "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+                    "content": "Rust's central feature is ownership.",
+                    "engine": "google",
+                    "score": 5.0
+                },
+                {
+                    "title": "Rust (programming language) - Wikipedia",
+                    "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+                    "content": "Rust emphasizes performance, type safety, and concurrency.",
+                    "engine": "bing",
+                    "score": 3.2
+                }
+            ]
+        });
+
+        Mock::given(method("GET"))
+            .and(path_regex("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+            .mount(&mock_server)
+            .await;
+
+        let config = ServiceConfig {
+            provider: "searxng".into(),
+            api_key_env: None,
+            enabled: true,
+            base_url: Some(mock_server.uri()),
+            user_agent: Some("Caboose/1.0 (SearchService)".into()),
+            max_results: Some(10),
+        };
+
+        let result = crate::tools::web_search::execute(
+            &serde_json::json!({"query": "rust memory safety"}),
+            Some(&config),
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.is_error);
+        assert!(result.output.contains("Memory Safety"));
+        assert!(result.output.contains("rust-lang.org"));
+        assert!(result.output.contains("Wikipedia"));
+    }
+
+    #[tokio::test]
     async fn searxng_handles_partial_results() {
         let server = MockServer::start().await;
 
