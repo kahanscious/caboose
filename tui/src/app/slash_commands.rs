@@ -184,6 +184,23 @@ impl App {
                 self.state
                     .chat_messages
                     .push(ChatMessage::System { content: msg });
+
+                // Suggest search setup if Docker is available and search isn't configured
+                if caboose_core::search_setup::docker_available()
+                    && !caboose_core::search_setup::is_running()
+                    && self
+                        .state
+                        .config
+                        .services
+                        .as_ref()
+                        .and_then(|s| s.services.get("web_search"))
+                        .is_none()
+                {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Web search available. Run `/search-setup` to enable it (requires Docker)."
+                            .to_string(),
+                    });
+                }
             }
             Err(e) => {
                 self.state.chat_messages.push(ChatMessage::Error {
