@@ -727,7 +727,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Tools,
         keybind: None,
         slash: Some("pair"),
-        available: |state| state.server_handle.is_some(),
+        available: |_| true,
         execute: |_state| Action::None,
     });
 
@@ -737,7 +737,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Tools,
         keybind: None,
         slash: Some("devices"),
-        available: |state| state.server_handle.is_some(),
+        available: |_| true,
         execute: |_state| Action::None,
     });
 
@@ -747,7 +747,7 @@ pub fn build_default_registry() -> CommandRegistry {
         category: Category::Tools,
         keybind: None,
         slash: Some("unpair"),
-        available: |state| state.server_handle.is_some(),
+        available: |_| true,
         execute: |_state| Action::None,
     });
 
