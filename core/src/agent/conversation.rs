@@ -9,7 +9,7 @@ const COLD_STORAGE_MIN_SIZE: usize = 500;
 
 /// Truncate a string to at most `max_bytes` bytes, ensuring the cut is on a
 /// UTF-8 character boundary. Returns the longest prefix that fits.
-pub(crate) fn truncate_to_boundary(s: &str, max_bytes: usize) -> &str {
+pub fn truncate_to_boundary(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }

@@ -1,8 +1,8 @@
 //! Agent layer — multi-turn conversation loop with tool execution.
 
-pub mod cold_storage;
+pub use caboose_core::agent::cold_storage;
+pub use caboose_core::agent::conversation;
 pub mod compaction;
-pub mod conversation;
 pub mod permission;
 pub mod tools;
 

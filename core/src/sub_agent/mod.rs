@@ -1,6 +1,5 @@
 pub mod conflict;
 // executor lives in tui — it depends on hooks, permissions, and tool execution
-#[cfg(test)]
 pub mod pipeline;
 pub mod worktree;
 
@@ -62,7 +61,6 @@ impl SubAgent {
     }
 }
 
-#[cfg(test)]
 impl SubAgent {
     pub fn new(task: String, branch: String, worktree_path: PathBuf) -> Self {
         Self {
@@ -133,13 +131,11 @@ pub struct SpawnAgentResult {
     pub changes: Option<crate::sub_agent::conflict::AgentChanges>,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskPipeline {
     pub stages: Vec<TaskStage>,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TaskStage {
     pub tasks: Vec<String>,
