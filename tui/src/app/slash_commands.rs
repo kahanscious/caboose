@@ -601,7 +601,7 @@ impl App {
         }
         // /bg — background agent commands
         if slash == "bg" || slash.starts_with("bg ") {
-            self.handle_bg_command(slash);
+            self.handle_bg_command(slash).await;
             return true;
         }
         // /pair — generate device pairing code
@@ -919,14 +919,14 @@ impl App {
 
     // ---- Background agent commands ----
 
-    fn handle_bg_command(&mut self, slash: &str) {
+    async fn handle_bg_command(&mut self, slash: &str) {
         let args = slash.strip_prefix("bg").unwrap_or("").trim();
         if args.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Usage: /bg <prompt> — spawn a background agent\n\
-                         /bg list — show running agents\n\
-                         /bg kill <id> — stop an agent\n\
-                         (background agent spawning not yet wired)"
+                         /bg --model <model> <prompt> — spawn with specific model\n\
+                         /bg list — show all background agents\n\
+                         /bg kill <id> — stop a running agent"
                     .to_string(),
             });
             return;
@@ -937,29 +937,109 @@ impl App {
             .unwrap_or((args, ""))
         {
             ("list", _) => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: "No background agents running. (spawning not yet wired)".to_string(),
-                });
+                if let Some(ref mgr) = self.state.background_manager {
+                    let agents = mgr.list().await;
+                    if agents.is_empty() {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: "No background agents.".to_string(),
+                        });
+                    } else {
+                        let mut content = String::from("**Background agents:**\n");
+                        for agent in &agents {
+                            let status = match &agent.status {
+                                caboose_core::background::BackgroundAgentStatus::Running => {
+                                    "running"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Completed => {
+                                    "complete"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Killed => "killed",
+                                caboose_core::background::BackgroundAgentStatus::BudgetExceeded => {
+                                    "budget exceeded"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Error(e) => {
+                                    e.as_str()
+                                }
+                            };
+                            content.push_str(&format!(
+                                "- **{}** — {} ({} tokens)\n",
+                                agent.prompt_summary, status, agent.tokens_used
+                            ));
+                        }
+                        self.state
+                            .chat_messages
+                            .push(ChatMessage::System { content });
+                    }
+                }
             }
             ("kill", id) if !id.is_empty() => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Background agent kill not yet implemented (id: {id})."),
-                });
-            }
-            ("attach", id) if !id.is_empty() => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Background agent attach not yet implemented (id: {id})."),
-                });
-            }
-            ("detach", _) => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: "Background agent detach not yet implemented.".to_string(),
-                });
+                if let Some(ref mgr) = self.state.background_manager {
+                    match mgr.kill(id).await {
+                        Ok(()) => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Background agent '{id}' killed."),
+                            });
+                        }
+                        Err(e) => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Cannot kill agent: {e}"),
+                            });
+                        }
+                    }
+                }
             }
             _ => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Would spawn background agent: \"{args}\" (not yet wired)."),
-                });
+                // Parse --model flag
+                let (model_override, prompt) = if let Some(rest) = args.strip_prefix("--model ") {
+                    match rest.split_once(' ') {
+                        Some((model, prompt)) => {
+                            (Some(model.to_string()), prompt.trim().to_string())
+                        }
+                        None => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: "Usage: /bg --model <model> <prompt>".to_string(),
+                            });
+                            return;
+                        }
+                    }
+                } else {
+                    (None, args.to_string())
+                };
+
+                if let Some(ref mgr) = self.state.background_manager {
+                    if let Err(reason) = mgr.can_spawn().await {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!("Cannot spawn background agent: {reason}"),
+                        });
+                        return;
+                    }
+
+                    let agent_id = uuid::Uuid::new_v4().to_string();
+                    let session_id = uuid::Uuid::new_v4().to_string();
+                    let parent_session_id =
+                        self.state.current_session_id.clone().unwrap_or_default();
+                    let prompt_summary = if prompt.len() > 60 {
+                        format!("{}...", &prompt[..57])
+                    } else {
+                        prompt.clone()
+                    };
+
+                    mgr.register(
+                        &agent_id,
+                        &prompt_summary,
+                        &session_id,
+                        &parent_session_id,
+                        None,
+                    )
+                    .await;
+
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Background agent started: \"{prompt_summary}\""),
+                    });
+
+                    // TODO: Task 4 will add actual AgentLoop spawning here
+                    let _ = model_override; // suppress unused warning until Task 4
+                }
             }
         }
     }
