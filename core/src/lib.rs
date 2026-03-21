@@ -2,8 +2,8 @@
 
 pub mod agent;
 pub mod agents;
-pub mod background;
 pub mod attachment;
+pub mod background;
 pub mod checkpoint;
 pub mod circuits;
 pub mod config;
@@ -17,6 +17,7 @@ pub mod provider;
 pub mod roundhouse;
 pub mod safety;
 pub mod scm;
+pub mod search_setup;
 pub mod session;
 pub mod skills;
 pub mod sub_agent;

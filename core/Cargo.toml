@@ -39,6 +39,7 @@ chrono = { version = "0.4", features = ["serde"] }
 glob = "0.3"
 regex = "1"
 flate2 = "1"
+rand = "0.8"
 
 # Image encoding
 png = "0.17"
