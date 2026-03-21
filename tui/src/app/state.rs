@@ -577,6 +577,13 @@ impl App {
                  The subagents work in isolated git worktrees and merge their changes back \
                  when done. For sequential or dependent work, do it yourself.\n",
             );
+            prompt.push_str(
+                "\nYou also have a `spawn_background` tool. Use it for tasks that are \
+                 independent of the current conversation and don't need interactive feedback — \
+                 long test runs, large refactors, code generation tasks where the user doesn't \
+                 need to watch progress. Background agents run with auto-approve and report \
+                 results when done. Don't use it for tasks where the user is waiting for the answer.\n",
+            );
             prompt
         };
 

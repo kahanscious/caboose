@@ -2047,14 +2047,129 @@ impl App {
                             }
                         }
 
-                        if self.state.agent.pending_tool_calls.is_empty() {
-                            if self.state.spawn_agent_handles.is_empty() {
-                                self.finalize_tool_execution();
+                        // Fall through to spawn_background + remaining tool dispatch below
+                    }
+
+                    // Intercept spawn_background calls
+                    let bg_calls: Vec<crate::agent::PendingToolCall> = self
+                        .state
+                        .agent
+                        .pending_tool_calls
+                        .iter()
+                        .filter(|tc| tc.name == "spawn_background")
+                        .cloned()
+                        .collect();
+
+                    if !bg_calls.is_empty() {
+                        self.state
+                            .agent
+                            .pending_tool_calls
+                            .retain(|tc| tc.name != "spawn_background");
+
+                        for call in bg_calls {
+                            let prompt =
+                                call.arguments["prompt"].as_str().unwrap_or("").to_string();
+                            let model_override =
+                                call.arguments["model"].as_str().map(|s| s.to_string());
+
+                            if let Some(ref mgr) = self.state.background_manager {
+                                if let Err(reason) = mgr.can_spawn().await {
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: format!(
+                                                    "Cannot spawn background agent: {reason}"
+                                                ),
+                                                is_error: true,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                } else {
+                                    let agent_id = uuid::Uuid::new_v4().to_string();
+                                    let session_id = uuid::Uuid::new_v4().to_string();
+                                    let parent_session_id =
+                                        self.state.current_session_id.clone().unwrap_or_default();
+                                    let prompt_summary = if prompt.len() > 60 {
+                                        format!("{}...", &prompt[..57])
+                                    } else {
+                                        prompt.clone()
+                                    };
+
+                                    mgr.register(
+                                        &agent_id,
+                                        &prompt_summary,
+                                        &session_id,
+                                        &parent_session_id,
+                                        None,
+                                    )
+                                    .await;
+
+                                    let model = model_override
+                                        .as_deref()
+                                        .unwrap_or(&self.state.active_model_name);
+                                    if let Ok(provider) = self.state.providers.get_provider(
+                                        Some(self.state.active_provider_name.as_str()),
+                                        Some(model),
+                                    ) {
+                                        let tool_defs: Vec<caboose_core::provider::ToolDefinition> =
+                                            self.state
+                                                .tools
+                                                .definitions()
+                                                .iter()
+                                                .filter(|t| {
+                                                    t.name != "spawn_agent"
+                                                        && t.name != "spawn_background"
+                                                })
+                                                .cloned()
+                                                .collect();
+                                        let mgr_clone = mgr.clone();
+                                        let aid = agent_id.clone();
+                                        let p = prompt.clone();
+
+                                        let handle = tokio::spawn(async move {
+                                            run_background_agent(
+                                                aid, p, provider, tool_defs, mgr_clone,
+                                            )
+                                            .await;
+                                        });
+
+                                        mgr.store_handle(&agent_id, handle);
+                                    }
+
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: format!(
+                                                    "Background agent started: \"{prompt_summary}\""
+                                                ),
+                                                is_error: false,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                }
                             }
-                            // else: spawn handles running — poll will finalize
-                        } else {
-                            self.start_tool_execution();
                         }
+                    }
+
+                    if self.state.agent.pending_tool_calls.is_empty() {
+                        if self.state.spawn_agent_handles.is_empty() {
+                            self.finalize_tool_execution();
+                        }
+                        // else: spawn handles running — poll will finalize
                     } else {
                         self.start_tool_execution();
                     }

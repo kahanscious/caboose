@@ -308,6 +308,27 @@ impl ToolRegistry {
                         "required": ["task"]
                     }),
                 ),
+                tool_def(
+                    "spawn_background",
+                    "Spawn a background agent for tasks that are independent of the current \
+                     conversation and don't need interactive feedback. Background agents run with \
+                     auto-approve and report results when done. Use for: long test runs, large refactors, \
+                     code generation tasks where the user doesn't need to watch progress.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "The task for the background agent to complete"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Optional model override (e.g. claude-haiku-4-5). Defaults to current model."
+                            }
+                        },
+                        "required": ["prompt"]
+                    }),
+                ),
             ],
         };
 

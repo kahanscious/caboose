@@ -57,8 +57,8 @@ pub async fn run_subagent(
     let mut mcp_manager = crate::mcp::McpManager::from_config(&mcp_config);
     mcp_manager.connect_all().await;
     let mut tool_defs = tool_registry.definitions().to_vec();
-    // Remove spawn_agent from subagent's tools — no recursive spawning
-    tool_defs.retain(|d| d.name != "spawn_agent");
+    // Remove spawn_agent and spawn_background from subagent's tools — no recursive spawning
+    tool_defs.retain(|d| d.name != "spawn_agent" && d.name != "spawn_background");
     // Apply custom agent tool restrictions (built-in tools only).
     // IMPORTANT: This must run BEFORE mcp tool_definitions are extended,
     // so MCP tools are always available regardless of agent config.
