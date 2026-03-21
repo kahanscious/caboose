@@ -90,4 +90,53 @@ mod tests {
         assert_ne!(server.local_addr.port(), 0);
         server.shutdown();
     }
+
+    #[tokio::test]
+    async fn websocket_sends_and_receives() {
+        use tokio_tungstenite::connect_async;
+        use futures_util::{SinkExt, StreamExt};
+
+        let (core_handle, _rx) = CoreHandle::new();
+        let event_handle = core_handle.clone();
+
+        let config = ServerConfig {
+            port: 0,
+            bind: "127.0.0.1".into(),
+            config: Config::default(),
+        };
+        let server = start_server(config, core_handle).await.unwrap();
+        let addr = server.local_addr;
+
+        // Give the listener a moment to be ready.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let url = format!("ws://{addr}/ws");
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+
+        // Send a command from client.
+        let cmd = serde_json::json!({
+            "id": "test-1",
+            "type": "command",
+            "command": "SendMessage",
+            "payload": {"text": "hello"}
+        });
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(cmd.to_string().into()))
+            .await
+            .unwrap();
+
+        // Emit an event from the core side.
+        event_handle.emit(caboose_core::events::CoreEvent::TextDelta("world".into()));
+
+        // Receive the event on the WebSocket client.
+        if let Some(Ok(msg)) = ws.next().await {
+            let text = msg.to_text().unwrap();
+            let json: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(json["event"], "TextDelta");
+            assert_eq!(json["payload"]["text"], "world");
+        } else {
+            panic!("Expected to receive a WebSocket message");
+        }
+
+        server.shutdown();
+    }
 }
