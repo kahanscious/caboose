@@ -156,15 +156,33 @@ pub fn compose_down(dir: &Path) -> Result<String> {
     }
 }
 
-/// Check if SearXNG containers are running.
+/// Check if SearXNG containers are running AND the HTTP endpoint is reachable.
 pub fn is_running() -> bool {
-    std::process::Command::new("docker")
-        .args(["inspect", "--format", "{{.State.Running}}", "caboose-searxng"])
+    // First check if the container exists and is running
+    let container_running = std::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "caboose-searxng",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    if !container_running {
+        return false;
+    }
+
+    // Also verify the port is actually reachable (container might exist
+    // from a different compose setup without proper port mapping)
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:8080".parse().unwrap(),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok()
 }
 
 /// Poll health endpoint until ready (max 30 seconds).
@@ -205,7 +223,8 @@ pub fn auto_configure() -> Result<bool> {
         return Ok(false); // Already configured
     }
 
-    let block = "\n[services.web_search]\nprovider = \"searxng\"\nbase_url = \"http://127.0.0.1:8080\"\n";
+    let block =
+        "\n[services.web_search]\nprovider = \"searxng\"\nbase_url = \"http://127.0.0.1:8080\"\n";
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
