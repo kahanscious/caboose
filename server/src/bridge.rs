@@ -334,6 +334,64 @@ pub fn message_to_command(msg: &IncomingMessage) -> Result<CoreCommand, String> 
 }
 
 // ---------------------------------------------------------------------------
+// Auth command parsing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+pub enum AuthCommand {
+    Pair { code: String, device_name: String },
+    Authenticate { token: String, device_name: String, os: String },
+    ListDevices,
+    RevokeDevice { device_id: String },
+}
+
+pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> {
+    let cmd = msg.command.as_deref().unwrap_or("");
+    let payload = msg.payload.as_ref();
+
+    match cmd {
+        "Pair" => {
+            let p = payload.ok_or("Pair requires payload")?;
+            let code = p.get("code")
+                .and_then(|v| v.as_str())
+                .ok_or("Pair requires 'code'")?
+                .to_string();
+            let device_name = p.get("device_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Ok(AuthCommand::Pair { code, device_name })
+        }
+        "Authenticate" => {
+            let p = payload.ok_or("Authenticate requires payload")?;
+            let token = p.get("token")
+                .and_then(|v| v.as_str())
+                .ok_or("Authenticate requires 'token'")?
+                .to_string();
+            let device_name = p.get("device_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let os = p.get("os")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Ok(AuthCommand::Authenticate { token, device_name, os })
+        }
+        "ListDevices" => Ok(AuthCommand::ListDevices),
+        "RevokeDevice" => {
+            let p = payload.ok_or("RevokeDevice requires payload")?;
+            let device_id = p.get("device_id")
+                .and_then(|v| v.as_str())
+                .ok_or("RevokeDevice requires 'device_id'")?
+                .to_string();
+            Ok(AuthCommand::RevokeDevice { device_id })
+        }
+        _ => Err(format!("Unknown auth command: {}", cmd)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -380,5 +438,50 @@ mod tests {
         let msg = result.unwrap_err();
         assert!(msg.contains("Unknown command"), "got: {msg}");
         assert!(msg.contains("DoSomethingWeird"), "got: {msg}");
+    }
+
+    #[test]
+    fn parse_pair_command() {
+        let msg = IncomingMessage {
+            id: "1".into(),
+            msg_type: "auth".into(),
+            command: Some("Pair".into()),
+            payload: Some(serde_json::json!({
+                "code": "A3B7K2",
+                "device_name": "Pixel 8"
+            })),
+        };
+        let result = parse_auth_command(&msg);
+        assert!(result.is_ok());
+        let (code, name) = match result.unwrap() {
+            AuthCommand::Pair { code, device_name } => (code, device_name),
+            _ => panic!("expected Pair"),
+        };
+        assert_eq!(code, "A3B7K2");
+        assert_eq!(name, "Pixel 8");
+    }
+
+    #[test]
+    fn parse_authenticate_command() {
+        let msg = IncomingMessage {
+            id: "2".into(),
+            msg_type: "auth".into(),
+            command: Some("Authenticate".into()),
+            payload: Some(serde_json::json!({
+                "token": "abc123def456",
+                "device_name": "Pixel 8",
+                "os": "Android 15"
+            })),
+        };
+        let result = parse_auth_command(&msg);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            AuthCommand::Authenticate { token, device_name, os } => {
+                assert_eq!(token, "abc123def456");
+                assert_eq!(device_name, "Pixel 8");
+                assert_eq!(os, "Android 15");
+            }
+            _ => panic!("expected Authenticate"),
+        }
     }
 }
