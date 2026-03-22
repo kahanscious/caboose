@@ -152,6 +152,10 @@ pub enum CoreEvent {
         session_id: String,
         permission_mode: String,
     },
+
+    // Device connectivity (emitted by server)
+    DeviceConnected { device_id: String, device_name: String },
+    DeviceDisconnected { device_id: String },
 }
 
 // ---------------------------------------------------------------------------

@@ -289,6 +289,19 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
                 "permission_mode": permission_mode,
             }),
         ),
+
+        // --- Device connectivity ---
+        CoreEvent::DeviceConnected { device_id, device_name } => OutgoingMessage::event(
+            id,
+            "DeviceConnected",
+            json!({ "device_id": device_id, "device_name": device_name }),
+        ),
+
+        CoreEvent::DeviceDisconnected { device_id } => OutgoingMessage::event(
+            id,
+            "DeviceDisconnected",
+            json!({ "device_id": device_id }),
+        ),
     }
 }
 
