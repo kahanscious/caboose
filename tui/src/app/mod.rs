@@ -1424,6 +1424,7 @@ impl App {
 
             // Poll core events (background agent lifecycle)
             if let Some(ref mut rx) = self.state.core_event_rx {
+                let mut bg_changed = false;
                 while let Ok(event) = rx.try_recv() {
                     use caboose_core::events::CoreEvent;
                     match event {
@@ -1431,6 +1432,7 @@ impl App {
                             id, prompt_summary, ..
                         } => {
                             tracing::info!("Background agent started: {id} — {prompt_summary}");
+                            bg_changed = true;
                         }
                         CoreEvent::BackgroundAgentComplete {
                             id: _, tokens_used, ..
@@ -1440,14 +1442,19 @@ impl App {
                                     "Background agent completed ({tokens_used} tokens)."
                                 ),
                             });
+                            bg_changed = true;
                         }
                         CoreEvent::BackgroundAgentFailed { id: _, reason, .. } => {
                             self.state.chat_messages.push(ChatMessage::Error {
                                 content: format!("Background agent failed: {reason}"),
                             });
+                            bg_changed = true;
                         }
-                        _ => {} // Ignore other CoreEvent variants
+                        _ => {}
                     }
+                }
+                if bg_changed && let Some(ref mgr) = self.state.background_manager {
+                    self.state.background_agents_cache = mgr.list().await;
                 }
             }
 
