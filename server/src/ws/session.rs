@@ -71,7 +71,9 @@ pub async fn handle_session(mut socket: WebSocket, state: Arc<AppState>) {
     // ------------------------------------------------------------------
     // Phase 3: authenticated event loop
     // ------------------------------------------------------------------
-    authenticated_loop(&mut socket, &state, &device_id).await;
+    let (shell_tx, shell_rx) = tokio::sync::mpsc::unbounded_channel();
+    let shell_mgr = crate::shell::manager::ShellManager::new(shell_tx);
+    authenticated_loop(&mut socket, &state, &device_id, shell_mgr, shell_rx).await;
 
     // Notify core that the device disconnected.
     state.core_handle.emit(CoreEvent::DeviceDisconnected {
@@ -236,6 +238,8 @@ async fn authenticated_loop(
     socket: &mut WebSocket,
     state: &Arc<AppState>,
     device_id: &str,
+    mut shell_mgr: crate::shell::manager::ShellManager,
+    mut shell_rx: tokio::sync::mpsc::UnboundedReceiver<crate::shell::manager::ShellEvent>,
 ) {
     let mut event_rx = state.core_handle.subscribe();
     let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
@@ -268,6 +272,28 @@ async fn authenticated_loop(
                     }
                 }
                 flush_deadline = None;
+            }
+
+            // Shell → client: PTY output or exit notification.
+            shell_event = shell_rx.recv() => {
+                if let Some(event) = shell_event {
+                    let out = match &event {
+                        crate::shell::manager::ShellEvent::Output { shell_id, data } => {
+                            crate::bridge::shell_output_message(device_id, shell_id, data)
+                        }
+                        crate::shell::manager::ShellEvent::Exited { shell_id, exit_code } => {
+                            crate::bridge::shell_exited_message(device_id, shell_id, *exit_code)
+                        }
+                    };
+                    let json = serde_json::to_string(&out).unwrap();
+                    if socket.send(Message::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                    // Clean up dead shells
+                    if let crate::shell::manager::ShellEvent::Exited { shell_id, .. } = &event {
+                        shell_mgr.kill(shell_id).ok();
+                    }
+                }
             }
 
             // Core → client: broadcast event arrives.
@@ -319,25 +345,71 @@ async fn authenticated_loop(
                             // Post-auth device management commands.
                             handle_auth_command(socket, state, &incoming).await;
                         } else if incoming.msg_type == "command" {
-                            let cmd_name = incoming.command.as_deref().unwrap_or("");
-                            if cmd_name.starts_with("Shell") {
-                                let err = OutgoingMessage::error(
-                                    &incoming.id,
-                                    "Shell commands not yet implemented",
-                                );
-                                if send_json(socket, &err).await.is_err() {
-                                    break;
-                                }
-                            } else {
-                                match bridge::message_to_command(&incoming) {
-                                    Ok(cmd) => {
-                                        let _ = state.core_handle.send(cmd);
-                                    }
-                                    Err(e) => {
-                                        let err = OutgoingMessage::error(&incoming.id, &e);
-                                        if send_json(socket, &err).await.is_err() {
-                                            break;
+                            // Shell commands — handled before regular command routing.
+                            if let Some(ref cmd_name) = incoming.command {
+                                if cmd_name.starts_with("Shell") {
+                                    match crate::bridge::parse_shell_command(&incoming) {
+                                        Ok(shell_cmd) => {
+                                            use crate::bridge::ShellCommand;
+                                            let response = match shell_cmd {
+                                                ShellCommand::Spawn { cols, rows } => {
+                                                    match shell_mgr.spawn(cols, rows) {
+                                                        Ok(shell_id) => OutgoingMessage::event(
+                                                            &incoming.id,
+                                                            "ShellSpawned",
+                                                            serde_json::json!({ "shell_id": shell_id }),
+                                                        ),
+                                                        Err(e) => OutgoingMessage::error(&incoming.id, &e),
+                                                    }
+                                                }
+                                                ShellCommand::Input { shell_id, data } => {
+                                                    if let Err(e) = shell_mgr.write(&shell_id, &data) {
+                                                        OutgoingMessage::error(&incoming.id, &e)
+                                                    } else {
+                                                        continue; // No response needed for input
+                                                    }
+                                                }
+                                                ShellCommand::Resize { shell_id, cols, rows } => {
+                                                    if let Err(e) = shell_mgr.resize(&shell_id, cols, rows) {
+                                                        OutgoingMessage::error(&incoming.id, &e)
+                                                    } else {
+                                                        continue; // No response needed for resize
+                                                    }
+                                                }
+                                                ShellCommand::Kill { shell_id } => {
+                                                    match shell_mgr.kill(&shell_id) {
+                                                        Ok(()) => OutgoingMessage::event(
+                                                            &incoming.id,
+                                                            "ShellExited",
+                                                            serde_json::json!({ "shell_id": shell_id, "exit_code": -1 }),
+                                                        ),
+                                                        Err(e) => OutgoingMessage::error(&incoming.id, &e),
+                                                    }
+                                                }
+                                            };
+                                            let _ = socket.send(Message::Text(
+                                                serde_json::to_string(&response).unwrap().into()
+                                            )).await;
+                                            continue;
                                         }
+                                        Err(e) => {
+                                            let _ = socket.send(Message::Text(
+                                                serde_json::to_string(&OutgoingMessage::error(&incoming.id, &e)).unwrap().into()
+                                            )).await;
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+
+                            match bridge::message_to_command(&incoming) {
+                                Ok(cmd) => {
+                                    let _ = state.core_handle.send(cmd);
+                                }
+                                Err(e) => {
+                                    let err = OutgoingMessage::error(&incoming.id, &e);
+                                    if send_json(socket, &err).await.is_err() {
+                                        break;
                                     }
                                 }
                             }
