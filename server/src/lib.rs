@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod bridge;
+pub mod mdns;
 pub mod state;
 pub mod ws;
 
@@ -28,6 +29,7 @@ pub struct ServerHandle {
     pub local_addr: SocketAddr,
     shutdown_tx: Option<oneshot::Sender<()>>,
     pub state: Arc<AppState>,
+    _mdns: Option<mdns::MdnsAdvertiser>,
 }
 
 impl ServerHandle {
@@ -60,10 +62,13 @@ pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Resu
             .ok();
     });
 
+    let mdns_advertiser = mdns::MdnsAdvertiser::new(local_addr.port(), local_ip()).ok();
+
     Ok(ServerHandle {
         local_addr,
         shutdown_tx: Some(shutdown_tx),
         state,
+        _mdns: mdns_advertiser,
     })
 }
 
