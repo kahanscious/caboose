@@ -395,4 +395,81 @@ mod tests {
 
         server.shutdown();
     }
+
+    #[tokio::test]
+    async fn remote_shell_over_websocket() {
+        let (server, _rx, _tmp) = test_server().await;
+        let addr = server.local_addr;
+
+        // Pair and authenticate.
+        let code = get_pair_code(&addr).await;
+        let mut ws = connect_ws(&addr).await;
+        let (_token, _device_id) = pair_ws(&mut ws, &code).await;
+
+        // Send ShellSpawn command.
+        send_json(&mut ws, serde_json::json!({
+            "id": "shell-1",
+            "type": "command",
+            "command": "ShellSpawn",
+            "payload": { "cols": 80, "rows": 24 }
+        })).await;
+
+        // Verify ShellSpawned response with shell_id.
+        let resp = read_json(&mut ws).await;
+        assert_eq!(resp["event"], "ShellSpawned", "expected ShellSpawned, got: {resp}");
+        let shell_id = resp["payload"]["shell_id"]
+            .as_str()
+            .expect("shell_id missing from ShellSpawned response")
+            .to_string();
+        assert!(!shell_id.is_empty());
+
+        // Send ShellInput with an echo command.
+        let echo_cmd = if cfg!(windows) {
+            "echo hello\r\n"
+        } else {
+            "echo hello\n"
+        };
+        send_json(&mut ws, serde_json::json!({
+            "id": "shell-2",
+            "type": "command",
+            "command": "ShellInput",
+            "payload": { "shell_id": shell_id, "data": echo_cmd }
+        })).await;
+
+        // Read messages until we find a ShellOutput containing "hello" (with timeout).
+        let found_hello = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    let msg = read_json(&mut ws).await;
+                    if msg["event"] == "ShellOutput" {
+                        let data = msg["payload"]["data"].as_str().unwrap_or("");
+                        if data.contains("hello") {
+                            return true;
+                        }
+                    }
+                    // Skip other events (e.g. initial shell banner output)
+                }
+            },
+        ).await;
+        assert!(found_hello.is_ok(), "timed out waiting for 'hello' in ShellOutput");
+
+        // Send ShellKill.
+        send_json(&mut ws, serde_json::json!({
+            "id": "shell-3",
+            "type": "command",
+            "command": "ShellKill",
+            "payload": { "shell_id": shell_id }
+        })).await;
+
+        // Verify ShellExited response.
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_json(&mut ws),
+        ).await.expect("timed out waiting for ShellExited after ShellKill");
+        assert_eq!(resp["event"], "ShellExited", "expected ShellExited, got: {resp}");
+        assert_eq!(resp["payload"]["shell_id"].as_str().unwrap(), shell_id);
+
+        server.shutdown();
+    }
 }
