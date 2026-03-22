@@ -93,9 +93,17 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             )
         }
 
-        CoreEvent::ToolExecuted(_) => {
-            OutgoingMessage::event(id, "Unhandled", json!({}))
-        }
+        CoreEvent::ToolExecuted(result) => OutgoingMessage::event(
+            id,
+            "ToolExecuted",
+            serde_json::json!({
+                "tool_use_id": result.tool_use_id,
+                "tool_name": result.tool_name,
+                "output": result.output,
+                "is_error": result.is_error,
+                "file_path": result.file_path,
+            }),
+        ),
 
         // --- Session events ---
         CoreEvent::SessionCreated(session) => OutgoingMessage::event(
@@ -109,11 +117,25 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             OutgoingMessage::event(id, "SessionList", json!({ "sessions": list }))
         }
 
-        CoreEvent::SessionLoaded { session, messages: _ } => OutgoingMessage::event(
-            id,
-            "SessionLoaded",
-            json!({ "session_id": session.id }),
-        ),
+        CoreEvent::SessionLoaded { session, messages } => {
+            let msg_list: Vec<Value> = messages
+                .iter()
+                .map(|m| {
+                    json!({
+                        "role": m.role,
+                        "content": m.content,
+                    })
+                })
+                .collect();
+            OutgoingMessage::event(
+                id,
+                "SessionLoaded",
+                json!({
+                    "session_id": session.id,
+                    "messages": msg_list,
+                }),
+            )
+        }
 
         CoreEvent::SessionDeleted { session_id } => OutgoingMessage::event(
             id,
@@ -128,7 +150,22 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             json!({ "provider": provider, "model": model }),
         ),
 
-        CoreEvent::ModelList(_) => OutgoingMessage::event(id, "Unhandled", json!({})),
+        CoreEvent::ModelList(models) => {
+            let list: Vec<Value> = models
+                .iter()
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "name": m.name,
+                        "context_window": m.context_window,
+                        "supports_tools": m.supports_tools,
+                        "supports_vision": m.supports_vision,
+                        "supports_thinking": m.supports_thinking,
+                    })
+                })
+                .collect();
+            OutgoingMessage::event(id, "ModelList", json!({ "models": list }))
+        }
 
         // --- MCP ---
         CoreEvent::McpServerConnected { name } => OutgoingMessage::event(
