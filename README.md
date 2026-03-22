@@ -54,6 +54,7 @@ Once inside:
 
 - `/connect` — add your API keys
 - `/init` — generate a `CABOOSE.md` project context file
+- `/search-setup` — enable web search (requires Docker)
 - `/model` — switch models mid-session
 - Type `/` to see all commands
 
@@ -99,8 +100,8 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Hover-to-copy** — mouse over any assistant message or code block to copy with `y` or a click
 - **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
 - **Embedded server** — WebSocket server for mobile and web clients, with device pairing auth and bidirectional event bridge
-- **Background agents** — `/bg` spawns background agents with per-agent and global token budget enforcement
-- **Web search backends** — pluggable `SearchBackend` trait with SearXNG (self-hosted) and Tavily (paid API) implementations
+- **Background agents** — `/bg <prompt>` spawns background agents that run full multi-turn conversations with tool execution. Per-agent and global token budget enforcement. The model can also spawn them autonomously via `spawn_background` for parallel work
+- **Web search** — `/search-setup` installs a local SearXNG instance via Docker with zero configuration. Also supports Tavily (paid API). Pluggable `SearchBackend` trait
 - **`/context`** — shows model, tokens, tools, MCP servers, skills, memory, and permission mode at a glance
 
 ## Built-in Skills
@@ -132,7 +133,7 @@ Caboose is a Cargo workspace: `core/` contains platform-agnostic domain logic (`
 
 ```bash
 cargo build --workspace       # build both crates
-cargo test --workspace        # run all tests (~1256)
+cargo test --workspace        # run all tests (~1261)
 cargo clippy --workspace      # lint
 cargo build --release -p caboose  # optimized release binary
 ```
