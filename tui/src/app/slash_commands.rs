@@ -36,9 +36,6 @@ impl App {
 
     /// Handle `/suggest` — run codebase scans and inject digest into conversation.
     async fn handle_suggest_command(&mut self) {
-        // Switch to chat screen if on home
-        self.state.dialog_stack.base = Screen::Chat;
-
         // Show scanning message
         self.state.chat_messages.push(ChatMessage::System {
             content: "Scanning codebase...".to_string(),
@@ -405,6 +402,16 @@ impl App {
     }
 
     pub(super) async fn handle_shared_slash(&mut self, slash: &str) -> bool {
+        // Commands that open dialogs/pickers handle their own screen state.
+        // Everything else that produces chat output should switch to chat.
+        let opens_dialog = matches!(
+            slash,
+            "status" | "usage" | "cost" | "mcp" | "model" | "settings" | "rewind"
+        );
+        if !opens_dialog {
+            self.state.dialog_stack.base = Screen::Chat;
+        }
+
         if slash == "init" {
             self.handle_init_command();
             return true;
@@ -445,7 +452,6 @@ impl App {
         }
         if slash == "reasoning" {
             if !self.state.model_supports_thinking {
-                self.state.dialog_stack.base = Screen::Chat;
                 self.state.chat_messages.push(ChatMessage::Error {
                     content: format!(
                         "{} does not support reasoning",
@@ -825,7 +831,6 @@ impl App {
     // ---- Context command ----
 
     fn handle_context_command(&mut self) {
-        self.state.dialog_stack.base = Screen::Chat;
         let mut content = String::new();
 
         // Model info
@@ -943,7 +948,6 @@ impl App {
     // ---- Background agent commands ----
 
     async fn handle_bg_command(&mut self, slash: &str) {
-        self.state.dialog_stack.base = Screen::Chat;
         let args = slash.strip_prefix("bg").unwrap_or("").trim();
         if args.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
@@ -1106,7 +1110,6 @@ impl App {
     }
 
     fn handle_pair_command(&mut self) {
-        self.state.dialog_stack.base = Screen::Chat;
         if self.state.server_handle.is_none() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Server not running. Enable [server] in config to use pairing."
@@ -1120,7 +1123,6 @@ impl App {
     }
 
     fn handle_devices_command(&mut self) {
-        self.state.dialog_stack.base = Screen::Chat;
         if self.state.server_handle.is_none() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Server not running. Enable [server] in config to manage devices."
@@ -1134,7 +1136,6 @@ impl App {
     }
 
     fn handle_unpair_command(&mut self, slash: &str) {
-        self.state.dialog_stack.base = Screen::Chat;
         let device_id = slash.strip_prefix("unpair").unwrap_or("").trim();
         if device_id.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
@@ -1155,7 +1156,6 @@ impl App {
     }
 
     async fn handle_search_setup(&mut self, slash: &str) {
-        self.state.dialog_stack.base = Screen::Chat;
         let sub = slash.strip_prefix("search-setup").unwrap_or("").trim();
 
         match sub {
