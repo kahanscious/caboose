@@ -359,7 +359,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "caboose"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "caboose-core"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "caboose-server"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "argon2",
