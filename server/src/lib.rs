@@ -21,6 +21,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub bind: String,
     pub config: Config,
+    pub db_path: std::path::PathBuf,
 }
 
 pub struct ServerHandle {
@@ -38,7 +39,7 @@ impl ServerHandle {
 }
 
 pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Result<ServerHandle> {
-    let state = AppState::new(core_handle, config.config);
+    let state = AppState::new(core_handle, config.config, &config.db_path)?;
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
@@ -81,10 +82,12 @@ mod tests {
     #[tokio::test]
     async fn server_starts_and_shuts_down() {
         let (handle, _rx) = CoreHandle::new();
+        let tmp = tempfile::tempdir().unwrap();
         let config = ServerConfig {
             port: 0,
             bind: "127.0.0.1".into(),
             config: Config::default(),
+            db_path: tmp.path().join("devices.db"),
         };
         let server = start_server(config, handle).await.unwrap();
         assert_ne!(server.local_addr.port(), 0);
@@ -99,10 +102,12 @@ mod tests {
         let (core_handle, _rx) = CoreHandle::new();
         let event_handle = core_handle.clone();
 
+        let tmp = tempfile::tempdir().unwrap();
         let config = ServerConfig {
             port: 0,
             bind: "127.0.0.1".into(),
             config: Config::default(),
+            db_path: tmp.path().join("devices.db"),
         };
         let server = start_server(config, core_handle).await.unwrap();
         let addr = server.local_addr;
