@@ -1445,9 +1445,13 @@ impl App {
                             bg_changed = true;
                         }
                         CoreEvent::BackgroundAgentFailed { id: _, reason, .. } => {
-                            self.state.chat_messages.push(ChatMessage::Error {
-                                content: format!("Background agent failed: {reason}"),
-                            });
+                            if reason == "killed" {
+                                // Intentional kill — don't show as error
+                            } else {
+                                self.state.chat_messages.push(ChatMessage::Error {
+                                    content: format!("Background agent failed: {reason}"),
+                                });
+                            }
                             bg_changed = true;
                         }
                         _ => {}
