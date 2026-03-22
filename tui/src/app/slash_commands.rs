@@ -1142,7 +1142,7 @@ impl App {
                     return;
                 }
 
-                let (core_handle, _cmd_rx) = caboose_core::events::CoreHandle::new();
+                let core_handle = self.state.core_handle.clone();
 
                 let db_path = dirs::config_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))

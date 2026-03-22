@@ -273,6 +273,8 @@ pub struct State {
     /// Receiver for core events (background agent lifecycle, etc.).
     #[allow(dead_code)]
     pub core_event_rx: Option<tokio::sync::broadcast::Receiver<caboose_core::events::CoreEvent>>,
+    /// Shared core event bus handle — used by the embedded server and background agents.
+    pub core_handle: caboose_core::events::CoreHandle,
 }
 
 impl State {
@@ -672,6 +674,7 @@ impl App {
                 max_agents: schema.and_then(|s| s.max_agents).unwrap_or(5),
             }
         };
+        let core_handle_for_state = core_handle.clone();
         let background_manager = std::sync::Arc::new(
             caboose_core::background::BackgroundAgentManager::new(bg_config, core_handle),
         );
@@ -816,6 +819,7 @@ impl App {
                 bg_agent_counter: 0,
                 search_setup_rx: None,
                 core_event_rx: Some(core_event_rx),
+                core_handle: core_handle_for_state,
             },
             terminal,
             provider,
