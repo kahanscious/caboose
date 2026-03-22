@@ -366,6 +366,7 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             app.roundhouse_session.as_ref(),
             &app.active_watchers,
             &app.sub_agents,
+            &app.background_agents_cache,
             app.files_modified_collapsed,
             &app.files_modified_header_row,
         );

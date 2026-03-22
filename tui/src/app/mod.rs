@@ -241,6 +241,44 @@ impl App {
                 }
             }
 
+            // Poll search setup background task
+            if let Some(ref mut rx) = self.state.search_setup_rx {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        if msg.starts_with("ERROR:") {
+                            self.state.chat_messages.push(ChatMessage::Error {
+                                content: msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string(),
+                            });
+                        } else {
+                            // Update in-memory config so web_search works immediately
+                            let services = self
+                                .state
+                                .config
+                                .services
+                                .get_or_insert_with(Default::default);
+                            services.services.entry("web_search".to_string()).or_insert(
+                                caboose_core::config::schema::ServiceConfig {
+                                    provider: "searxng".to_string(),
+                                    base_url: Some("http://127.0.0.1:8080".to_string()),
+                                    enabled: true,
+                                    api_key_env: None,
+                                    user_agent: None,
+                                    max_results: None,
+                                },
+                            );
+                            self.state
+                                .chat_messages
+                                .push(ChatMessage::System { content: msg });
+                        }
+                        self.state.search_setup_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.state.search_setup_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+
             // Check for LLM-generated title
             if let Some(rx) = &mut self.state.title_rx {
                 match rx.try_recv() {
@@ -1400,6 +1438,46 @@ impl App {
                 }
             }
 
+            // Poll core events (background agent lifecycle)
+            if let Some(ref mut rx) = self.state.core_event_rx {
+                let mut bg_changed = false;
+                while let Ok(event) = rx.try_recv() {
+                    use caboose_core::events::CoreEvent;
+                    match event {
+                        CoreEvent::BackgroundAgentStarted {
+                            id, prompt_summary, ..
+                        } => {
+                            tracing::info!("Background agent started: {id} — {prompt_summary}");
+                            bg_changed = true;
+                        }
+                        CoreEvent::BackgroundAgentComplete {
+                            id: _, tokens_used, ..
+                        } => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!(
+                                    "Background agent completed ({tokens_used} tokens)."
+                                ),
+                            });
+                            bg_changed = true;
+                        }
+                        CoreEvent::BackgroundAgentFailed { id: _, reason, .. } => {
+                            if reason == "killed" {
+                                // Intentional kill — don't show as error
+                            } else {
+                                self.state.chat_messages.push(ChatMessage::Error {
+                                    content: format!("Background agent failed: {reason}"),
+                                });
+                            }
+                            bg_changed = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if bg_changed && let Some(ref mgr) = self.state.background_manager {
+                    self.state.background_agents_cache = mgr.list().await;
+                }
+            }
+
             // Poll circuit events (non-blocking)
             self.poll_circuit_events().await;
 
@@ -2018,14 +2096,129 @@ impl App {
                             }
                         }
 
-                        if self.state.agent.pending_tool_calls.is_empty() {
-                            if self.state.spawn_agent_handles.is_empty() {
-                                self.finalize_tool_execution();
+                        // Fall through to spawn_background + remaining tool dispatch below
+                    }
+
+                    // Intercept spawn_background calls
+                    let bg_calls: Vec<crate::agent::PendingToolCall> = self
+                        .state
+                        .agent
+                        .pending_tool_calls
+                        .iter()
+                        .filter(|tc| tc.name == "spawn_background")
+                        .cloned()
+                        .collect();
+
+                    if !bg_calls.is_empty() {
+                        self.state
+                            .agent
+                            .pending_tool_calls
+                            .retain(|tc| tc.name != "spawn_background");
+
+                        for call in bg_calls {
+                            let prompt =
+                                call.arguments["prompt"].as_str().unwrap_or("").to_string();
+                            let model_override =
+                                call.arguments["model"].as_str().map(|s| s.to_string());
+
+                            if let Some(ref mgr) = self.state.background_manager {
+                                if let Err(reason) = mgr.can_spawn().await {
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: format!(
+                                                    "Cannot spawn background agent: {reason}"
+                                                ),
+                                                is_error: true,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                } else {
+                                    let agent_id = uuid::Uuid::new_v4().to_string();
+                                    let session_id = uuid::Uuid::new_v4().to_string();
+                                    let parent_session_id =
+                                        self.state.current_session_id.clone().unwrap_or_default();
+                                    let prompt_summary = if prompt.len() > 60 {
+                                        format!("{}...", &prompt[..57])
+                                    } else {
+                                        prompt.clone()
+                                    };
+
+                                    mgr.register(
+                                        &agent_id,
+                                        &prompt_summary,
+                                        &session_id,
+                                        &parent_session_id,
+                                        None,
+                                    )
+                                    .await;
+
+                                    let model = model_override
+                                        .as_deref()
+                                        .unwrap_or(&self.state.active_model_name);
+                                    if let Ok(provider) = self.state.providers.get_provider(
+                                        Some(self.state.active_provider_name.as_str()),
+                                        Some(model),
+                                    ) {
+                                        let tool_defs: Vec<caboose_core::provider::ToolDefinition> =
+                                            self.state
+                                                .tools
+                                                .definitions()
+                                                .iter()
+                                                .filter(|t| {
+                                                    t.name != "spawn_agent"
+                                                        && t.name != "spawn_background"
+                                                })
+                                                .cloned()
+                                                .collect();
+                                        let mgr_clone = mgr.clone();
+                                        let aid = agent_id.clone();
+                                        let p = prompt.clone();
+
+                                        let handle = tokio::spawn(async move {
+                                            run_background_agent(
+                                                aid, p, provider, tool_defs, mgr_clone,
+                                            )
+                                            .await;
+                                        });
+
+                                        mgr.store_handle(&agent_id, handle);
+                                    }
+
+                                    self.state.agent.conversation.push(
+                                        crate::agent::conversation::Message {
+                                            role: crate::agent::conversation::Role::User,
+                                            content: crate::agent::conversation::Content::Blocks(
+                                                vec![
+                                            crate::agent::conversation::ContentBlock::ToolResult {
+                                                tool_use_id: call.id.clone(),
+                                                content: format!(
+                                                    "Background agent started: \"{prompt_summary}\""
+                                                ),
+                                                is_error: false,
+                                            },
+                                        ],
+                                            ),
+                                            tool_call_id: Some(call.id.clone()),
+                                        },
+                                    );
+                                }
                             }
-                            // else: spawn handles running — poll will finalize
-                        } else {
-                            self.start_tool_execution();
                         }
+                    }
+
+                    if self.state.agent.pending_tool_calls.is_empty() {
+                        if self.state.spawn_agent_handles.is_empty() {
+                            self.finalize_tool_execution();
+                        }
+                        // else: spawn handles running — poll will finalize
                     } else {
                         self.start_tool_execution();
                     }
@@ -2395,6 +2588,164 @@ impl App {
             if !title.is_empty() {
                 let _ = tx.send(title);
             }
+        });
+    }
+}
+
+/// Run a background agent to completion. Streams from the provider, executes
+/// tool calls, feeds results back, and tracks token usage via the manager.
+/// Designed to be spawned onto a tokio task — no TUI interaction.
+pub async fn run_background_agent(
+    agent_id: String,
+    prompt: String,
+    provider: Box<dyn caboose_core::provider::Provider>,
+    tool_defs: Vec<caboose_core::provider::ToolDefinition>,
+    manager: std::sync::Arc<caboose_core::background::BackgroundAgentManager>,
+) {
+    use caboose_core::provider::{self, StreamEvent};
+    use futures::StreamExt;
+
+    const MAX_TURNS: u32 = 20;
+    const SYSTEM_PROMPT: &str = "You are a background task agent. Complete the given task using the available tools. \
+         Be concise and efficient. Do not ask questions — make reasonable decisions and proceed.";
+
+    // Build the conversation as provider messages.
+    let mut messages: Vec<provider::Message> = vec![
+        provider::Message {
+            role: "system".to_string(),
+            content: serde_json::json!(SYSTEM_PROMPT),
+        },
+        provider::Message {
+            role: "user".to_string(),
+            content: serde_json::json!(prompt),
+        },
+    ];
+
+    let mut turn_count: u32 = 0;
+
+    loop {
+        turn_count += 1;
+        if turn_count > MAX_TURNS {
+            manager
+                .mark_failed(&agent_id, "max turns exceeded (20)")
+                .await;
+            return;
+        }
+
+        // Stream from provider.
+        let mut stream = provider.stream(&messages, &tool_defs);
+        let mut text_output = String::new();
+        let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, arguments)
+        let mut input_tokens: u32 = 0;
+        let mut output_tokens: u32 = 0;
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(StreamEvent::TextDelta(text)) => {
+                    text_output.push_str(&text);
+                }
+                Ok(StreamEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => {
+                    tool_calls.push((id, name, arguments));
+                }
+                Ok(StreamEvent::Done {
+                    input_tokens: it,
+                    output_tokens: ot,
+                    ..
+                }) => {
+                    input_tokens = it.unwrap_or(0);
+                    output_tokens = ot.unwrap_or(0);
+                    break;
+                }
+                Ok(StreamEvent::Error(e)) => {
+                    manager.mark_failed(&agent_id, &e).await;
+                    return;
+                }
+                Ok(StreamEvent::ProviderError { message, .. }) => {
+                    manager.mark_failed(&agent_id, &message).await;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Track token usage.
+        let total_tokens = (input_tokens + output_tokens) as u64;
+        let budget_exceeded = manager
+            .update_tokens(&agent_id, total_tokens, turn_count)
+            .await;
+        if budget_exceeded {
+            manager
+                .mark_failed(&agent_id, "token budget exceeded")
+                .await;
+            return;
+        }
+
+        // If no tool calls, the agent is done.
+        if tool_calls.is_empty() {
+            manager.mark_complete(&agent_id).await;
+            return;
+        }
+
+        // Build assistant message with text + tool use blocks.
+        let mut assistant_blocks: Vec<serde_json::Value> = Vec::new();
+        if !text_output.is_empty() {
+            assistant_blocks.push(serde_json::json!({"type": "text", "text": text_output}));
+        }
+        for (id, name, arguments) in &tool_calls {
+            let input_val: serde_json::Value =
+                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+            assistant_blocks.push(serde_json::json!({
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": input_val,
+            }));
+        }
+        messages.push(provider::Message {
+            role: "assistant".to_string(),
+            content: serde_json::Value::Array(assistant_blocks),
+        });
+
+        // Execute each tool call and collect results.
+        let mut result_blocks: Vec<serde_json::Value> = Vec::new();
+        for (id, name, arguments) in &tool_calls {
+            let input_val: serde_json::Value =
+                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+
+            let tool_result = crate::agent::tools::execute_tool(
+                name,
+                &input_val,
+                &[],  // additional_secrets
+                None, // mcp_manager
+                None, // lsp_manager
+                None, // services
+                None, // cli_tools
+                &[],  // deny_list
+                None, // exec_tools
+            )
+            .await;
+
+            let (output, is_error) = match tool_result {
+                Ok(result) => (result.output, result.is_error),
+                Err(e) => (format!("Tool execution error: {e}"), true),
+            };
+
+            result_blocks.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": id,
+                "content": output,
+                "is_error": is_error,
+            }));
+        }
+
+        // Add tool results as a user message.
+        messages.push(provider::Message {
+            role: "user".to_string(),
+            content: serde_json::Value::Array(result_blocks),
         });
     }
 }

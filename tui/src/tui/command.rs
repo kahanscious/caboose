@@ -751,6 +751,16 @@ pub fn build_default_registry() -> CommandRegistry {
         execute: |_state| Action::None,
     });
 
+    registry.register(Command {
+        id: "search.setup",
+        name: "Search Setup",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("search-setup"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
     registry
 }
 

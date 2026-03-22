@@ -36,9 +36,6 @@ impl App {
 
     /// Handle `/suggest` — run codebase scans and inject digest into conversation.
     async fn handle_suggest_command(&mut self) {
-        // Switch to chat screen if on home
-        self.state.dialog_stack.base = Screen::Chat;
-
         // Show scanning message
         self.state.chat_messages.push(ChatMessage::System {
             content: "Scanning codebase...".to_string(),
@@ -184,6 +181,23 @@ impl App {
                 self.state
                     .chat_messages
                     .push(ChatMessage::System { content: msg });
+
+                // Suggest search setup if Docker is available and search isn't configured
+                if caboose_core::search_setup::docker_available()
+                    && !caboose_core::search_setup::is_running()
+                    && self
+                        .state
+                        .config
+                        .services
+                        .as_ref()
+                        .and_then(|s| s.services.get("web_search"))
+                        .is_none()
+                {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Web search available. Run `/search-setup` to enable it (requires Docker)."
+                            .to_string(),
+                    });
+                }
             }
             Err(e) => {
                 self.state.chat_messages.push(ChatMessage::Error {
@@ -388,6 +402,16 @@ impl App {
     }
 
     pub(super) async fn handle_shared_slash(&mut self, slash: &str) -> bool {
+        // Commands that open dialogs/pickers handle their own screen state.
+        // Everything else that produces chat output should switch to chat.
+        let opens_dialog = matches!(
+            slash,
+            "status" | "usage" | "cost" | "mcp" | "model" | "settings" | "rewind"
+        );
+        if !opens_dialog {
+            self.state.dialog_stack.base = Screen::Chat;
+        }
+
         if slash == "init" {
             self.handle_init_command();
             return true;
@@ -428,7 +452,6 @@ impl App {
         }
         if slash == "reasoning" {
             if !self.state.model_supports_thinking {
-                self.state.dialog_stack.base = Screen::Chat;
                 self.state.chat_messages.push(ChatMessage::Error {
                     content: format!(
                         "{} does not support reasoning",
@@ -599,9 +622,14 @@ impl App {
             self.handle_context_command();
             return true;
         }
+        // /search-setup — manage SearXNG web search
+        if slash == "search-setup" || slash.starts_with("search-setup ") {
+            self.handle_search_setup(slash).await;
+            return true;
+        }
         // /bg — background agent commands
         if slash == "bg" || slash.starts_with("bg ") {
-            self.handle_bg_command(slash);
+            self.handle_bg_command(slash).await;
             return true;
         }
         // /pair — generate device pairing code
@@ -919,14 +947,15 @@ impl App {
 
     // ---- Background agent commands ----
 
-    fn handle_bg_command(&mut self, slash: &str) {
+    async fn handle_bg_command(&mut self, slash: &str) {
         let args = slash.strip_prefix("bg").unwrap_or("").trim();
         if args.is_empty() {
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Usage: /bg <prompt> — spawn a background agent\n\
-                         /bg list — show running agents\n\
-                         /bg kill <id> — stop an agent\n\
-                         (background agent spawning not yet wired)"
+                         /bg --model <model> <prompt> — spawn with specific model\n\
+                         /bg list — show all background agents\n\
+                         /bg kill <id> — stop a running agent\n\
+                         /bg clear — remove finished agents from list"
                     .to_string(),
             });
             return;
@@ -937,29 +966,145 @@ impl App {
             .unwrap_or((args, ""))
         {
             ("list", _) => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: "No background agents running. (spawning not yet wired)".to_string(),
-                });
+                if let Some(ref mgr) = self.state.background_manager {
+                    let agents = mgr.list().await;
+                    if agents.is_empty() {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: "No background agents.".to_string(),
+                        });
+                    } else {
+                        let mut content = String::from("**Background agents:**\n");
+                        for agent in &agents {
+                            let status = match &agent.status {
+                                caboose_core::background::BackgroundAgentStatus::Running => {
+                                    "running"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Completed => {
+                                    "complete"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Killed => "killed",
+                                caboose_core::background::BackgroundAgentStatus::BudgetExceeded => {
+                                    "budget exceeded"
+                                }
+                                caboose_core::background::BackgroundAgentStatus::Error(e) => {
+                                    e.as_str()
+                                }
+                            };
+                            content.push_str(&format!(
+                                "- `{}` **{}** — {} ({} tokens)\n",
+                                agent.id, agent.prompt_summary, status, agent.tokens_used
+                            ));
+                        }
+                        self.state
+                            .chat_messages
+                            .push(ChatMessage::System { content });
+                    }
+                }
+            }
+            ("clear", _) => {
+                if let Some(ref mgr) = self.state.background_manager {
+                    mgr.clear_finished().await;
+                    self.state.background_agents_cache = mgr.list().await;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Cleared finished background agents.".to_string(),
+                    });
+                }
             }
             ("kill", id) if !id.is_empty() => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Background agent kill not yet implemented (id: {id})."),
-                });
-            }
-            ("attach", id) if !id.is_empty() => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Background agent attach not yet implemented (id: {id})."),
-                });
-            }
-            ("detach", _) => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: "Background agent detach not yet implemented.".to_string(),
-                });
+                if let Some(ref mgr) = self.state.background_manager {
+                    match mgr.kill(id).await {
+                        Ok(()) => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Background agent '{id}' killed."),
+                            });
+                        }
+                        Err(e) => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Cannot kill agent: {e}"),
+                            });
+                        }
+                    }
+                }
             }
             _ => {
-                self.state.chat_messages.push(ChatMessage::System {
-                    content: format!("Would spawn background agent: \"{args}\" (not yet wired)."),
-                });
+                // Parse --model flag
+                let (model_override, prompt) = if let Some(rest) = args.strip_prefix("--model ") {
+                    match rest.split_once(' ') {
+                        Some((model, prompt)) => {
+                            (Some(model.to_string()), prompt.trim().to_string())
+                        }
+                        None => {
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: "Usage: /bg --model <model> <prompt>".to_string(),
+                            });
+                            return;
+                        }
+                    }
+                } else {
+                    (None, args.to_string())
+                };
+
+                if let Some(ref mgr) = self.state.background_manager {
+                    if let Err(reason) = mgr.can_spawn().await {
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!("Cannot spawn background agent: {reason}"),
+                        });
+                        return;
+                    }
+
+                    let agent_id = self.state.bg_agent_counter.to_string();
+                    self.state.bg_agent_counter += 1;
+                    let session_id = uuid::Uuid::new_v4().to_string();
+                    let parent_session_id =
+                        self.state.current_session_id.clone().unwrap_or_default();
+                    let prompt_summary = if prompt.len() > 60 {
+                        format!("{}...", &prompt[..57])
+                    } else {
+                        prompt.clone()
+                    };
+
+                    mgr.register(
+                        &agent_id,
+                        &prompt_summary,
+                        &session_id,
+                        &parent_session_id,
+                        None,
+                    )
+                    .await;
+
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Background agent started: \"{prompt_summary}\""),
+                    });
+
+                    let model = model_override
+                        .as_deref()
+                        .unwrap_or(&self.state.active_model_name);
+                    if let Ok(provider) = self
+                        .state
+                        .providers
+                        .get_provider(Some(self.state.active_provider_name.as_str()), Some(model))
+                    {
+                        let tool_defs: Vec<caboose_core::provider::ToolDefinition> = self
+                            .state
+                            .tools
+                            .definitions()
+                            .iter()
+                            .filter(|t| t.name != "spawn_agent" && t.name != "spawn_background")
+                            .cloned()
+                            .collect();
+                        let mgr_task = mgr.clone();
+                        let mgr_handle = mgr.clone();
+                        let aid = agent_id.clone();
+                        let p = prompt.clone();
+
+                        let handle = tokio::spawn(async move {
+                            super::run_background_agent(aid, p, provider, tool_defs, mgr_task)
+                                .await;
+                        });
+
+                        mgr_handle.store_handle(&agent_id, handle);
+                    }
+                }
             }
         }
     }
@@ -1007,6 +1152,129 @@ impl App {
         }
         self.state.chat_messages.push(ChatMessage::System {
             content: format!("Device unpair not yet wired (id: {device_id})."),
+        });
+    }
+
+    async fn handle_search_setup(&mut self, slash: &str) {
+        let sub = slash.strip_prefix("search-setup").unwrap_or("").trim();
+
+        match sub {
+            "stop" => {
+                let dir = caboose_core::search_setup::search_dir();
+                match caboose_core::search_setup::compose_down(&dir) {
+                    Ok(msg) => self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Search stopped. {msg}"),
+                    }),
+                    Err(e) => self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!("Failed to stop search: {e}"),
+                    }),
+                }
+            }
+            "status" => {
+                if caboose_core::search_setup::is_running() {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "SearXNG is running on localhost:8080.".to_string(),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "SearXNG is not running.".to_string(),
+                    });
+                }
+            }
+            "" => {
+                self.run_search_setup().await;
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "Usage: /search-setup | /search-setup stop | /search-setup status"
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    async fn run_search_setup(&mut self) {
+        if !caboose_core::search_setup::docker_available() {
+            self.state.chat_messages.push(ChatMessage::Error {
+                content: "Docker is required for web search. Install it from docker.com"
+                    .to_string(),
+            });
+            return;
+        }
+
+        if caboose_core::search_setup::is_running() {
+            // SearXNG is running but config might be missing — ensure it's configured
+            if let Err(e) = caboose_core::search_setup::auto_configure() {
+                tracing::warn!("auto_configure failed: {e}");
+            }
+            let services = self
+                .state
+                .config
+                .services
+                .get_or_insert_with(Default::default);
+            services.services.entry("web_search".to_string()).or_insert(
+                caboose_core::config::schema::ServiceConfig {
+                    provider: "searxng".to_string(),
+                    base_url: Some("http://127.0.0.1:8080".to_string()),
+                    enabled: true,
+                    api_key_env: None,
+                    user_agent: None,
+                    max_results: None,
+                },
+            );
+            self.state.chat_messages.push(ChatMessage::System {
+                content: "Web search is already running on localhost:8080.".to_string(),
+            });
+            return;
+        }
+
+        let dir = match caboose_core::search_setup::write_files() {
+            Ok(d) => d,
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to write search config: {e}"),
+                });
+                return;
+            }
+        };
+
+        self.state.chat_messages.push(ChatMessage::System {
+            content: "Starting SearXNG... (pulling images and starting containers, this may take a moment)"
+                .to_string(),
+        });
+
+        // Run compose up + health check on a background task so the UI stays responsive
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        self.state.search_setup_rx = Some(rx);
+
+        tokio::spawn(async move {
+            // Start containers (blocking subprocess)
+            if let Err(e) = caboose_core::search_setup::compose_up(&dir) {
+                let _ = tx.send(format!("ERROR: Failed to start SearXNG: {e}"));
+                return;
+            }
+
+            // Wait for health
+            if caboose_core::search_setup::wait_healthy().await {
+                match caboose_core::search_setup::auto_configure() {
+                    Ok(true) => {
+                        let _ = tx.send(
+                            "Web search enabled. SearXNG running on localhost:8080.".to_string(),
+                        );
+                    }
+                    Ok(false) => {
+                        let _ = tx.send(
+                            "SearXNG running on localhost:8080. Config already present."
+                                .to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("SearXNG running but config write failed: {e}. Add [services.web_search] manually."));
+                    }
+                }
+            } else {
+                let _ = tx.send("ERROR: SearXNG failed to start within 30s. Check: docker compose -f ~/.config/caboose/search/docker-compose.yml logs".to_string());
+            }
         });
     }
 }

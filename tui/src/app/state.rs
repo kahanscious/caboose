@@ -264,6 +264,15 @@ pub struct State {
     #[allow(dead_code)]
     pub background_manager:
         Option<std::sync::Arc<caboose_core::background::BackgroundAgentManager>>,
+    /// Cached background agent list for sidebar rendering (updated on CoreEvent).
+    pub background_agents_cache: Vec<caboose_core::background::BackgroundAgentInfo>,
+    /// Sequential counter for simple background agent IDs (0, 1, 2...).
+    pub bg_agent_counter: u32,
+    /// Receiver for background search setup result.
+    pub search_setup_rx: Option<tokio::sync::oneshot::Receiver<String>>,
+    /// Receiver for core events (background agent lifecycle, etc.).
+    #[allow(dead_code)]
+    pub core_event_rx: Option<tokio::sync::broadcast::Receiver<caboose_core::events::CoreEvent>>,
 }
 
 impl State {
@@ -574,6 +583,13 @@ impl App {
                  The subagents work in isolated git worktrees and merge their changes back \
                  when done. For sequential or dependent work, do it yourself.\n",
             );
+            prompt.push_str(
+                "\nYou also have a `spawn_background` tool. Use it for tasks that are \
+                 independent of the current conversation and don't need interactive feedback — \
+                 long test runs, large refactors, code generation tasks where the user doesn't \
+                 need to watch progress. Background agents run with auto-approve and report \
+                 results when done. Don't use it for tasks where the user is waiting for the answer.\n",
+            );
             prompt
         };
 
@@ -642,6 +658,23 @@ impl App {
 
         let (sub_agent_tx, sub_agent_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::sub_agent::SubAgentEvent>();
+
+        // Create core event bus
+        let (core_handle, _cmd_rx) = caboose_core::events::CoreHandle::new();
+        let core_event_rx = core_handle.subscribe();
+
+        // Initialize background agent manager from config
+        let bg_config = {
+            let schema = config.background_agents.as_ref();
+            caboose_core::background::BackgroundAgentConfig {
+                per_agent_budget: schema.and_then(|s| s.per_agent_budget).unwrap_or(100_000),
+                global_budget: schema.and_then(|s| s.global_budget).unwrap_or(500_000),
+                max_agents: schema.and_then(|s| s.max_agents).unwrap_or(5),
+            }
+        };
+        let background_manager = std::sync::Arc::new(
+            caboose_core::background::BackgroundAgentManager::new(bg_config, core_handle),
+        );
 
         let mut app = Self {
             state: State {
@@ -778,7 +811,11 @@ impl App {
                 title_rx: None,
                 title_manually_set: false,
                 server_handle: None,
-                background_manager: None,
+                background_manager: Some(background_manager),
+                background_agents_cache: Vec::new(),
+                bg_agent_counter: 0,
+                search_setup_rx: None,
+                core_event_rx: Some(core_event_rx),
             },
             terminal,
             provider,

@@ -5,6 +5,24 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-03-21
+
+### Added
+
+- **Background agent spawning** — `/bg <prompt>` spawns real `AgentLoop` instances that execute tools, run multi-turn conversations, and complete tasks in the background. `/bg list` shows agent IDs, status, and token usage. `/bg kill <id>` stops a running agent. `/bg clear` removes finished agents. `--model` flag overrides the active model. Sidebar shows live agent status with icons (▶ running, ✓ complete, ✗ failed). System message posted to chat on completion.
+- **LLM-initiated background agents** — `spawn_background` tool lets the model autonomously spawn background agents for independent tasks (same pattern as `spawn_agent` for subagents). System prompt guides the model on when parallelism is appropriate.
+- **Embedded SearXNG web search** — `/search-setup` installs and starts a local SearXNG + Redis stack via Docker Compose with zero configuration. Writes compose files to `~/.config/caboose/search/`, pulls images, starts containers on `localhost:8080`, runs health checks, and auto-configures `[services.web_search]` in config. `/search-setup stop` and `/search-setup status` for lifecycle management. No external repos or manual setup required.
+- **`/init` search suggestion** — after generating CABOOSE.md, `/init` suggests running `/search-setup` if Docker is available and web search isn't configured.
+
+### Changed
+
+- **`BackgroundAgentConfig` rename** — `max_concurrent` field renamed to `max_agents` for clarity.
+- **All slash commands switch to chat** — commands that produce output now automatically switch from home screen to chat screen, so results are always visible.
+- **SearXNG `is_running()` check** — now verifies both container existence AND port reachability via TCP connect, preventing false positives from stale containers without proper port mapping.
+- **In-memory config update** — `/search-setup` updates the running app's config immediately so `web_search` works in the same session without restart.
+
+---
+
 ## [0.7.1] - 2026-03-21
 
 ### Added
