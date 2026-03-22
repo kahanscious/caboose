@@ -1,19 +1,22 @@
 //! Shared server state.
 
-use std::path::Path;
-use std::sync::Arc;
+use crate::auth::devices::DeviceStore;
+use crate::auth::pairing::PairingManager;
 use anyhow::Result;
-use tokio::sync::Mutex;
 use caboose_core::config::Config;
 use caboose_core::events::CoreHandle;
-use crate::auth::pairing::PairingManager;
-use crate::auth::devices::DeviceStore;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 pub struct AppState {
     pub core_handle: CoreHandle,
     pub config: Config,
     pub pairing: Mutex<PairingManager>,
     pub devices: DeviceStore,
+    /// Snapshot of conversation history, populated by the TUI when `/serve` starts.
+    /// Sent to mobile clients immediately after authentication.
+    pub chat_history: RwLock<Vec<serde_json::Value>>,
 }
 
 impl AppState {
@@ -28,6 +31,7 @@ impl AppState {
             config,
             pairing: Mutex::new(PairingManager::new()),
             devices,
+            chat_history: RwLock::new(Vec::new()),
         }))
     }
 }

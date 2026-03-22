@@ -1166,6 +1166,18 @@ impl App {
                             pm.generate()
                         };
 
+                        // Snapshot current conversation for mobile clients.
+                        {
+                            let history: Vec<serde_json::Value> = self
+                                .state
+                                .chat_messages
+                                .iter()
+                                .map(|m| m.to_json())
+                                .collect();
+                            let mut h = handle.state.chat_history.write().await;
+                            *h = history;
+                        }
+
                         self.state.server_handle = Some(handle);
                         self.state.chat_messages.push(ChatMessage::System {
                             content: format!(

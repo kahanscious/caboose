@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::StreamExt;
-use serde_json::{self, json, Value};
+use serde_json::{self, Value, json};
 use tokio::time::{self, Instant};
 
 use caboose_core::events::CoreEvent;
@@ -68,6 +68,18 @@ pub async fn handle_session(mut socket: WebSocket, state: Arc<AppState>) {
 
     tracing::info!("device authenticated: id={device_id} name={device_name}");
 
+    // Send conversation history snapshot so the mobile client can render
+    // the existing chat.
+    {
+        let history = state.chat_history.read().await;
+        if !history.is_empty() {
+            let msg = OutgoingMessage::event("", "SessionHistory", json!({ "messages": *history }));
+            if send_json(&mut socket, &msg).await.is_err() {
+                return;
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Phase 3: authenticated event loop
     // ------------------------------------------------------------------
@@ -107,10 +119,7 @@ async fn auth_loop(
 
                 // Only auth messages allowed before authentication.
                 if incoming.msg_type != "auth" {
-                    let err = OutgoingMessage::error(
-                        &incoming.id,
-                        "Authentication required",
-                    );
+                    let err = OutgoingMessage::error(&incoming.id, "Authentication required");
                     if send_json(socket, &err).await.is_err() {
                         return None;
                     }
@@ -125,11 +134,8 @@ async fn auth_loop(
                             match state.devices.pair(&device_id, &device_name) {
                                 Ok(token) => {
                                     drop(pairing);
-                                    let resp = OutgoingMessage::paired(
-                                        &incoming.id,
-                                        &token,
-                                        &device_id,
-                                    );
+                                    let resp =
+                                        OutgoingMessage::paired(&incoming.id, &token, &device_id);
                                     if send_json(socket, &resp).await.is_err() {
                                         return None;
                                     }
@@ -145,10 +151,8 @@ async fn auth_loop(
                                 }
                                 Err(e) => {
                                     drop(pairing);
-                                    let resp = OutgoingMessage::auth_failed(
-                                        &incoming.id,
-                                        &e.to_string(),
-                                    );
+                                    let resp =
+                                        OutgoingMessage::auth_failed(&incoming.id, &e.to_string());
                                     if send_json(socket, &resp).await.is_err() {
                                         return None;
                                     }
@@ -156,49 +160,49 @@ async fn auth_loop(
                             }
                         } else {
                             drop(pairing);
-                            let resp = OutgoingMessage::auth_failed(
-                                &incoming.id,
-                                "Invalid pairing code",
-                            );
+                            let resp =
+                                OutgoingMessage::auth_failed(&incoming.id, "Invalid pairing code");
                             if send_json(socket, &resp).await.is_err() {
                                 return None;
                             }
                         }
                     }
 
-                    Ok(AuthCommand::Authenticate { token, device_name: _, os: _ }) => {
-                        match state.devices.verify(&token) {
-                            Ok(Some(device)) => {
-                                let resp = OutgoingMessage::authenticated(
-                                    &incoming.id,
-                                    &device.id,
-                                    &device.name,
-                                );
-                                if send_json(socket, &resp).await.is_err() {
-                                    return None;
-                                }
-                                return Some(device);
+                    Ok(AuthCommand::Authenticate {
+                        token,
+                        device_name: _,
+                        os: _,
+                    }) => match state.devices.verify(&token) {
+                        Ok(Some(device)) => {
+                            let resp = OutgoingMessage::authenticated(
+                                &incoming.id,
+                                &device.id,
+                                &device.name,
+                            );
+                            if send_json(socket, &resp).await.is_err() {
+                                return None;
                             }
-                            Ok(None) => {
-                                let resp = OutgoingMessage::auth_failed(
-                                    &incoming.id,
-                                    "Invalid or revoked token",
-                                );
-                                if send_json(socket, &resp).await.is_err() {
-                                    return None;
-                                }
-                            }
-                            Err(e) => {
-                                let resp = OutgoingMessage::auth_failed(
-                                    &incoming.id,
-                                    &format!("Auth error: {e}"),
-                                );
-                                if send_json(socket, &resp).await.is_err() {
-                                    return None;
-                                }
+                            return Some(device);
+                        }
+                        Ok(None) => {
+                            let resp = OutgoingMessage::auth_failed(
+                                &incoming.id,
+                                "Invalid or revoked token",
+                            );
+                            if send_json(socket, &resp).await.is_err() {
+                                return None;
                             }
                         }
-                    }
+                        Err(e) => {
+                            let resp = OutgoingMessage::auth_failed(
+                                &incoming.id,
+                                &format!("Auth error: {e}"),
+                            );
+                            if send_json(socket, &resp).await.is_err() {
+                                return None;
+                            }
+                        }
+                    },
 
                     Ok(_) => {
                         // ListDevices / RevokeDevice not allowed pre-auth.
@@ -444,45 +448,49 @@ async fn handle_auth_command(
     incoming: &IncomingMessage,
 ) {
     match bridge::parse_auth_command(incoming) {
-        Ok(AuthCommand::ListDevices) => {
-            match state.devices.list() {
-                Ok(devices) => {
-                    let list: Vec<Value> = devices
-                        .iter()
-                        .map(|d| {
-                            json!({
-                                "id": d.id,
-                                "name": d.name,
-                                "paired_at": d.paired_at,
-                                "last_seen": d.last_seen,
-                            })
+        Ok(AuthCommand::ListDevices) => match state.devices.list() {
+            Ok(devices) => {
+                let list: Vec<Value> = devices
+                    .iter()
+                    .map(|d| {
+                        json!({
+                            "id": d.id,
+                            "name": d.name,
+                            "paired_at": d.paired_at,
+                            "last_seen": d.last_seen,
                         })
-                        .collect();
-                    let resp = OutgoingMessage::auth(&incoming.id, "DeviceList", json!({ "devices": list }));
-                    let _ = send_json(socket, &resp).await;
-                }
-                Err(e) => {
-                    let resp = OutgoingMessage::error(&incoming.id, &format!("Failed to list devices: {e}"));
-                    let _ = send_json(socket, &resp).await;
-                }
+                    })
+                    .collect();
+                let resp =
+                    OutgoingMessage::auth(&incoming.id, "DeviceList", json!({ "devices": list }));
+                let _ = send_json(socket, &resp).await;
             }
-        }
-        Ok(AuthCommand::RevokeDevice { device_id }) => {
-            match state.devices.revoke(&device_id) {
-                Ok(true) => {
-                    let resp = OutgoingMessage::auth(&incoming.id, "DeviceRevoked", json!({ "device_id": device_id }));
-                    let _ = send_json(socket, &resp).await;
-                }
-                Ok(false) => {
-                    let resp = OutgoingMessage::error(&incoming.id, "Device not found or already revoked");
-                    let _ = send_json(socket, &resp).await;
-                }
-                Err(e) => {
-                    let resp = OutgoingMessage::error(&incoming.id, &format!("Failed to revoke device: {e}"));
-                    let _ = send_json(socket, &resp).await;
-                }
+            Err(e) => {
+                let resp =
+                    OutgoingMessage::error(&incoming.id, &format!("Failed to list devices: {e}"));
+                let _ = send_json(socket, &resp).await;
             }
-        }
+        },
+        Ok(AuthCommand::RevokeDevice { device_id }) => match state.devices.revoke(&device_id) {
+            Ok(true) => {
+                let resp = OutgoingMessage::auth(
+                    &incoming.id,
+                    "DeviceRevoked",
+                    json!({ "device_id": device_id }),
+                );
+                let _ = send_json(socket, &resp).await;
+            }
+            Ok(false) => {
+                let resp =
+                    OutgoingMessage::error(&incoming.id, "Device not found or already revoked");
+                let _ = send_json(socket, &resp).await;
+            }
+            Err(e) => {
+                let resp =
+                    OutgoingMessage::error(&incoming.id, &format!("Failed to revoke device: {e}"));
+                let _ = send_json(socket, &resp).await;
+            }
+        },
         Ok(_) => {
             // Pair / Authenticate after already authenticated — reject.
             let resp = OutgoingMessage::error(&incoming.id, "Already authenticated");

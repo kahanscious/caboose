@@ -182,6 +182,56 @@ pub enum ChatMessage {
     },
 }
 
+impl ChatMessage {
+    /// Serialize to a JSON value for sending to mobile clients.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            ChatMessage::User { content, .. } => {
+                serde_json::json!({ "role": "user", "content": content })
+            }
+            ChatMessage::Assistant { content, thinking } => {
+                let mut v = serde_json::json!({ "role": "assistant", "content": content });
+                if let Some(t) = thinking {
+                    v["thinking"] = serde_json::Value::String(t.clone());
+                }
+                v
+            }
+            ChatMessage::Tool(tool) => {
+                serde_json::json!({
+                    "role": "tool",
+                    "name": tool.name,
+                    "output": tool.output,
+                    "status": format!("{:?}", tool.status),
+                })
+            }
+            ChatMessage::System { content } => {
+                serde_json::json!({ "role": "system", "content": content })
+            }
+            ChatMessage::Error { content } => {
+                serde_json::json!({ "role": "error", "content": content })
+            }
+            ChatMessage::ProviderError {
+                provider,
+                message,
+                hint,
+                ..
+            } => {
+                serde_json::json!({
+                    "role": "error",
+                    "provider": provider,
+                    "content": message,
+                    "hint": hint,
+                })
+            }
+            ChatMessage::Queued { content } => {
+                serde_json::json!({ "role": "user", "content": content, "queued": true })
+            }
+            // TaskOutline, Skill, AskUser — less relevant for mobile history
+            _ => serde_json::json!({ "role": "system", "content": "" }),
+        }
+    }
+}
+
 /// Tracks file modifications during the session.
 #[derive(Debug, Clone, Default)]
 pub struct FileStats {

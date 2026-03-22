@@ -4,7 +4,7 @@
 //! - [`message_to_command`] parses an [`IncomingMessage`] into a [`CoreCommand`].
 
 use caboose_core::events::{CoreCommand, CoreEvent};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::ws::envelope::{IncomingMessage, OutgoingMessage};
 
@@ -26,7 +26,11 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             OutgoingMessage::event(id, "ThinkingDelta", json!({ "text": text }))
         }
 
-        CoreEvent::ToolCall { id: tool_id, name, arguments } => OutgoingMessage::event(
+        CoreEvent::ToolCall {
+            id: tool_id,
+            name,
+            arguments,
+        } => OutgoingMessage::event(
             id,
             "ToolCall",
             json!({ "id": tool_id, "name": name, "arguments": arguments }),
@@ -48,9 +52,7 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             }),
         ),
 
-        CoreEvent::Error(msg) => {
-            OutgoingMessage::event(id, "Error", json!({ "message": msg }))
-        }
+        CoreEvent::Error(msg) => OutgoingMessage::event(id, "Error", json!({ "message": msg })),
 
         CoreEvent::ProviderError {
             category,
@@ -106,11 +108,9 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
         ),
 
         // --- Session events ---
-        CoreEvent::SessionCreated(session) => OutgoingMessage::event(
-            id,
-            "SessionCreated",
-            json!({ "session_id": session.id }),
-        ),
+        CoreEvent::SessionCreated(session) => {
+            OutgoingMessage::event(id, "SessionCreated", json!({ "session_id": session.id }))
+        }
 
         CoreEvent::SessionList(sessions) => {
             let list: Vec<Value> = sessions.iter().map(|s| json!({ "id": s.id })).collect();
@@ -137,11 +137,9 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             )
         }
 
-        CoreEvent::SessionDeleted { session_id } => OutgoingMessage::event(
-            id,
-            "SessionDeleted",
-            json!({ "session_id": session_id }),
-        ),
+        CoreEvent::SessionDeleted { session_id } => {
+            OutgoingMessage::event(id, "SessionDeleted", json!({ "session_id": session_id }))
+        }
 
         // --- Provider ---
         CoreEvent::ProviderSwitched { provider, model } => OutgoingMessage::event(
@@ -168,23 +166,17 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
         }
 
         // --- MCP ---
-        CoreEvent::McpServerConnected { name } => OutgoingMessage::event(
-            id,
-            "McpServerConnected",
-            json!({ "name": name }),
-        ),
+        CoreEvent::McpServerConnected { name } => {
+            OutgoingMessage::event(id, "McpServerConnected", json!({ "name": name }))
+        }
 
-        CoreEvent::McpServerDisconnected { name } => OutgoingMessage::event(
-            id,
-            "McpServerDisconnected",
-            json!({ "name": name }),
-        ),
+        CoreEvent::McpServerDisconnected { name } => {
+            OutgoingMessage::event(id, "McpServerDisconnected", json!({ "name": name }))
+        }
 
-        CoreEvent::McpToolsDiscovered { server, tools: _ } => OutgoingMessage::event(
-            id,
-            "McpToolsDiscovered",
-            json!({ "server": server }),
-        ),
+        CoreEvent::McpToolsDiscovered { server, tools: _ } => {
+            OutgoingMessage::event(id, "McpToolsDiscovered", json!({ "server": server }))
+        }
 
         // --- Background agents ---
         CoreEvent::BackgroundAgentStarted {
@@ -248,30 +240,22 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
         ),
 
         // --- Checkpoints ---
-        CoreEvent::CheckpointCreated { name } => OutgoingMessage::event(
-            id,
-            "CheckpointCreated",
-            json!({ "name": name }),
-        ),
+        CoreEvent::CheckpointCreated { name } => {
+            OutgoingMessage::event(id, "CheckpointCreated", json!({ "name": name }))
+        }
 
-        CoreEvent::CheckpointRewound { name } => OutgoingMessage::event(
-            id,
-            "CheckpointRewound",
-            json!({ "name": name }),
-        ),
+        CoreEvent::CheckpointRewound { name } => {
+            OutgoingMessage::event(id, "CheckpointRewound", json!({ "name": name }))
+        }
 
         // --- Roundhouse ---
-        CoreEvent::RoundhousePhaseChanged { phase } => OutgoingMessage::event(
-            id,
-            "RoundhousePhaseChanged",
-            json!({ "phase": phase }),
-        ),
+        CoreEvent::RoundhousePhaseChanged { phase } => {
+            OutgoingMessage::event(id, "RoundhousePhaseChanged", json!({ "phase": phase }))
+        }
 
-        CoreEvent::RoundhouseComplete { plan } => OutgoingMessage::event(
-            id,
-            "RoundhouseComplete",
-            json!({ "plan": plan }),
-        ),
+        CoreEvent::RoundhouseComplete { plan } => {
+            OutgoingMessage::event(id, "RoundhouseComplete", json!({ "plan": plan }))
+        }
 
         // --- Status ---
         CoreEvent::Status {
@@ -291,17 +275,22 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
         ),
 
         // --- Device connectivity ---
-        CoreEvent::DeviceConnected { device_id, device_name } => OutgoingMessage::event(
+        CoreEvent::DeviceConnected {
+            device_id,
+            device_name,
+        } => OutgoingMessage::event(
             id,
             "DeviceConnected",
             json!({ "device_id": device_id, "device_name": device_name }),
         ),
 
-        CoreEvent::DeviceDisconnected { device_id } => OutgoingMessage::event(
-            id,
-            "DeviceDisconnected",
-            json!({ "device_id": device_id }),
-        ),
+        CoreEvent::DeviceDisconnected { device_id } => {
+            OutgoingMessage::event(id, "DeviceDisconnected", json!({ "device_id": device_id }))
+        }
+
+        CoreEvent::SessionHistory { messages } => {
+            OutgoingMessage::event(id, "SessionHistory", json!({ "messages": messages }))
+        }
     }
 }
 
@@ -389,10 +378,19 @@ pub fn message_to_command(msg: &IncomingMessage) -> Result<CoreCommand, String> 
 
 #[derive(Debug, PartialEq)]
 pub enum AuthCommand {
-    Pair { code: String, device_name: String },
-    Authenticate { token: String, device_name: String, os: String },
+    Pair {
+        code: String,
+        device_name: String,
+    },
+    Authenticate {
+        token: String,
+        device_name: String,
+        os: String,
+    },
     ListDevices,
-    RevokeDevice { device_id: String },
+    RevokeDevice {
+        device_id: String,
+    },
 }
 
 pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> {
@@ -402,11 +400,13 @@ pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> 
     match cmd {
         "Pair" => {
             let p = payload.ok_or("Pair requires payload")?;
-            let code = p.get("code")
+            let code = p
+                .get("code")
                 .and_then(|v| v.as_str())
                 .ok_or("Pair requires 'code'")?
                 .to_string();
-            let device_name = p.get("device_name")
+            let device_name = p
+                .get("device_name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -414,24 +414,32 @@ pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> 
         }
         "Authenticate" => {
             let p = payload.ok_or("Authenticate requires payload")?;
-            let token = p.get("token")
+            let token = p
+                .get("token")
                 .and_then(|v| v.as_str())
                 .ok_or("Authenticate requires 'token'")?
                 .to_string();
-            let device_name = p.get("device_name")
+            let device_name = p
+                .get("device_name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let os = p.get("os")
+            let os = p
+                .get("os")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            Ok(AuthCommand::Authenticate { token, device_name, os })
+            Ok(AuthCommand::Authenticate {
+                token,
+                device_name,
+                os,
+            })
         }
         "ListDevices" => Ok(AuthCommand::ListDevices),
         "RevokeDevice" => {
             let p = payload.ok_or("RevokeDevice requires payload")?;
-            let device_id = p.get("device_id")
+            let device_id = p
+                .get("device_id")
                 .and_then(|v| v.as_str())
                 .ok_or("RevokeDevice requires 'device_id'")?
                 .to_string();
@@ -447,10 +455,22 @@ pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> 
 
 #[derive(Debug, PartialEq)]
 pub enum ShellCommand {
-    Spawn { cols: u16, rows: u16 },
-    Input { shell_id: String, data: String },
-    Resize { shell_id: String, cols: u16, rows: u16 },
-    Kill { shell_id: String },
+    Spawn {
+        cols: u16,
+        rows: u16,
+    },
+    Input {
+        shell_id: String,
+        data: String,
+    },
+    Resize {
+        shell_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    Kill {
+        shell_id: String,
+    },
 }
 
 pub fn parse_shell_command(msg: &IncomingMessage) -> Result<ShellCommand, String> {
@@ -466,11 +486,13 @@ pub fn parse_shell_command(msg: &IncomingMessage) -> Result<ShellCommand, String
         }
         "ShellInput" => {
             let p = payload.ok_or("ShellInput requires payload")?;
-            let shell_id = p.get("shell_id")
+            let shell_id = p
+                .get("shell_id")
                 .and_then(|v| v.as_str())
                 .ok_or("ShellInput requires 'shell_id'")?
                 .to_string();
-            let data = p.get("data")
+            let data = p
+                .get("data")
                 .and_then(|v| v.as_str())
                 .ok_or("ShellInput requires 'data'")?
                 .to_string();
@@ -478,17 +500,23 @@ pub fn parse_shell_command(msg: &IncomingMessage) -> Result<ShellCommand, String
         }
         "ShellResize" => {
             let p = payload.ok_or("ShellResize requires payload")?;
-            let shell_id = p.get("shell_id")
+            let shell_id = p
+                .get("shell_id")
                 .and_then(|v| v.as_str())
                 .ok_or("ShellResize requires 'shell_id'")?
                 .to_string();
             let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
             let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-            Ok(ShellCommand::Resize { shell_id, cols, rows })
+            Ok(ShellCommand::Resize {
+                shell_id,
+                cols,
+                rows,
+            })
         }
         "ShellKill" => {
             let p = payload.ok_or("ShellKill requires payload")?;
-            let shell_id = p.get("shell_id")
+            let shell_id = p
+                .get("shell_id")
                 .and_then(|v| v.as_str())
                 .ok_or("ShellKill requires 'shell_id'")?
                 .to_string();
@@ -503,17 +531,25 @@ pub fn parse_shell_command(msg: &IncomingMessage) -> Result<ShellCommand, String
 // ---------------------------------------------------------------------------
 
 pub fn shell_output_message(id: &str, shell_id: &str, data: &str) -> OutgoingMessage {
-    OutgoingMessage::event(id, "ShellOutput", serde_json::json!({
-        "shell_id": shell_id,
-        "data": data,
-    }))
+    OutgoingMessage::event(
+        id,
+        "ShellOutput",
+        serde_json::json!({
+            "shell_id": shell_id,
+            "data": data,
+        }),
+    )
 }
 
 pub fn shell_exited_message(id: &str, shell_id: &str, exit_code: i32) -> OutgoingMessage {
-    OutgoingMessage::event(id, "ShellExited", serde_json::json!({
-        "shell_id": shell_id,
-        "exit_code": exit_code,
-    }))
+    OutgoingMessage::event(
+        id,
+        "ShellExited",
+        serde_json::json!({
+            "shell_id": shell_id,
+            "exit_code": exit_code,
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +637,11 @@ mod tests {
         let result = parse_auth_command(&msg);
         assert!(result.is_ok());
         match result.unwrap() {
-            AuthCommand::Authenticate { token, device_name, os } => {
+            AuthCommand::Authenticate {
+                token,
+                device_name,
+                os,
+            } => {
                 assert_eq!(token, "abc123def456");
                 assert_eq!(device_name, "Pixel 8");
                 assert_eq!(os, "Android 15");

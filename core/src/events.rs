@@ -154,8 +154,18 @@ pub enum CoreEvent {
     },
 
     // Device connectivity (emitted by server)
-    DeviceConnected { device_id: String, device_name: String },
-    DeviceDisconnected { device_id: String },
+    DeviceConnected {
+        device_id: String,
+        device_name: String,
+    },
+    DeviceDisconnected {
+        device_id: String,
+    },
+
+    /// Snapshot of conversation history sent to a newly-connected mobile client.
+    SessionHistory {
+        messages: Vec<serde_json::Value>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -298,10 +308,7 @@ impl CoreHandle {
     }
 
     /// Send a command to the core event loop.
-    pub fn send(
-        &self,
-        command: CoreCommand,
-    ) -> Result<(), mpsc::error::SendError<CoreCommand>> {
+    pub fn send(&self, command: CoreCommand) -> Result<(), mpsc::error::SendError<CoreCommand>> {
         self.commands.send(command)
     }
 }
