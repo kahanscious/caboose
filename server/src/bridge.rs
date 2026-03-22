@@ -442,6 +442,81 @@ pub fn parse_auth_command(msg: &IncomingMessage) -> Result<AuthCommand, String> 
 }
 
 // ---------------------------------------------------------------------------
+// Shell command parsing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+pub enum ShellCommand {
+    Spawn { cols: u16, rows: u16 },
+    Input { shell_id: String, data: String },
+    Resize { shell_id: String, cols: u16, rows: u16 },
+    Kill { shell_id: String },
+}
+
+pub fn parse_shell_command(msg: &IncomingMessage) -> Result<ShellCommand, String> {
+    let cmd = msg.command.as_deref().unwrap_or("");
+    let payload = msg.payload.as_ref();
+
+    match cmd {
+        "ShellSpawn" => {
+            let p = payload.ok_or("ShellSpawn requires payload")?;
+            let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+            let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+            Ok(ShellCommand::Spawn { cols, rows })
+        }
+        "ShellInput" => {
+            let p = payload.ok_or("ShellInput requires payload")?;
+            let shell_id = p.get("shell_id")
+                .and_then(|v| v.as_str())
+                .ok_or("ShellInput requires 'shell_id'")?
+                .to_string();
+            let data = p.get("data")
+                .and_then(|v| v.as_str())
+                .ok_or("ShellInput requires 'data'")?
+                .to_string();
+            Ok(ShellCommand::Input { shell_id, data })
+        }
+        "ShellResize" => {
+            let p = payload.ok_or("ShellResize requires payload")?;
+            let shell_id = p.get("shell_id")
+                .and_then(|v| v.as_str())
+                .ok_or("ShellResize requires 'shell_id'")?
+                .to_string();
+            let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+            let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+            Ok(ShellCommand::Resize { shell_id, cols, rows })
+        }
+        "ShellKill" => {
+            let p = payload.ok_or("ShellKill requires payload")?;
+            let shell_id = p.get("shell_id")
+                .and_then(|v| v.as_str())
+                .ok_or("ShellKill requires 'shell_id'")?
+                .to_string();
+            Ok(ShellCommand::Kill { shell_id })
+        }
+        _ => Err(format!("Unknown shell command: {}", cmd)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shell event serialization
+// ---------------------------------------------------------------------------
+
+pub fn shell_output_message(id: &str, shell_id: &str, data: &str) -> OutgoingMessage {
+    OutgoingMessage::event(id, "ShellOutput", serde_json::json!({
+        "shell_id": shell_id,
+        "data": data,
+    }))
+}
+
+pub fn shell_exited_message(id: &str, shell_id: &str, exit_code: i32) -> OutgoingMessage {
+    OutgoingMessage::event(id, "ShellExited", serde_json::json!({
+        "shell_id": shell_id,
+        "exit_code": exit_code,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -532,6 +607,25 @@ mod tests {
                 assert_eq!(os, "Android 15");
             }
             _ => panic!("expected Authenticate"),
+        }
+    }
+
+    #[test]
+    fn parse_shell_spawn_command() {
+        let msg = IncomingMessage {
+            id: "1".into(),
+            msg_type: "command".into(),
+            command: Some("ShellSpawn".into()),
+            payload: Some(serde_json::json!({ "cols": 80, "rows": 24 })),
+        };
+        let result = parse_shell_command(&msg);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ShellCommand::Spawn { cols, rows } => {
+                assert_eq!(cols, 80);
+                assert_eq!(rows, 24);
+            }
+            _ => panic!("expected Spawn"),
         }
     }
 }
