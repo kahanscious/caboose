@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use rand::Rng;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 const MAX_ACTIVE_DEVICES: usize = 10;
 
@@ -17,6 +17,7 @@ pub struct Device {
     pub name: String,
     pub paired_at: String,
     pub last_seen: Option<String>,
+    pub push_token: Option<String>,
 }
 
 /// SQLite-backed device token store.
@@ -37,12 +38,15 @@ impl DeviceStore {
                 token_hash   TEXT NOT NULL,
                 paired_at    TEXT NOT NULL,
                 last_seen    TEXT,
-                revoked      INTEGER NOT NULL DEFAULT 0
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                push_token   TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_token_prefix
                 ON devices (token_prefix)
                 WHERE revoked = 0;",
         )?;
+        // Migrate existing databases that lack the push_token column.
+        let _ = conn.execute_batch("ALTER TABLE devices ADD COLUMN push_token TEXT;");
         Ok(Self { db_path })
     }
 
@@ -95,7 +99,7 @@ impl DeviceStore {
 
         // Fetch all active candidates sharing the prefix.
         let mut stmt = conn.prepare(
-            "SELECT id, name, token_hash, paired_at, last_seen
+            "SELECT id, name, token_hash, paired_at, last_seen, push_token
              FROM devices
              WHERE token_prefix = ?1 AND revoked = 0",
         )?;
@@ -106,6 +110,7 @@ impl DeviceStore {
             hash: String,
             paired_at: String,
             _last_seen: Option<String>,
+            push_token: Option<String>,
         }
 
         let rows: Vec<Row> = stmt
@@ -116,6 +121,7 @@ impl DeviceStore {
                     hash: row.get(2)?,
                     paired_at: row.get(3)?,
                     _last_seen: row.get(4)?,
+                    push_token: row.get(5)?,
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
@@ -132,6 +138,7 @@ impl DeviceStore {
                     name: row.name,
                     paired_at: row.paired_at,
                     last_seen: Some(now),
+                    push_token: row.push_token,
                 }));
             }
         }
@@ -153,7 +160,7 @@ impl DeviceStore {
     pub fn list(&self) -> Result<Vec<Device>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, paired_at, last_seen
+            "SELECT id, name, paired_at, last_seen, push_token
              FROM devices
              WHERE revoked = 0
              ORDER BY paired_at ASC",
@@ -165,10 +172,32 @@ impl DeviceStore {
                     name: row.get(1)?,
                     paired_at: row.get(2)?,
                     last_seen: row.get(3)?,
+                    push_token: row.get(4)?,
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
         Ok(devices)
+    }
+
+    /// Store an FCM push token for a device.
+    pub fn set_push_token(&self, device_id: &str, token: &str) -> Result<bool> {
+        let conn = self.connect()?;
+        let rows = conn.execute(
+            "UPDATE devices SET push_token = ?1 WHERE id = ?2 AND revoked = 0",
+            params![token, device_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Get the push token for a device, if any.
+    pub fn get_push_token(&self, device_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        let token: Option<String> = conn.query_row(
+            "SELECT push_token FROM devices WHERE id = ?1 AND revoked = 0",
+            params![device_id],
+            |row| row.get(0),
+        )?;
+        Ok(token)
     }
 }
 
@@ -258,10 +287,28 @@ mod tests {
     }
 
     #[test]
+    fn set_and_get_push_token() {
+        let (store, _f) = temp_store();
+        let token = store.pair("dev-1", "My Phone").unwrap();
+        let device = store.verify(&token).unwrap().expect("should find device");
+        assert!(device.push_token.is_none());
+
+        assert!(store.set_push_token("dev-1", "fcm-token-abc").unwrap());
+        let push = store.get_push_token("dev-1").unwrap();
+        assert_eq!(push, Some("fcm-token-abc".to_string()));
+
+        // Verify it shows up in list too
+        let devices = store.list().unwrap();
+        assert_eq!(devices[0].push_token, Some("fcm-token-abc".to_string()));
+    }
+
+    #[test]
     fn max_devices_enforced() {
         let (store, _f) = temp_store();
         for i in 0..10 {
-            store.pair(&format!("dev-{i}"), &format!("Device {i}")).unwrap();
+            store
+                .pair(&format!("dev-{i}"), &format!("Device {i}"))
+                .unwrap();
         }
         let err = store.pair("dev-10", "Overflow").unwrap_err();
         assert!(err.to_string().contains("maximum"));

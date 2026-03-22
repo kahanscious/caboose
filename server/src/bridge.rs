@@ -368,6 +368,9 @@ pub fn message_to_command(msg: &IncomingMessage) -> Result<CoreCommand, String> 
             Ok(CoreCommand::KillBackgroundAgent { id })
         }
 
+        // RegisterPushToken is handled directly by the session, not forwarded to core.
+        "RegisterPushToken" => Err("RegisterPushToken is handled by the server".to_string()),
+
         other => Err(format!("Unknown command: '{other}'")),
     }
 }

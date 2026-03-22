@@ -147,6 +147,7 @@ async fn auth_loop(
                                         name: device_name,
                                         paired_at: chrono::Utc::now().to_rfc3339(),
                                         last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                                        push_token: None,
                                     });
                                 }
                                 Err(e) => {
@@ -348,6 +349,25 @@ async fn authenticated_loop(
                         if incoming.msg_type == "auth" {
                             // Post-auth device management commands.
                             handle_auth_command(socket, state, &incoming).await;
+                        } else if incoming.msg_type == "command"
+                            && incoming.command.as_deref() == Some("RegisterPushToken")
+                        {
+                            // Store the FCM push token for this device.
+                            if let Some(ref payload) = incoming.payload
+                                && let Some(token) = payload["token"].as_str()
+                            {
+                                match state.devices.set_push_token(device_id, token) {
+                                    Ok(true) => {
+                                        tracing::info!("push token registered for device={device_id}");
+                                    }
+                                    Ok(false) => {
+                                        tracing::warn!("push token registration failed: device not found device={device_id}");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("push token registration error: {e}");
+                                    }
+                                }
+                            }
                         } else if incoming.msg_type == "command" {
                             // Shell commands — handled before regular command routing.
                             if let Some(ref cmd_name) = incoming.command
