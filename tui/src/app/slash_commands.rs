@@ -632,6 +632,11 @@ impl App {
             self.handle_bg_command(slash).await;
             return true;
         }
+        // /serve — start/stop the embedded WebSocket server
+        if slash == "serve" || slash.starts_with("serve ") {
+            self.handle_serve_command(slash).await;
+            return true;
+        }
         // /pair — generate device pairing code
         if slash == "pair" {
             self.handle_pair_command();
@@ -1105,6 +1110,81 @@ impl App {
                         mgr_handle.store_handle(&agent_id, handle);
                     }
                 }
+            }
+        }
+    }
+
+    async fn handle_serve_command(&mut self, slash: &str) {
+        let sub = slash.strip_prefix("serve").unwrap_or("").trim();
+
+        match sub {
+            "stop" => {
+                if let Some(handle) = self.state.server_handle.take() {
+                    let addr = handle.local_addr;
+                    handle.shutdown();
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: format!("Server stopped (was listening on {addr})."),
+                    });
+                } else {
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: "Server is not running.".to_string(),
+                    });
+                }
+            }
+            "" => {
+                if let Some(existing) = &self.state.server_handle {
+                    let addr = existing.local_addr;
+                    self.state.chat_messages.push(ChatMessage::Error {
+                        content: format!(
+                            "Server already running on {addr}. Use /serve stop first."
+                        ),
+                    });
+                    return;
+                }
+
+                let (core_handle, _cmd_rx) = caboose_core::events::CoreHandle::new();
+
+                let db_path = dirs::config_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("caboose")
+                    .join("devices.db");
+
+                let server_config = caboose_server::ServerConfig {
+                    port: 0,
+                    bind: "0.0.0.0".into(),
+                    config: self.state.config.clone(),
+                    db_path,
+                };
+
+                match caboose_server::start_server(server_config, core_handle).await {
+                    Ok(handle) => {
+                        let addr = handle.local_addr;
+
+                        // Generate a pairing code for the new server.
+                        let code = {
+                            let mut pm = handle.state.pairing.lock().await;
+                            pm.generate()
+                        };
+
+                        self.state.server_handle = Some(handle);
+                        self.state.chat_messages.push(ChatMessage::System {
+                            content: format!(
+                                "Server listening on {addr}\nPairing code: {code}\n\
+                                 Enter this code in the mobile app to connect."
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        self.state.chat_messages.push(ChatMessage::Error {
+                            content: format!("Failed to start server: {e}"),
+                        });
+                    }
+                }
+            }
+            _ => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: "Usage: /serve | /serve stop".to_string(),
+                });
             }
         }
     }
