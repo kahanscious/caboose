@@ -1204,7 +1204,9 @@ impl App {
 
         if caboose_core::search_setup::is_running() {
             // SearXNG is running but config might be missing — ensure it's configured
-            let _ = caboose_core::search_setup::auto_configure();
+            if let Err(e) = caboose_core::search_setup::auto_configure() {
+                tracing::warn!("auto_configure failed: {e}");
+            }
             let services = self
                 .state
                 .config
