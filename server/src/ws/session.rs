@@ -346,8 +346,8 @@ async fn authenticated_loop(
                             handle_auth_command(socket, state, &incoming).await;
                         } else if incoming.msg_type == "command" {
                             // Shell commands — handled before regular command routing.
-                            if let Some(ref cmd_name) = incoming.command {
-                                if cmd_name.starts_with("Shell") {
+                            if let Some(ref cmd_name) = incoming.command
+                                && cmd_name.starts_with("Shell") {
                                     match crate::bridge::parse_shell_command(&incoming) {
                                         Ok(shell_cmd) => {
                                             use crate::bridge::ShellCommand;
@@ -400,7 +400,6 @@ async fn authenticated_loop(
                                         }
                                     }
                                 }
-                            }
 
                             match bridge::message_to_command(&incoming) {
                                 Ok(cmd) => {
