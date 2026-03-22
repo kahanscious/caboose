@@ -250,6 +250,22 @@ impl App {
                                 content: msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string(),
                             });
                         } else {
+                            // Update in-memory config so web_search works immediately
+                            let services = self
+                                .state
+                                .config
+                                .services
+                                .get_or_insert_with(Default::default);
+                            services.services.entry("web_search".to_string()).or_insert(
+                                caboose_core::config::schema::ServiceConfig {
+                                    provider: "searxng".to_string(),
+                                    base_url: Some("http://127.0.0.1:8080".to_string()),
+                                    enabled: true,
+                                    api_key_env: None,
+                                    user_agent: None,
+                                    max_results: None,
+                                },
+                            );
                             self.state
                                 .chat_messages
                                 .push(ChatMessage::System { content: msg });
