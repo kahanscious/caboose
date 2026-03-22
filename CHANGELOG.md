@@ -5,6 +5,27 @@ All notable changes to Caboose will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-22
+
+### Added
+
+- **`/serve` command** — starts the embedded WebSocket server for mobile companion app connectivity. Shares the agent's CoreHandle so mobile clients interact with the same session. `/serve stop` broadcasts a graceful shutdown event to connected clients before stopping.
+- **Pairing, devices, and unpairing wired to server** — `/pair` generates real one-time pairing codes via PairingManager. `/devices` lists paired devices with IDs, names, and last seen times. `/unpair <id>` revokes device access.
+- **Conversation history sync** — when a mobile client authenticates, the server sends the full conversation history. On new device connection, the TUI refreshes the snapshot so late joiners see the latest state.
+- **Server status in sidebar** — shows serving port and connected device names when `/serve` is active.
+- **Push notification service** — server stores FCM tokens per device and dispatches push notifications on tool approval requests and agent completion. Currently a logging stub pending Firebase project credentials.
+- **CoreHandle shared between TUI and server** — single CoreHandle instance stored on State, shared with BackgroundAgentManager and the embedded server.
+- **`SessionHistory` core event** — new CoreEvent variant for broadcasting serialized conversation state to mobile clients.
+- **`ServerShutdown` core event** — new CoreEvent variant for graceful disconnect signaling.
+- **Cloudflare Worker relay** — WebSocket frame relay (`server/relay/`) for remote mobile access when not on the same LAN. Durable Object rooms, max 2 clients per room, no message inspection. Deployable to any Cloudflare account.
+
+### Changed
+
+- **`DeviceStore` schema** — added `push_token` column for FCM token storage, with automatic migration for existing databases.
+- **Bridge mappings** — added `SessionHistory`, `ServerShutdown`, and `RegisterPushToken` to the WebSocket protocol bridge.
+
+---
+
 ## [0.7.3] - 2026-03-21
 
 ### Fixed
