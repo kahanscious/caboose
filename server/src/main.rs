@@ -15,9 +15,15 @@ async fn main() -> Result<()> {
     let db_path = data_dir.join("devices.db");
 
     let server = start_server(
-        ServerConfig { port: 9090, bind: "0.0.0.0".into(), config, db_path },
+        ServerConfig {
+            port: 9090,
+            bind: "0.0.0.0".into(),
+            config,
+            db_path,
+        },
         core_handle,
-    ).await?;
+    )
+    .await?;
     println!("caboose-server running on {}", server.local_addr);
     tokio::signal::ctrl_c().await?;
     server.shutdown();

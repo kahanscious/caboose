@@ -17,7 +17,11 @@ enum Backend {
 }
 
 impl Backend {
-    async fn search(&self, query: &str, max_results: usize) -> Result<Vec<crate::tools::search::SearchResult>> {
+    async fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<crate::tools::search::SearchResult>> {
         match self {
             Backend::Searxng(b) => b.search(query, max_results).await,
             Backend::Tavily(b) => b.search(query, max_results).await,
@@ -29,10 +33,9 @@ impl Backend {
 fn build_backend(config: &ServiceConfig) -> Result<Backend> {
     match config.provider.as_str() {
         "searxng" => {
-            let base_url = config
-                .base_url
-                .as_deref()
-                .ok_or_else(|| anyhow!("searxng backend requires base_url in [services.web_search]"))?;
+            let base_url = config.base_url.as_deref().ok_or_else(|| {
+                anyhow!("searxng backend requires base_url in [services.web_search]")
+            })?;
             let user_agent = config
                 .user_agent
                 .as_deref()
@@ -41,10 +44,7 @@ fn build_backend(config: &ServiceConfig) -> Result<Backend> {
             Ok(Backend::Searxng(backend))
         }
         "tavily" => {
-            let key_env = config
-                .api_key_env
-                .as_deref()
-                .unwrap_or("TAVILY_API_KEY");
+            let key_env = config.api_key_env.as_deref().unwrap_or("TAVILY_API_KEY");
             let api_key = std::env::var(key_env).unwrap_or_default();
             let base_url = config.base_url.as_deref();
             Ok(Backend::Tavily(TavilyBackend::new(&api_key, base_url)))

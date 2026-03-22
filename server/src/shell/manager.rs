@@ -1,7 +1,7 @@
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, Child};
 
 const MAX_SHELLS: usize = 3;
 const READ_BUF_SIZE: usize = 4096;
@@ -51,7 +51,11 @@ impl ShellManager {
             })
             .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
-        let shell_cmd = if cfg!(windows) { "cmd.exe" } else { "/bin/bash" };
+        let shell_cmd = if cfg!(windows) {
+            "cmd.exe"
+        } else {
+            "/bin/bash"
+        };
         let cmd = CommandBuilder::new(shell_cmd);
 
         let child = pair

@@ -30,15 +30,8 @@ impl MdnsAdvertiser {
                 None,
             )?
         } else {
-            ServiceInfo::new(
-                SERVICE_TYPE,
-                &instance_name,
-                &host_name,
-                "",
-                port,
-                None,
-            )?
-            .enable_addr_auto()
+            ServiceInfo::new(SERVICE_TYPE, &instance_name, &host_name, "", port, None)?
+                .enable_addr_auto()
         };
 
         daemon.register(service_info)?;
