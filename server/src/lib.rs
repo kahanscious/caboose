@@ -71,7 +71,7 @@ async fn ws_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| {
-        ws::session::handle_session(socket, state, "anonymous".into())
+        ws::session::handle_session(socket, state)
     })
 }
 

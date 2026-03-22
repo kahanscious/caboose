@@ -52,6 +52,29 @@ impl OutgoingMessage {
         }
     }
 
+    /// Successful pairing response — includes token and device_id.
+    pub fn paired(id: &str, token: &str, device_id: &str) -> Self {
+        Self::auth(id, "Paired", serde_json::json!({
+            "token": token,
+            "device_id": device_id,
+        }))
+    }
+
+    /// Successful authentication response.
+    pub fn authenticated(id: &str, device_id: &str, device_name: &str) -> Self {
+        Self::auth(id, "Authenticated", serde_json::json!({
+            "device_id": device_id,
+            "device_name": device_name,
+        }))
+    }
+
+    /// Authentication failure response.
+    pub fn auth_failed(id: &str, reason: &str) -> Self {
+        Self::auth(id, "AuthFailed", serde_json::json!({
+            "reason": reason,
+        }))
+    }
+
     /// Create an error message.
     pub fn error(id: &str, message: &str) -> Self {
         Self {
