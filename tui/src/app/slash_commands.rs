@@ -639,7 +639,7 @@ impl App {
         }
         // /pair — generate device pairing code
         if slash == "pair" {
-            self.handle_pair_command();
+            self.handle_pair_command().await;
             return true;
         }
         // /devices — list paired devices
@@ -1189,16 +1189,19 @@ impl App {
         }
     }
 
-    fn handle_pair_command(&mut self) {
-        if self.state.server_handle.is_none() {
+    async fn handle_pair_command(&mut self) {
+        let Some(handle) = &self.state.server_handle else {
             self.state.chat_messages.push(ChatMessage::System {
-                content: "Server not running. Enable [server] in config to use pairing."
-                    .to_string(),
+                content: "Server not running. Use /serve to start the server first.".to_string(),
             });
             return;
-        }
+        };
+        let code = {
+            let mut pm = handle.state.pairing.lock().await;
+            pm.generate()
+        };
         self.state.chat_messages.push(ChatMessage::System {
-            content: "Device pairing not yet wired to TUI.".to_string(),
+            content: format!("Pairing code: {code}\nEnter this code in the mobile app to connect."),
         });
     }
 
