@@ -26,3 +26,4 @@ futures-util = "0.3"
 [dev-dependencies]
 tokio-tungstenite = "0.26"
 tempfile = "3"
+reqwest = "0.12"

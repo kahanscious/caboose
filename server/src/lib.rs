@@ -43,6 +43,7 @@ pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Resu
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/pair", get(pair_handler))
         .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", config.bind, config.port).parse()?;
@@ -73,6 +74,32 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| {
         ws::session::handle_session(socket, state)
     })
+}
+
+async fn pair_handler(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<serde_json::Value> {
+    let code = {
+        let mut pm = state.pairing.lock().await;
+        pm.generate()
+    };
+
+    let server_addr = local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let expires_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+
+    axum::Json(serde_json::json!({
+        "code": code,
+        "address": server_addr,
+        "expires_at": expires_at,
+    }))
+}
+
+fn local_ip() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|a| a.ip())
 }
 
 #[cfg(test)]
@@ -141,6 +168,28 @@ mod tests {
         } else {
             panic!("Expected to receive a WebSocket message");
         }
+
+        server.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pair_endpoint_returns_code() {
+        let (handle, _rx) = CoreHandle::new();
+        let config = Config::default();
+        let tmp = tempfile::tempdir().unwrap();
+        let server = start_server(
+            ServerConfig { port: 0, bind: "127.0.0.1".into(), config, db_path: tmp.path().join("devices.db") },
+            handle,
+        ).await.unwrap();
+
+        let url = format!("http://{}/pair", server.local_addr);
+        let resp = reqwest::get(&url).await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["code"].as_str().unwrap().len() == 6);
+        assert!(body["address"].as_str().is_some());
+        assert!(body["expires_at"].as_str().is_some());
 
         server.shutdown();
     }
