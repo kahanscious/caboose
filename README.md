@@ -101,7 +101,7 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
 - **Embedded server** — WebSocket server for mobile and web clients, with device pairing auth and bidirectional event bridge
 - **Background agents** — `/bg <prompt>` spawns background agents that run full multi-turn conversations with tool execution. Per-agent and global token budget enforcement. The model can also spawn them autonomously via `spawn_background` for parallel work
-- **Web search** — `/search-setup` installs a local SearXNG instance via Docker with zero configuration. Also supports Tavily (paid API). Pluggable `SearchBackend` trait
+- **Web search** — `/search-setup` installs a local SearXNG instance via Docker with zero configuration. For always-on deployments, use [Tender Highball](https://github.com/kahanscious/tender-highball). Also supports Tavily (paid API). Pluggable `SearchBackend` trait
 - **`/context`** — shows model, tokens, tools, MCP servers, skills, memory, and permission mode at a glance
 
 ## Built-in Skills
