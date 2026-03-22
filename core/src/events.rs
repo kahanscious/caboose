@@ -166,6 +166,9 @@ pub enum CoreEvent {
     SessionHistory {
         messages: Vec<serde_json::Value>,
     },
+
+    /// Server is shutting down — sent to connected clients before close.
+    ServerShutdown,
 }
 
 // ---------------------------------------------------------------------------

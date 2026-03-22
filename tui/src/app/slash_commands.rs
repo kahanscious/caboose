@@ -1121,6 +1121,13 @@ impl App {
             "stop" => {
                 if let Some(handle) = self.state.server_handle.take() {
                     let addr = handle.local_addr;
+                    // Notify connected clients before shutting down.
+                    handle
+                        .state
+                        .core_handle
+                        .emit(caboose_core::events::CoreEvent::ServerShutdown);
+                    // Brief delay so the event reaches clients before the socket closes.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     handle.shutdown();
                     self.state.chat_messages.push(ChatMessage::System {
                         content: format!("Server stopped (was listening on {addr})."),

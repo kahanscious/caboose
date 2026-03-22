@@ -291,6 +291,10 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
         CoreEvent::SessionHistory { messages } => {
             OutgoingMessage::event(id, "SessionHistory", json!({ "messages": messages }))
         }
+
+        CoreEvent::ServerShutdown => {
+            OutgoingMessage::event(id, "ServerShutdown", json!({}))
+        }
     }
 }
 
