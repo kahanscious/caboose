@@ -305,6 +305,38 @@ async fn authenticated_loop(
             result = event_rx.recv() => {
                 match result {
                     Ok(event) => {
+                        // Send push notifications for tool approval and turn completion.
+                        // We always send the push even if the WS is connected, since
+                        // the app may be backgrounded and not processing WS frames.
+                        match &event {
+                            CoreEvent::ToolApprovalRequired { tool_calls, current_index } => {
+                                if let Some(tc) = tool_calls.get(*current_index)
+                                    && let Ok(Some(push_token)) = state.devices.get_push_token(device_id)
+                                {
+                                    let token = push_token.clone();
+                                    let name = tc.name.clone();
+                                    let tool_id = tc.id.clone();
+                                    tokio::spawn(async move {
+                                        let push = crate::push::PushService::new();
+                                        push.notify_tool_approval(&token, &name, &tool_id).await;
+                                    });
+                                }
+                            }
+                            CoreEvent::TurnComplete { output_tokens, .. } => {
+                                if let Ok(Some(push_token)) = state.devices.get_push_token(device_id) {
+                                    let token = push_token.clone();
+                                    let tokens = *output_tokens;
+                                    tokio::spawn({
+                                        let push = crate::push::PushService::new();
+                                        async move {
+                                            push.notify_agent_complete(&token, tokens).await;
+                                        }
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+
                         let msg = bridge::event_to_message(&event, "");
 
                         // TextDelta backpressure: buffer and flush on interval.

@@ -2,6 +2,7 @@
 
 use crate::auth::devices::DeviceStore;
 use crate::auth::pairing::PairingManager;
+use crate::push::PushService;
 use anyhow::Result;
 use caboose_core::config::Config;
 use caboose_core::events::CoreHandle;
@@ -14,6 +15,7 @@ pub struct AppState {
     pub config: Config,
     pub pairing: Mutex<PairingManager>,
     pub devices: DeviceStore,
+    pub push: PushService,
     /// Snapshot of conversation history, populated by the TUI when `/serve` starts.
     /// Sent to mobile clients immediately after authentication.
     pub chat_history: RwLock<Vec<serde_json::Value>>,
@@ -31,6 +33,7 @@ impl AppState {
             config,
             pairing: Mutex::new(PairingManager::new()),
             devices,
+            push: PushService::new(),
             chat_history: RwLock::new(Vec::new()),
         }))
     }

@@ -3,21 +3,22 @@
 pub mod auth;
 pub mod bridge;
 pub mod mdns;
+pub mod push;
 pub mod shell;
 pub mod state;
 pub mod ws;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use tokio::sync::oneshot;
 use caboose_core::config::Config;
 use caboose_core::events::CoreHandle;
 use state::AppState;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::oneshot;
 
 pub struct ServerConfig {
     pub port: u16,
@@ -58,7 +59,9 @@ pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Resu
     tokio::spawn(async move {
         tracing::info!("caboose-server listening on {}", local_addr);
         axum::serve(listener, app)
-            .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
             .await
             .ok();
     });
@@ -73,18 +76,11 @@ pub async fn start_server(config: ServerConfig, core_handle: CoreHandle) -> Resu
     })
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| {
-        ws::session::handle_session(socket, state)
-    })
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| ws::session::handle_session(socket, state))
 }
 
-async fn pair_handler(
-    State(state): State<Arc<AppState>>,
-) -> axum::Json<serde_json::Value> {
+async fn pair_handler(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
     let code = {
         let mut pm = state.pairing.lock().await;
         pm.generate()
@@ -111,8 +107,8 @@ fn local_ip() -> Option<std::net::IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_tungstenite::{connect_async, tungstenite::Message as TMessage};
     use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{connect_async, tungstenite::Message as TMessage};
 
     /// Helper: start a server on a random port with an isolated temp DB.
     /// Returns (ServerHandle, cmd_rx, tempdir).
@@ -136,9 +132,8 @@ mod tests {
     /// Helper: connect a WebSocket and read the protocol version frame.
     async fn connect_ws(
         addr: &SocketAddr,
-    ) -> tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    > {
+    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+    {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let url = format!("ws://{addr}/ws");
         let (ws, _) = connect_async(&url).await.unwrap();
@@ -147,7 +142,9 @@ mod tests {
 
     /// Helper: read the next text frame as JSON.
     async fn read_json(
-        ws: &mut (impl StreamExt<Item = Result<TMessage, tokio_tungstenite::tungstenite::Error>> + Unpin),
+        ws: &mut (
+                 impl StreamExt<Item = Result<TMessage, tokio_tungstenite::tungstenite::Error>> + Unpin
+             ),
     ) -> serde_json::Value {
         loop {
             match ws.next().await {
@@ -161,10 +158,7 @@ mod tests {
     }
 
     /// Helper: send a JSON object as text.
-    async fn send_json(
-        ws: &mut (impl SinkExt<TMessage> + Unpin),
-        val: serde_json::Value,
-    ) {
+    async fn send_json(ws: &mut (impl SinkExt<TMessage> + Unpin), val: serde_json::Value) {
         ws.send(TMessage::Text(val.to_string().into()))
             .await
             .map_err(|_| "send failed")
@@ -192,12 +186,16 @@ mod tests {
         assert_eq!(proto["protocol_version"], 1);
 
         // Send Pair command.
-        send_json(ws, serde_json::json!({
-            "id": "pair-1",
-            "type": "auth",
-            "command": "Pair",
-            "payload": { "code": code, "device_name": "Test Device" }
-        })).await;
+        send_json(
+            ws,
+            serde_json::json!({
+                "id": "pair-1",
+                "type": "auth",
+                "command": "Pair",
+                "payload": { "code": code, "device_name": "Test Device" }
+            }),
+        )
+        .await;
 
         // Read Paired response.
         let resp = read_json(ws).await;
@@ -248,18 +246,22 @@ mod tests {
         assert_eq!(token.len(), 64);
 
         // Send a command now that we're authenticated.
-        send_json(&mut ws, serde_json::json!({
-            "id": "cmd-1",
-            "type": "command",
-            "command": "SendMessage",
-            "payload": { "text": "hello from test" }
-        })).await;
+        send_json(
+            &mut ws,
+            serde_json::json!({
+                "id": "cmd-1",
+                "type": "command",
+                "command": "SendMessage",
+                "payload": { "text": "hello from test" }
+            }),
+        )
+        .await;
 
         // Verify the command arrives at the core via cmd_rx.
-        let cmd = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            cmd_rx.recv(),
-        ).await.unwrap().unwrap();
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(2), cmd_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         match cmd {
             caboose_core::events::CoreCommand::SendMessage { text } => {
                 assert_eq!(text, "hello from test");
@@ -282,12 +284,16 @@ mod tests {
         assert_eq!(proto["protocol_version"], 1);
 
         // Send a command without authenticating.
-        send_json(&mut ws, serde_json::json!({
-            "id": "unauth-1",
-            "type": "command",
-            "command": "SendMessage",
-            "payload": { "text": "should be rejected" }
-        })).await;
+        send_json(
+            &mut ws,
+            serde_json::json!({
+                "id": "unauth-1",
+                "type": "command",
+                "command": "SendMessage",
+                "payload": { "text": "should be rejected" }
+            }),
+        )
+        .await;
 
         // Verify error response.
         let resp = read_json(&mut ws).await;
@@ -320,12 +326,16 @@ mod tests {
         assert_eq!(proto["protocol_version"], 1);
 
         // Authenticate with the stored token.
-        send_json(&mut ws2, serde_json::json!({
-            "id": "auth-1",
-            "type": "auth",
-            "command": "Authenticate",
-            "payload": { "token": token, "device_name": "Test Device", "os": "test" }
-        })).await;
+        send_json(
+            &mut ws2,
+            serde_json::json!({
+                "id": "auth-1",
+                "type": "auth",
+                "command": "Authenticate",
+                "payload": { "token": token, "device_name": "Test Device", "os": "test" }
+            }),
+        )
+        .await;
 
         // Verify Authenticated response.
         let resp = read_json(&mut ws2).await;
@@ -334,18 +344,22 @@ mod tests {
         assert!(resp["payload"]["device_id"].as_str().is_some());
 
         // Prove the session works by sending a command.
-        send_json(&mut ws2, serde_json::json!({
-            "id": "cmd-2",
-            "type": "command",
-            "command": "SendMessage",
-            "payload": { "text": "after re-auth" }
-        })).await;
+        send_json(
+            &mut ws2,
+            serde_json::json!({
+                "id": "cmd-2",
+                "type": "command",
+                "command": "SendMessage",
+                "payload": { "text": "after re-auth" }
+            }),
+        )
+        .await;
 
         // Drain any commands from the first session (DeviceConnected etc. are events, not commands).
-        let cmd = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            cmd_rx.recv(),
-        ).await.unwrap().unwrap();
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(2), cmd_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         match cmd {
             caboose_core::events::CoreCommand::SendMessage { text } => {
                 assert_eq!(text, "after re-auth");
@@ -376,12 +390,16 @@ mod tests {
         let proto = read_json(&mut ws2).await;
         assert_eq!(proto["protocol_version"], 1);
 
-        send_json(&mut ws2, serde_json::json!({
-            "id": "auth-revoked",
-            "type": "auth",
-            "command": "Authenticate",
-            "payload": { "token": token, "device_name": "Test Device", "os": "test" }
-        })).await;
+        send_json(
+            &mut ws2,
+            serde_json::json!({
+                "id": "auth-revoked",
+                "type": "auth",
+                "command": "Authenticate",
+                "payload": { "token": token, "device_name": "Test Device", "os": "test" }
+            }),
+        )
+        .await;
 
         // Verify AuthFailed response.
         let resp = read_json(&mut ws2).await;
@@ -407,16 +425,23 @@ mod tests {
         let (_token, _device_id) = pair_ws(&mut ws, &code).await;
 
         // Send ShellSpawn command.
-        send_json(&mut ws, serde_json::json!({
-            "id": "shell-1",
-            "type": "command",
-            "command": "ShellSpawn",
-            "payload": { "cols": 80, "rows": 24 }
-        })).await;
+        send_json(
+            &mut ws,
+            serde_json::json!({
+                "id": "shell-1",
+                "type": "command",
+                "command": "ShellSpawn",
+                "payload": { "cols": 80, "rows": 24 }
+            }),
+        )
+        .await;
 
         // Verify ShellSpawned response with shell_id.
         let resp = read_json(&mut ws).await;
-        assert_eq!(resp["event"], "ShellSpawned", "expected ShellSpawned, got: {resp}");
+        assert_eq!(
+            resp["event"], "ShellSpawned",
+            "expected ShellSpawned, got: {resp}"
+        );
         let shell_id = resp["payload"]["shell_id"]
             .as_str()
             .expect("shell_id missing from ShellSpawned response")
@@ -429,45 +454,56 @@ mod tests {
         } else {
             "echo hello\n"
         };
-        send_json(&mut ws, serde_json::json!({
-            "id": "shell-2",
-            "type": "command",
-            "command": "ShellInput",
-            "payload": { "shell_id": shell_id, "data": echo_cmd }
-        })).await;
+        send_json(
+            &mut ws,
+            serde_json::json!({
+                "id": "shell-2",
+                "type": "command",
+                "command": "ShellInput",
+                "payload": { "shell_id": shell_id, "data": echo_cmd }
+            }),
+        )
+        .await;
 
         // Read messages until we find a ShellOutput containing "hello" (with timeout).
-        let found_hello = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            async {
-                loop {
-                    let msg = read_json(&mut ws).await;
-                    if msg["event"] == "ShellOutput" {
-                        let data = msg["payload"]["data"].as_str().unwrap_or("");
-                        if data.contains("hello") {
-                            return true;
-                        }
+        let found_hello = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let msg = read_json(&mut ws).await;
+                if msg["event"] == "ShellOutput" {
+                    let data = msg["payload"]["data"].as_str().unwrap_or("");
+                    if data.contains("hello") {
+                        return true;
                     }
-                    // Skip other events (e.g. initial shell banner output)
                 }
-            },
-        ).await;
-        assert!(found_hello.is_ok(), "timed out waiting for 'hello' in ShellOutput");
+                // Skip other events (e.g. initial shell banner output)
+            }
+        })
+        .await;
+        assert!(
+            found_hello.is_ok(),
+            "timed out waiting for 'hello' in ShellOutput"
+        );
 
         // Send ShellKill.
-        send_json(&mut ws, serde_json::json!({
-            "id": "shell-3",
-            "type": "command",
-            "command": "ShellKill",
-            "payload": { "shell_id": shell_id }
-        })).await;
+        send_json(
+            &mut ws,
+            serde_json::json!({
+                "id": "shell-3",
+                "type": "command",
+                "command": "ShellKill",
+                "payload": { "shell_id": shell_id }
+            }),
+        )
+        .await;
 
         // Verify ShellExited response.
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            read_json(&mut ws),
-        ).await.expect("timed out waiting for ShellExited after ShellKill");
-        assert_eq!(resp["event"], "ShellExited", "expected ShellExited, got: {resp}");
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), read_json(&mut ws))
+            .await
+            .expect("timed out waiting for ShellExited after ShellKill");
+        assert_eq!(
+            resp["event"], "ShellExited",
+            "expected ShellExited, got: {resp}"
+        );
         assert_eq!(resp["payload"]["shell_id"].as_str().unwrap(), shell_id);
 
         server.shutdown();
