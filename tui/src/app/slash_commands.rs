@@ -1193,6 +1193,23 @@ impl App {
         }
 
         if caboose_core::search_setup::is_running() {
+            // SearXNG is running but config might be missing — ensure it's configured
+            let _ = caboose_core::search_setup::auto_configure();
+            let services = self
+                .state
+                .config
+                .services
+                .get_or_insert_with(Default::default);
+            services.services.entry("web_search".to_string()).or_insert(
+                caboose_core::config::schema::ServiceConfig {
+                    provider: "searxng".to_string(),
+                    base_url: Some("http://127.0.0.1:8080".to_string()),
+                    enabled: true,
+                    api_key_env: None,
+                    user_agent: None,
+                    max_results: None,
+                },
+            );
             self.state.chat_messages.push(ChatMessage::System {
                 content: "Web search is already running on localhost:8080.".to_string(),
             });
