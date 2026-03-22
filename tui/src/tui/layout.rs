@@ -367,6 +367,8 @@ fn render_chat_layout(frame: &mut Frame, app: &State, colors: &theme::Colors) {
             &app.active_watchers,
             &app.sub_agents,
             &app.background_agents_cache,
+            app.server_handle.as_ref().map(|h| h.local_addr.port()),
+            &app.connected_devices_cache,
             app.files_modified_collapsed,
             &app.files_modified_header_row,
         );
