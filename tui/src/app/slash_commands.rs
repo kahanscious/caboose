@@ -1206,16 +1206,37 @@ impl App {
     }
 
     fn handle_devices_command(&mut self) {
-        if self.state.server_handle.is_none() {
+        let Some(handle) = &self.state.server_handle else {
             self.state.chat_messages.push(ChatMessage::System {
-                content: "Server not running. Enable [server] in config to manage devices."
-                    .to_string(),
+                content: "Server not running. Use /serve to start the server first.".to_string(),
             });
             return;
+        };
+        match handle.state.devices.list() {
+            Ok(devices) if devices.is_empty() => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: "No paired devices.".to_string(),
+                });
+            }
+            Ok(devices) => {
+                let mut lines = vec![format!("{} paired device(s):", devices.len())];
+                for d in &devices {
+                    let seen = d.last_seen.as_deref().unwrap_or("never");
+                    lines.push(format!(
+                        "  {} — {} (paired {}, last seen {})",
+                        d.id, d.name, d.paired_at, seen
+                    ));
+                }
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: lines.join("\n"),
+                });
+            }
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to list devices: {e}"),
+                });
+            }
         }
-        self.state.chat_messages.push(ChatMessage::System {
-            content: "Device listing not yet wired to TUI.".to_string(),
-        });
     }
 
     fn handle_unpair_command(&mut self, slash: &str) {
@@ -1226,16 +1247,29 @@ impl App {
             });
             return;
         }
-        if self.state.server_handle.is_none() {
+        let Some(handle) = &self.state.server_handle else {
             self.state.chat_messages.push(ChatMessage::System {
-                content: "Server not running. Enable [server] in config to manage devices."
-                    .to_string(),
+                content: "Server not running. Use /serve to start the server first.".to_string(),
             });
             return;
+        };
+        match handle.state.devices.revoke(device_id) {
+            Ok(true) => {
+                self.state.chat_messages.push(ChatMessage::System {
+                    content: format!("Device {device_id} has been unpaired."),
+                });
+            }
+            Ok(false) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("No active device found with id: {device_id}"),
+                });
+            }
+            Err(e) => {
+                self.state.chat_messages.push(ChatMessage::Error {
+                    content: format!("Failed to unpair device: {e}"),
+                });
+            }
         }
-        self.state.chat_messages.push(ChatMessage::System {
-            content: format!("Device unpair not yet wired (id: {device_id})."),
-        });
     }
 
     async fn handle_search_setup(&mut self, slash: &str) {
