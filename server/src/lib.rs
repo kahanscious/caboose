@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod bridge;
 pub mod mdns;
+pub mod shell;
 pub mod state;
 pub mod ws;
 
