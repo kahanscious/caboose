@@ -950,7 +950,8 @@ impl App {
                 content: "Usage: /bg <prompt> — spawn a background agent\n\
                          /bg --model <model> <prompt> — spawn with specific model\n\
                          /bg list — show all background agents\n\
-                         /bg kill <id> — stop a running agent"
+                         /bg kill <id> — stop a running agent\n\
+                         /bg clear — remove finished agents from list"
                     .to_string(),
             });
             return;
@@ -994,6 +995,15 @@ impl App {
                             .chat_messages
                             .push(ChatMessage::System { content });
                     }
+                }
+            }
+            ("clear", _) => {
+                if let Some(ref mgr) = self.state.background_manager {
+                    mgr.clear_finished().await;
+                    self.state.background_agents_cache = mgr.list().await;
+                    self.state.chat_messages.push(ChatMessage::System {
+                        content: "Cleared finished background agents.".to_string(),
+                    });
                 }
             }
             ("kill", id) if !id.is_empty() => {

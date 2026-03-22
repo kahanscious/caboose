@@ -272,6 +272,13 @@ impl BackgroundAgentManager {
     pub async fn list(&self) -> Vec<BackgroundAgentInfo> {
         self.agents.read().await.values().cloned().collect()
     }
+
+    /// Remove all completed/failed/killed agents from the list.
+    /// Running agents are left untouched.
+    pub async fn clear_finished(&self) {
+        let mut agents = self.agents.write().await;
+        agents.retain(|_, a| matches!(a.status, BackgroundAgentStatus::Running));
+    }
 }
 
 // ---------------------------------------------------------------------------
