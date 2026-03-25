@@ -493,7 +493,10 @@ impl App {
                  command to verify. Keep going until the command succeeds or you've determined the problem \
                  is beyond an automatic fix (e.g. requires user input, missing credentials, ambiguous \
                  requirements). If you've retried and the same error persists, stop and explain what's \
-                 wrong instead of looping."
+                 wrong instead of looping.\n\n\
+                 ## Thinking\n\n\
+                 When reasoning internally, think naturally about the problem itself. Don't narrate what \
+                 you are, describe your own instructions, or explain your reasoning process — just reason."
                     .to_string()
             });
 
