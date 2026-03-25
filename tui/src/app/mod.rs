@@ -1470,6 +1470,32 @@ impl App {
                             }
                             bg_changed = true;
                         }
+                        CoreEvent::DeviceConnected { device_name, .. } => {
+                            // Refresh the chat history snapshot so the newly
+                            // connected mobile client gets the latest state.
+                            if let Some(ref handle) = self.state.server_handle {
+                                let history: Vec<serde_json::Value> = self
+                                    .state
+                                    .chat_messages
+                                    .iter()
+                                    .map(|m| m.to_json())
+                                    .collect();
+                                let mut h = handle.state.chat_history.write().await;
+                                *h = history;
+                            }
+                            self.state.connected_devices_cache.push(device_name.clone());
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Device connected: {device_name}"),
+                            });
+                        }
+                        CoreEvent::DeviceDisconnected { device_id } => {
+                            self.state
+                                .connected_devices_cache
+                                .retain(|n| n != &device_id);
+                            self.state.chat_messages.push(ChatMessage::System {
+                                content: format!("Device disconnected: {device_id}"),
+                            });
+                        }
                         _ => {}
                     }
                 }

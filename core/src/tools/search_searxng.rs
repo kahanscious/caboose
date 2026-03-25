@@ -42,10 +42,7 @@ impl SearchBackend for SearxngBackend {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "SearXNG returned HTTP {}",
-                response.status()
-            ));
+            return Err(anyhow!("SearXNG returned HTTP {}", response.status()));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -60,7 +57,11 @@ impl SearchBackend for SearxngBackend {
                 let title = r["title"].as_str()?.to_string();
                 let url = r["url"].as_str()?.to_string();
                 let snippet = r["content"].as_str().unwrap_or("").to_string();
-                Some(SearchResult { title, url, snippet })
+                Some(SearchResult {
+                    title,
+                    url,
+                    snippet,
+                })
             })
             .take(max_results)
             .collect();
@@ -171,7 +172,10 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("500"), "expected 500 in error message, got: {err}");
+        assert!(
+            err.contains("500"),
+            "expected 500 in error message, got: {err}"
+        );
     }
 
     #[tokio::test]

@@ -1,0 +1,12 @@
+name = "caboose-relay"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[durable_objects]
+bindings = [
+  { name = "RELAY_ROOM", class_name = "RelayRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RelayRoom"]

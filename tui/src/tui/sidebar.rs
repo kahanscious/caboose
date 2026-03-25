@@ -180,6 +180,8 @@ pub fn render(
     active_watchers: &[crate::scm::watcher::Watcher],
     sub_agents: &[SubAgent],
     background_agents: &[caboose_core::background::BackgroundAgentInfo],
+    server_port: Option<u16>,
+    connected_devices: &[String],
     files_modified_collapsed: bool,
     files_modified_header_row: &std::cell::Cell<Option<u16>>,
 ) -> Option<u16> {
@@ -652,6 +654,25 @@ pub fn render(
                 ),
                 Span::styled(summary, Style::default().fg(colors.text_dim)),
             ]));
+        }
+    }
+
+    // --- Server section (only when server is running) ---
+    if let Some(port) = server_port {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Server",
+            Style::default().fg(colors.text_secondary).bold(),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  \u{25b6} Serving on :{port}"),
+            Style::default().fg(colors.info),
+        )));
+        for name in connected_devices {
+            lines.push(Line::from(Span::styled(
+                format!("  \u{1f4f1} {name}"),
+                Style::default().fg(colors.text_dim),
+            )));
         }
     }
 

@@ -99,7 +99,8 @@ Slash-command workflows that load structured prompts into the agent. Ships with 
 - **Session pins** — `/pin` adds runtime rules; `/pin --save` writes them to `CABOOSE.md` so they persist permanently
 - **Hover-to-copy** — mouse over any assistant message or code block to copy with `y` or a click
 - **Context window indicator** — live `XX% ctx` display in the footer, color-coded by usage
-- **Embedded server** — WebSocket server for mobile and web clients, with device pairing auth and bidirectional event bridge
+- **Mobile companion app** — [Caboose Mobile](https://github.com/kahanscious/caboose-mobile) connects to your desktop via `/serve`. Full conversation sync, tool approval from your phone, remote terminal, push notifications. Works standalone too — chat with any of 23+ providers directly from the app
+- **`/serve`** — starts the embedded WebSocket server. Generates a pairing code, shows connected devices in the sidebar. Mobile clients get full conversation history on connect. Cloudflare Worker relay for remote access when not on LAN
 - **Background agents** — `/bg <prompt>` spawns background agents that run full multi-turn conversations with tool execution. Per-agent and global token budget enforcement. The model can also spawn them autonomously via `spawn_background` for parallel work
 - **Web search** — `/search-setup` installs a local SearXNG instance via Docker with zero configuration. For always-on deployments, use [Tender Highball](https://github.com/kahanscious/tender-highball). Also supports Tavily (paid API). Pluggable `SearchBackend` trait
 - **`/context`** — shows model, tokens, tools, MCP servers, skills, memory, and permission mode at a glance
@@ -133,7 +134,7 @@ Caboose is a Cargo workspace: `core/` contains platform-agnostic domain logic (`
 
 ```bash
 cargo build --workspace       # build both crates
-cargo test --workspace        # run all tests (~1261)
+cargo test --workspace        # run all tests (~1274)
 cargo clippy --workspace      # lint
 cargo build --release -p caboose  # optimized release binary
 ```

@@ -123,4 +123,24 @@ mod tests {
             assert!(seen.insert(code), "duplicate code generated");
         }
     }
+
+    #[tokio::test]
+    async fn concurrent_generate_and_validate() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let pm = Arc::new(Mutex::new(PairingManager::new()));
+
+        let code = {
+            let mut pm = pm.lock().await;
+            pm.generate()
+        };
+
+        let valid = {
+            let mut pm = pm.lock().await;
+            pm.validate(&code)
+        };
+
+        assert!(valid);
+    }
 }

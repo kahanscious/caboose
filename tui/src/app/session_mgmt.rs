@@ -217,6 +217,16 @@ impl App {
         {
             tracing::warn!("Failed to save message: {e}");
         }
+
+        // Broadcast user/assistant messages so the embedded server can forward
+        // them to connected mobile clients.
+        if role == "user" {
+            self.state.core_handle.emit(
+                caboose_core::events::CoreEvent::UserMessage {
+                    text: content.to_string(),
+                },
+            );
+        }
     }
 
     /// Update the session metadata (title, turn count) in the database.

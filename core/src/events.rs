@@ -152,6 +152,26 @@ pub enum CoreEvent {
         session_id: String,
         permission_mode: String,
     },
+
+    // Device connectivity (emitted by server)
+    /// A user message was sent (from the TUI). Forwarded to mobile clients.
+    UserMessage { text: String },
+
+    DeviceConnected {
+        device_id: String,
+        device_name: String,
+    },
+    DeviceDisconnected {
+        device_id: String,
+    },
+
+    /// Snapshot of conversation history sent to a newly-connected mobile client.
+    SessionHistory {
+        messages: Vec<serde_json::Value>,
+    },
+
+    /// Server is shutting down — sent to connected clients before close.
+    ServerShutdown,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,10 +314,7 @@ impl CoreHandle {
     }
 
     /// Send a command to the core event loop.
-    pub fn send(
-        &self,
-        command: CoreCommand,
-    ) -> Result<(), mpsc::error::SendError<CoreCommand>> {
+    pub fn send(&self, command: CoreCommand) -> Result<(), mpsc::error::SendError<CoreCommand>> {
         self.commands.send(command)
     }
 }

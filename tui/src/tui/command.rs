@@ -752,6 +752,16 @@ pub fn build_default_registry() -> CommandRegistry {
     });
 
     registry.register(Command {
+        id: "serve.start",
+        name: "Start Server",
+        category: Category::Tools,
+        keybind: None,
+        slash: Some("serve"),
+        available: |_| true,
+        execute: |_state| Action::None,
+    });
+
+    registry.register(Command {
         id: "search.setup",
         name: "Search Setup",
         category: Category::Tools,
