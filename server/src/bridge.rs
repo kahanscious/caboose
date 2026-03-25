@@ -274,6 +274,11 @@ pub fn event_to_message(event: &CoreEvent, id: &str) -> OutgoingMessage {
             }),
         ),
 
+        // --- User message from TUI ---
+        CoreEvent::UserMessage { text } => {
+            OutgoingMessage::event(id, "UserMessage", json!({ "text": text }))
+        }
+
         // --- Device connectivity ---
         CoreEvent::DeviceConnected {
             device_id,

@@ -154,6 +154,9 @@ pub enum CoreEvent {
     },
 
     // Device connectivity (emitted by server)
+    /// A user message was sent (from the TUI). Forwarded to mobile clients.
+    UserMessage { text: String },
+
     DeviceConnected {
         device_id: String,
         device_name: String,
